@@ -335,3 +335,64 @@ function _flush() {
 }
 
 
+// ============================================================================
+// 2. SCOPE — Lifecycle, Auto-cleanup
+// ============================================================================
+
+let _currentScope = null;
+
+class Scope {
+    constructor(parent) {
+        this.parent = parent;
+        this.children = [];
+        this._disposers = [];
+        this._disposed = false;
+        if (parent) parent.children.push(this);
+    }
+
+    /** Выполнить функцию в контексте этого scope */
+    run(fn) {
+        const prev = _currentScope;
+        _currentScope = this;
+        try { return fn(); }
+        finally { _currentScope = prev; }
+    }
+
+    /** Зарегистрировать cleanup-функцию */
+    onDispose(fn) {
+        this._disposers.push(fn);
+    }
+
+    /** Уничтожить scope и все вложенные */
+    dispose() {
+        if (this._disposed) return;
+        this._disposed = true;
+        // copy array — child.dispose() splices parent.children
+        const children = this.children.slice();
+        for (const child of children) child.dispose();
+        this.children.length = 0;
+        // Потом свои disposers
+        for (const d of this._disposers) {
+            try { d(); } catch (e) { console.error('[Aegis] dispose error:', e); }
+        }
+        this._disposers.length = 0;
+        // Убрать себя из родителя
+        if (this.parent && !this.parent._disposed) {
+            const i = this.parent.children.indexOf(this);
+            if (i >= 0) this.parent.children.splice(i, 1);
+        }
+    }
+}
+
+/** Создать scope (привязывается к родительскому автоматически) */
+export function createScope() {
+    return new Scope(_currentScope);
+}
+
+/** Зарегистрировать cleanup в текущем scope */
+export function onDispose(fn) {
+    if (_currentScope) _currentScope.onDispose(fn);
+    else console.warn('[Aegis] onDispose вызван вне scope — cleanup не будет автоматическим');
+}
+
+
