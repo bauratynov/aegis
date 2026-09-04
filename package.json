@@ -1,0 +1,40 @@
+{
+  "name": "aegis-engine",
+  "version": "0.7.0",
+  "description": "Zero-build reactive UI engine — signals, components, routing, forms, animations, offline. One file, no dependencies.",
+  "type": "module",
+  "main": "aegis.js",
+  "types": "aegis.d.ts",
+  "files": [
+    "aegis.js",
+    "aegis.d.ts"
+  ],
+  "license": "MIT",
+  "author": "atynov",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/atynov/aegis.git"
+  },
+  "homepage": "https://github.com/atynov/aegis",
+  "bugs": {
+    "url": "https://github.com/atynov/aegis/issues"
+  },
+  "keywords": [
+    "signals",
+    "reactive",
+    "ui",
+    "framework",
+    "zero-build",
+    "web-components",
+    "frontend",
+    "no-dependencies",
+    "custom-elements",
+    "router",
+    "forms",
+    "offline-first"
+  ],
+  "engines": {
+    "node": ">=14"
+  },
+  "sideEffects": false
+}
