@@ -47,9 +47,13 @@
 
     const results = document.getElementById('results');
     const sandbox = document.getElementById('sandbox');
+    const REPORT = /[?&]report/.test(location.search);   // ?report=1 → POST /__report (браузеры без --dump-dom); флаг фиксируется до того, как тесты роутера перепишут URL
+    if (REPORT) { const post = (o) => fetch('/__report?partial', { method: 'POST', body: JSON.stringify(o) }).catch(() => {}); addEventListener('error', (e) => post({ error: String(e.message), line: e.lineno, col: e.colno, stack: e.error && e.error.stack })); addEventListener('unhandledrejection', (e) => post({ rejection: String(e.reason && e.reason.message || e.reason), stack: e.reason && e.reason.stack })); }
+    defaults.motion = true;   // prefers-reduced-motion ОС не должен влиять на сьют (motion: 'auto' проверяется отдельно)
     let passed = 0, failed = 0;
 
     function section(name) {
+        if (REPORT) fetch('/__report?partial', { method: 'POST', body: JSON.stringify({ section: name, passed, failed }) }).catch(() => {});
         const el = document.createElement('div');
         el.className = 'section';
         el.textContent = name;
@@ -62,6 +66,7 @@
         el.textContent = (condition ? '✓' : '✗') + ' ' + name;
         results.appendChild(el);
         if (condition) passed++; else failed++;
+        if (REPORT) fetch('/__report?partial', { method: 'POST', body: JSON.stringify({ last: name, passed, failed }) }).catch(() => {});
     }
 
     function wait(ms) { return new Promise(r => setTimeout(r, ms)); }
@@ -1592,7 +1597,7 @@
         assert('defaults.motion = false: transition без классов и ожидания', el.hidden === false && !el.classList.contains('aegis-enter-active'));
         const anim = spring(el, { opacity: [0, 1] });
         assert('defaults.motion = false: spring сразу в конечное состояние', el.style.opacity === '1' && typeof anim.cancel === 'function');
-        defaults.motion = 'auto';
+        defaults.motion = true;
         scope.dispose();
 
         const f = form({ name: { value: '', rules: [required] } });
@@ -1894,7 +1899,7 @@
         rows.value = [{ id: 1, n: 'b' }];
         assert('list({ item: "signal" }): замена объекта патчит сигнал, узел тот же', sandbox.querySelector('b.sg') === b && b.textContent === 'b');
         s4.dispose();
-        defaults.motion = 'auto';
+        defaults.motion = true;
         sandbox.innerHTML = '';
     })();
 
@@ -3558,6 +3563,7 @@
     summary.textContent = failed === 0
         ? `✓ All ${total} tests passed`
         : `✗ ${failed} of ${total} tests failed`;
+    if (REPORT) fetch('/__report', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ua: navigator.userAgent, passed, failed, fails: [...document.querySelectorAll('.test.fail')].map(e => e.textContent) }) }).catch(() => {});
 
     </script>
 </body>
