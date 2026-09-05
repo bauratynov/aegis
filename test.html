@@ -35,7 +35,7 @@
         resource, watch, store, portal, transition, errorBoundary, ref,
         reactive, isReactive,
         form, required, minLen, maxLen, emailRule, matches,
-        wireForm, cachedResource, invalidate, seed, seedFrom, attach, clone, expose, getOwner, runWithOwner, configure, request, api, HttpError, mutation, streamResource, settled, prefetch, infiniteResource, dev, onWarn, AegisWarning, reset, flushSync, root, until, trace, island, element, from, history as undoHistory, size, inView, viewport, springSignal, tween, modal, scaffold, setValidationMessages, maxSize, mime, maxFiles, createContext, provide, inject, persisted, linked, selector, when, cssVars, media, defaults, swap, boost, tpl, adopt, jsonScript,
+        wireForm, cachedResource, invalidate, seed, seedFrom, attach, clone, expose, getOwner, runWithOwner, configure, request, api, HttpError, mutation, streamResource, settled, prefetch, infiniteResource, dev, onWarn, AegisWarning, reset, flushSync, root, until, flush, stats, trace, island, element, from, history as undoHistory, size, inView, viewport, springSignal, tween, modal, scaffold, setValidationMessages, maxSize, mime, maxFiles, createContext, provide, inject, persisted, linked, selector, when, cssVars, media, defaults, swap, boost, tpl, adopt, jsonScript,
         spring, flip, animate,
         trap, roving, announce,
         css, adoptStyles, scopedStyle,
@@ -2178,6 +2178,88 @@
         await wait(0);
         assert('element(): тот же компонент как custom element', ce.querySelector('button.cnt')?.textContent === '7');
         sandbox.innerHTML = '';
+    })();
+
+    section('💎 #122/#78/#125/#120 — полосы flush, stats, детекторы');
+
+    await (async () => {
+        const s = signal(0);
+        let micro = 0, sync = 0;
+        const scope = createScope();
+        scope.run(() => {
+            effect(() => { s.value; sync++; });
+            effect(() => { s.value; micro++; }, { flush: 'micro' });
+        });
+        s.value = 1; s.value = 2; s.value = 3;
+        assert('flush micro: три записи — sync 3 раза, micro пока 0', sync === 4 && micro === 1);
+        await Promise.resolve();
+        assert('flush micro: после микротаска — один запуск', micro === 2);
+        s.value = 4;
+        flush();
+        assert('flush(): синхронно прогоняет полосу', micro === 3);
+        scope.dispose();
+
+        const st = stats();
+        assert('stats(): счётчики', typeof st.flushes === 'number' && st.flushes > 0 && typeof st.effects === 'number' && typeof st.scopes === 'number');
+
+        const host = document.createElement('div');
+        host.innerHTML = '<span class="v"></span>';
+        sandbox.appendChild(host);
+        const v = signal(1);
+        const codes = [];
+        const off = onWarn(w => codes.push(w.code));
+        dev.resetWarnings();
+        const sc2 = createScope();
+        sc2.run(() => text(host.querySelector('.v'), v));
+        host.innerHTML = '';          // узел выброшен, эффект жив
+        v.value = 2; v.value = 3;
+        off();
+        assert('E028: зомби-эффект на отсоединённом узле', codes.includes('E028'));
+        sc2.dispose(); sandbox.innerHTML = '';
+
+        const codes2 = [];
+        const off2 = onWarn(w => codes2.push(w.code));
+        dev.resetWarnings();
+        const sc3 = createScope();
+        sc3.run(() => { resource('/dup/me', { fetcher: async () => ({}) }); resource('/dup/me', { fetcher: async () => ({}) }); });
+        await settled();
+        off2();
+        assert('E029: два resource() на один URL без кэша', codes2.includes('E029'));
+        sc3.dispose();
+    })();
+
+    section('💎 #119/#121/#124 — гидрация 2.0, anchor, virtualScroll window');
+
+    await (async () => {
+        let mounts = 0, replayed = 0;
+        register('h3-inter', (el, data, { on, html }) => { mounts++; on(el, 'click', () => replayed++); return html`<button>go</button>`; });
+        const host = document.createElement('div');
+        host.innerHTML = '<div data-aegis="h3-inter" data-aegis-load="interaction(click,keydown)"><i>server</i></div><div data-aegis="h3-inter" data-aegis-load="visible(300px)"></div><div data-aegis="h3-inter" data-aegis-load="idle(30)"></div>';
+        sandbox.appendChild(host);
+        const hs = hydrate(host);
+        assert('гидрация 2.0: аргументы стратегий разобраны, все pending', hs.length === 3 && hs.every(h => h.el.dataset.aegisState === 'pending'));
+        host.firstElementChild.querySelector('i').dispatchEvent(new MouseEvent('click', { bubbles: true }));
+        await wait(0);
+        assert('interaction: событие переиграно после монтирования', mounts >= 1 && replayed === 1);
+        await wait(80);
+        assert('idle(ms): смонтирован по таймауту', hs[2].el.dataset.aegisState === 'hydrated');
+        sandbox.innerHTML = '';
+
+        const items = signal(Array.from({ length: 100000 }, (_, i) => ({ id: i, n: 'r' + i })));
+        const scope = createScope();
+        let vs;
+        const t0 = performance.now();
+        const vhost = document.createElement('div'); document.body.appendChild(vhost);   // sandbox скрыт — прокрутке нужен layout
+        scope.run(() => { vs = virtualScroll(vhost, items, { mode: 'window', itemHeight: 20, height: 200, key: 'id', renderItem: (row, index) => html`<div class="vr">${() => index.value}:${row.n}</div>` }); });
+        flushSync();
+        const dt = performance.now() - t0;
+        const rendered = vs.container.querySelectorAll('.vr').length;
+        assert('virtualScroll window: 100k строк — десятки узлов, быстро', rendered > 0 && rendered < 60 && dt < 200);
+        vs.scrollToIndex(99999);
+        flushSync();
+        assert('virtualScroll window: scrollToIndex показывает последнюю строку', [...vs.container.querySelectorAll('.vr')].some(n => n.textContent === '99999:r99999'));
+        scope.dispose();
+        vhost.remove();
     })();
 
     section('component() & destroy()');

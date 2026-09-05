@@ -33,4 +33,9 @@ Every warning has a code, and each message is printed once per place. Dev mode i
 | **E023** | `swap()` did not find the `select` selector in the response. | Return the fragment itself or pass `{ select }` that matches the response. |
 | **E024** | `adopt()` template does not match the server DOM (wrong element at a path, or a text value that is not the only child). | Keep the server partial and the template in sync; wrap text values in `<span>`. |
 | **E025** | A `data-*` island prop looks numeric but is passed as a string. | Declare the type: `register(name, setup, { types: { count: Number } })`. |
+| **E026** | The setup `ctx` has no such key (typo in the destructuring). | Use the suggested name from the warning; the full list is in `aegis.d.ts` (`SetupContext`). |
+| **E027** | A flush took many rounds — effects keep writing signals other effects depend on (ping-pong). | Derive with `computed()` instead of writing from an effect; batch related writes; break the cycle. |
+| **E028** | Zombie binding: the node left the document, but the binding keeps updating it — it leaks until the owner scope is disposed. | Render the branch through `show()`/`list()`, or dispose the binding (`const off = text(el, …); off()`) before dropping the node. |
+| **E029** | Two `resource()` instances fetched the same URL within a second. | Add `cache: { key }` so they share one request, or lift the resource into a parent and `provide()` it. |
+| **E030** | The same URL was fetched many times within a second (a fetch loop). | Do not create a `resource()` inside an effect; give it a stable key; check `refetchOn` dependencies. |
 | **S001** | Attempt to set `__proto__` / `prototype` / `constructor` on a reactive object — blocked. | Use a regular property name. |

@@ -45,7 +45,60 @@ const dev = {
     disable() { try { localStorage.removeItem('aegis:dev'); } catch (e) { /* */ } globalThis.__AEGIS_DEV__ = false; _devCache = false; },
     /** сбросить дедуп предупреждений (тесты) */
     resetWarnings() { _seenWarnings.clear(); },
+    /** performance.measure / console.timeStamp на каждый flush в треке «Aegis» Performance-панели */
+    profile(on = true) { _profiling = !!on; },
+    /** Реактивный мир острова по его DOM-узлу: Aegis.dev.of($0) */
+    of(el) {
+        for (let e = el; e; e = e.parentElement) {
+            const c = typeof _components !== 'undefined' && _components.get(e);
+            if (c) return _inspectScope(c.scope);
+        }
+        return null;
+    },
+    /** JSON-снимок всех компонентов (или scope): для чата с ассистентом */
+    inspect(root) {
+        if (root && root.run) return _inspectScope(root);
+        const out = [];
+        if (typeof _components !== 'undefined') for (const [el, c] of _components) if (!root || root === document || (root.contains && root.contains(el))) out.push(_inspectScope(c.scope));
+        return out;
+    },
+    /** Граф зависимостей как Mermaid (graph LR) */
+    graph(root) {
+        const lines = ['graph LR'];
+        const seen = new Set();
+        const walk = (sc) => {
+            if (!sc || seen.has(sc)) return;
+            seen.add(sc);
+            const label = (sc.name || 'scope').replace(/"/g, '');
+            for (const d of sc._disposers) {
+                const node = d._node;
+                if (!node || !node._deps) continue;
+                for (const src of node._deps) lines.push(`  ${(src._name || 'signal').replace(/[^\w:.-]/g, '_')} --> ${String(node._name || 'effect').replace(/[^\w:.@-]/g, '_')}`);
+            }
+            if (sc.children) for (const c of sc.children) walk(c);
+            void label;
+        };
+        if (root && root.run) walk(root);
+        else if (typeof _components !== 'undefined') for (const [, c] of _components) walk(c.scope);
+        return lines.join('\n');
+    },
 };
+
+function _inspectScope(sc) {
+    const effects = [], signals = new Map();
+    const collect = (scope) => {
+        for (const d of scope._disposers) {
+            const node = d._node;
+            if (!node) continue;
+            const deps = (node._deps || []).map(x => x._name || 'signal');
+            effects.push({ name: node._name, deps, scope: scope.name });
+            for (const x of node._deps || []) if (x._name && !signals.has(x._name)) signals.set(x._name, _short(x.peek()));
+        }
+        if (scope.children) for (const c of scope.children) collect(c);
+    };
+    collect(sc);
+    return { scope: sc.name, el: sc.el || null, signals: [...signals].map(([name, value]) => ({ name, value })), effects, children: sc.children ? sc.children.size : 0 };
+}
 export { dev };
 
 const _seenWarnings = new Set();
@@ -379,11 +432,14 @@ export function computed(fn, nameOrOpts) {
 // ---- Effect ------------------------------------------------------------------
 
 class Effect {
-    constructor(fn, name, owner, trace) {
+    constructor(fn, name, owner, trace, lane) {
         this._fn = fn;
         this._name = name || 'effect';
         this._owner = owner;        // scope, под которым выполняется КАЖДЫЙ запуск
         this._trace = !!trace;
+        this._lane = lane || null;  // 'micro' | 'frame' — отложенная полоса; null — синхронно
+        this._el = null;            // DOM-узел привязки (dev-детектор зомби-эффектов)
+        this._seen = false; this._detached = 0; this._warnedZombie = false;
         this._cleanup = null;
         this._disposed = false;
         this._queued = false;
@@ -413,6 +469,7 @@ class Effect {
     }
     _execute() {
         this._runCleanup();
+        if (!this._counted) { this._counted = true; _liveEffects++; }
         const prevT = _tracking, prevS = _currentScope;
         _tracking = this;
         _currentScope = this._owner;  // всё созданное внутри — дети владельца, а не случайного scope
@@ -420,6 +477,7 @@ class Effect {
         _batchDepth++;                 // записи внутри effect откладываются до его завершения
         try {
             const r = this._fn();
+            if (this._el && _dev()) _zombieCheck(this, this._name);
             if (typeof r === 'function') this._cleanup = r;
             else if (r && typeof r.then === 'function' && !this._warnedAsync) {
                 this._warnedAsync = true;
@@ -440,6 +498,7 @@ class Effect {
     dispose() {
         if (this._disposed) return;
         this._disposed = true;
+        if (this._counted) _liveEffects--;
         _unsubscribe(this);
         this._runCleanup();
         const u = this._unreg; this._unreg = null;
@@ -447,6 +506,19 @@ class Effect {
     }
 }
 Effect.prototype._isComputed = false;
+
+/** Dev-детектор зомби-привязок (E028): узел выпал из документа, а привязка продолжает его обновлять */
+function _zombieCheck(h, name) {
+    if (h._el.isConnected) { h._seen = true; h._detached = 0; return; }
+    if (h._seen && (h._detached = (h._detached || 0) + 1) >= 2 && !h._warnedZombie) {
+        h._warnedZombie = true;
+        _warn('E028', {
+            what: `binding "${name}" keeps updating <${(h._el.tagName || '').toLowerCase()}> that is no longer in the document.`,
+            why: 'The node was replaced or removed while its owner scope is alive — the binding, its subscription and the detached subtree leak until the owner is disposed.',
+            fix: 'Render the branch through show()/list(), or dispose the binding (const off = text(el, …); off()) before dropping the node.',
+        }, 'zombie:' + name);
+    }
+}
 
 /**
  * Побочный эффект — авто-трекинг зависимостей
@@ -460,6 +532,7 @@ export function effect(fn, nameOrOpts) {
     const owner = _currentScope;
     let name = typeof nameOrOpts === 'string' ? nameOrOpts : (nameOrOpts && nameOrOpts.name) || null;
     const trace = !!(nameOrOpts && typeof nameOrOpts === 'object' && nameOrOpts.trace);
+    const lane = nameOrOpts && typeof nameOrOpts === 'object' && (nameOrOpts.flush === 'micro' || nameOrOpts.flush === 'frame') ? nameOrOpts.flush : null;
     const explicitName = !!name;                   // именованные (движок, пользователь с name) — без детектора E019
     if (!name && _dev()) name = fn.name || null;   // авто-имя в dev: function search() {…} → "search"
     if (!owner) {
@@ -469,8 +542,9 @@ export function effect(fn, nameOrOpts) {
             fix: `Wrap in component(el, ({ effect }) => { ... }) or scope.run(() => effect(...))`,
         });
     }
-    const node = new Effect(fn, name, owner, trace);
+    const node = new Effect(fn, name, owner, trace, lane);
     const dispose = () => node.dispose();
+    dispose._node = node;
     // Регистрируем до первого запуска: в уже уничтоженном scope effect не стартует
     node._unreg = owner ? owner.onDispose(dispose) : null;
     if (!node._disposed) {
@@ -570,6 +644,7 @@ function _notify(subs) {
         for (const obs of subs) {                      // без копии: в push-фазе subs не пополняется
             if (obs._disposed) { subs.delete(obs); continue; }
             if (obs._isComputed) obs._run();           // push: dirty по цепочке
+            else if (obs._lane) _enqueueLane(obs);       // отложенная полоса: microtask / кадр
             else if (!obs._queued) { obs._queued = true; _queue.push(obs); } // effects никогда не запускаются inline
         }
     } finally {
@@ -595,11 +670,45 @@ function _dispatchError(scope, e) {
     return false;
 }
 
+const _lanes = { micro: [], frame: [] };
+let _laneScheduled = { micro: false, frame: false };
+function _enqueueLane(obs) {
+    if (obs._queued) return;
+    obs._queued = true;
+    _lanes[obs._lane].push(obs);
+    if (!_laneScheduled[obs._lane]) {
+        _laneScheduled[obs._lane] = true;
+        if (obs._lane === 'micro') queueMicrotask(() => _runLane('micro'));
+        else (typeof requestAnimationFrame === 'function' ? requestAnimationFrame : (cb) => setTimeout(cb, 16))(() => _runLane('frame'));
+    }
+}
+function _runLane(lane) {
+    _laneScheduled[lane] = false;
+    const list = _lanes[lane];
+    if (!list.length) return;
+    _lanes[lane] = [];
+    for (const obs of list) { obs._queued = false; if (obs._disposed) continue; try { obs._run(); } catch (e) { if (!_dispatchError(obs._owner, e)) console.error(`[Aegis] error in "${obs._name}":`, e); } }
+}
+/** Синхронно выполнить все отложенные полосы (micro/frame) и очередь эффектов */
+export function flush() {
+    _runLane('micro');
+    _runLane('frame');
+    _flush();
+}
+
+// ---- профилирование (Aegis.dev.profile(true)) и stats()
+let _profiling = false;
+const _stats = { flushes: 0, effectRuns: 0, maxRounds: 0, slow: [] };
+let _liveEffects = 0, _liveScopes = 0;
+
 function _flush() {
     if (_flushing || _batchDepth > 0 || _queue.length === 0) return;
     _flushing = true;
     let rounds = 0;
     let error = null;
+    const t0 = _profiling ? performance.now() : 0;
+    let total = 0;
+    const names = _profiling ? [] : null;
     try {
         // Записи из effects попадают в очередь и обрабатываются следующим раундом
         while (_queue.length > 0) {
@@ -611,12 +720,19 @@ function _flush() {
             }
             const round = _queue;
             _queue = [];
+            total += round.length;
             for (let i = 0; i < round.length; i++) {
                 const obs = round[i];
                 obs._queued = false;
                 if (obs._disposed) continue;
+                if (names && names.length < 30) names.push(obs._name);
                 try {
-                    obs._run();
+                    if (_profiling) {
+                        const ts = performance.now();
+                        obs._run();
+                        const ms = performance.now() - ts;
+                        if (ms > 1) { _stats.slow.push({ name: obs._name, ms: +ms.toFixed(2) }); if (_stats.slow.length > 20) _stats.slow.shift(); }
+                    } else obs._run();
                 } catch (e) {
                     if (e && typeof e === 'object' && !e.aegis) {
                         e.aegis = { effect: obs._name, scope: _scopePath(obs._owner), changed: _changedDeps(obs) };
@@ -631,8 +747,34 @@ function _flush() {
         }
     } finally {
         _flushing = false;
+        _stats.flushes++;
+        _stats.effectRuns += total;
+        if (rounds > _stats.maxRounds) _stats.maxRounds = rounds;
+        if (_profiling && total) {
+            const label = `aegis:flush · ${total} effects · ${rounds} rounds`;
+            const t1 = performance.now();
+            if (typeof console.timeStamp === 'function' && console.timeStamp.length >= 5) console.timeStamp(label, t0, t1, 'Aegis', 'Aegis', 'primary');
+            else if (typeof performance.measure === 'function') { try { performance.measure(label, { start: t0, end: t1, detail: { devtools: { dataType: 'track-entry', track: 'Aegis', color: 'primary', properties: [['rounds', rounds], ['effects', names.join(', ')]] } } }); } catch (e) { /* старый measure */ } }
+        }
+        if (rounds > 3 && total) _warn('E027', {
+            what: `Flush took ${rounds} rounds — effects keep writing signals other effects depend on.`,
+            why: 'Each round is an effect reacting to a write from the previous round (ping-pong).',
+            fix: 'Replace the effect with a computed(), or write all values in one batch().',
+        }, 'rounds');
     }
     if (error) throw error;
+}
+
+/** Счётчики движка (dev): flushes, effectRuns, maxRounds, slow[], scopes, effects, components, caches */
+export function stats() {
+    return {
+        flushes: _stats.flushes, effectRuns: _stats.effectRuns, maxRounds: _stats.maxRounds, slow: _stats.slow.slice(),
+        scopes: _liveScopes, effects: _liveEffects,
+        components: typeof _components !== 'undefined' ? _components.size : 0,
+        resourceCache: typeof _resourceCache !== 'undefined' ? _resourceCache.size : 0,
+        cssCache: typeof _cssCache !== 'undefined' ? _cssCache.size : 0,
+        queued: _queue.length,
+    };
 }
 
 
@@ -651,6 +793,7 @@ class Scope {
         this.children = null;                 // ленивый Set: бездетный scope не платит
         this._disposers = new Set();          // Set: onDispose() возвращает unregister — O(1)
         this._disposed = false;
+        _liveScopes++;
         this.dispose = this.dispose.bind(this); // можно передавать как callback: t.after(scope.dispose)
         if (parent) {
             if (parent._disposed) {
@@ -702,6 +845,7 @@ class Scope {
     dispose() {
         if (this._disposed) return;
         this._disposed = true;
+        _liveScopes--;
         const kids = this.children;
         this.children = null;
         if (kids) for (const child of kids) child.dispose();

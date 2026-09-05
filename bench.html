@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head><meta charset="UTF-8"><title>Aegis — bench</title></head>
+<body>
+<table><tbody id="tbody"></tbody></table>
+<pre id="out"></pre>
+<script type="module">
+// Бенчмарк в духе js-framework-benchmark: create/update/swap/select/remove/clear + ядро.
+// Запуск: статический сервер + Chrome (headless без --virtual-time-budget), результат — в <pre id="out"> и window.__bench.
+import { signal, list, html, createScope, batch, effect, computed, selector, defaults, flushSync } from './aegis.js';
+defaults.motion = false;
+const out = {};
+const N = 1000, ROUNDS = 5;
+const t = (name, fn) => {
+    const times = [];
+    for (let r = 0; r < ROUNDS; r++) { const t0 = performance.now(); fn(r); times.push(performance.now() - t0); }
+    times.sort((a, b) => a - b);
+    out[name] = +times[Math.floor(ROUNDS / 2)].toFixed(2);   // медиана
+};
+const words = ['pretty', 'large', 'big', 'small', 'tall', 'short', 'long', 'handsome', 'plain', 'quaint', 'clean', 'elegant', 'easy', 'angry', 'crazy'];
+let nextId = 1;
+const build = (n) => Array.from({ length: n }, () => ({ id: nextId++, label: words[nextId % words.length] + ' ' + words[(nextId * 7) % words.length] }));
+
+// ---- DOM: list() + html``
+const tbody = document.getElementById('tbody');
+const rows = signal([]);
+const selected = signal(null);
+const isSelected = selector(selected);
+const scope = createScope();
+let inserts = 0;
+const origInsert = Node.prototype.insertBefore;
+// item: 'signal' → row — сигнал объекта: замена объекта под ключом патчит ячейки, а не пересоздаёт <tr>
+scope.run(() => tbody.appendChild(list(rows, (row) => html`<tr class=${{ danger: () => isSelected(row.peek().id) }}><td class="col-md-1">${() => row.value.id}</td><td class="col-md-4"><a @click=${() => { selected.value = row.peek().id; }}>${() => row.value.label}</a></td><td class="col-md-1"><a @click=${() => { const cur = row.peek(); rows.value = rows.value.filter(r => r !== cur); }}>x</a></td><td class="col-md-6"></td></tr>`, { key: 'id', item: 'signal' })));
+flushSync();
+
+t('create 1000', () => { rows.value = build(N); flushSync(); });
+out['dom nodes per row'] = tbody.querySelectorAll('tr')[0].querySelectorAll('*').length + 1;
+t('replace 1000', () => { rows.value = build(N); flushSync(); });
+t('update every 10th', () => { rows.value = rows.value.map((r, i) => i % 10 === 0 ? { ...r, label: r.label + ' !!!' } : r); flushSync(); });
+t('select row', (r) => { selected.value = rows.value[r * 7 % N].id; flushSync(); });
+Node.prototype.insertBefore = function (...a) { inserts++; return origInsert.apply(this, a); };
+inserts = 0;
+t('swap rows', () => { const a = rows.value.slice(); [a[1], a[998]] = [a[998], a[1]]; rows.value = a; flushSync(); });
+out['swap insertBefore calls'] = inserts / ROUNDS;
+Node.prototype.insertBefore = origInsert;
+t('remove row', (r) => { rows.value = rows.value.filter((_, i) => i !== r * 3); flushSync(); });
+t('append 1000', () => { rows.value = [...rows.value, ...build(N)]; flushSync(); rows.value = rows.value.slice(0, N); flushSync(); });
+t('create 10000', () => { rows.value = build(10 * N); flushSync(); rows.value = []; flushSync(); });
+t('clear 1000', () => { rows.value = build(N); flushSync(); rows.value = []; flushSync(); });
+
+// ---- html`` instantiate
+const tpl = (i) => html`<div class="a ${'b'}" title=${'t' + i}><span>${i}</span><b @click=${() => {}}>x</b></div>`;
+t('html`` ×1000 (3 static values, 1 event)', () => { const f = document.createDocumentFragment(); for (let i = 0; i < N; i++) f.appendChild(tpl(i)); });
+const sig = signal(1);
+t('html`` ×1000 (2 signal bindings)', () => { const sc = createScope(); sc.run(() => { const f = document.createDocumentFragment(); for (let i = 0; i < N; i++) f.appendChild(html`<div title=${sig}><span>${sig}</span></div>`); }); sc.dispose(); });
+
+// ---- core
+t('signal create ×100k', () => { for (let i = 0; i < 100000; i++) signal(i); });
+const src = signal(0);
+const chain = [src];
+for (let i = 0; i < 100; i++) { const prev = chain[chain.length - 1]; chain.push(computed(() => prev.value + 1)); }
+t('deep chain 100 × 1000 writes', () => { for (let i = 0; i < 1000; i++) { src.value = i; chain[100].value; } });
+const fan = signal(0);
+const fanScope = createScope();
+let fanRuns = 0;
+fanScope.run(() => { for (let i = 0; i < 1000; i++) effect(() => { fan.value; fanRuns++; }); });
+t('fan-out 1000 effects × 100 writes', () => { for (let i = 0; i < 100; i++) fan.value = i; });
+fanScope.dispose();
+const a = signal(0), b = computed(() => a.value + 1), c = computed(() => a.value * 2), d = computed(() => b.value + c.value);
+t('diamond × 100k', () => { for (let i = 0; i < 100000; i++) { a.value = i; d.value; } });
+t('batch 1000 writes × 100', () => { const sigs = Array.from({ length: 1000 }, () => signal(0)); const sc = createScope(); sc.run(() => effect(() => { for (const s of sigs) s.value; })); for (let r = 0; r < 100; r++) batch(() => { for (const s of sigs) s.value = r; }); sc.dispose(); });
+
+window.__bench = out;
+document.getElementById('out').textContent = JSON.stringify(out, null, 2);
+</script>
+</body>
+</html>

@@ -46,7 +46,13 @@ export type ClassValue = string | null | undefined | false | ClassValue[] | Reco
 
 export function signal<T>(initial: T, nameOrOpts?: string | SignalOptions<T>): Signal<T>;
 export function computed<T>(fn: (prev: T) => T, nameOrOpts?: string | ComputedOptions<T>): ReadonlySignal<T>;
-export interface EffectOptions { name?: string; /** печатать причину каждого перезапуска (dev) */ trace?: boolean }
+export interface EffectOptions {
+    name?: string;
+    /** печатать причину каждого перезапуска (dev) */
+    trace?: boolean;
+    /** 'sync' (default) — синхронно; 'micro' — один запуск за микротаск; 'frame' — один запуск за кадр */
+    flush?: 'sync' | 'micro' | 'frame';
+}
 export function effect(fn: () => void | (() => void), nameOrOpts?: string | EffectOptions): () => void;
 /** Отладка: печатать стек каждой записи в сигнал. trace(sig, false) — выключить */
 export function trace<T extends Signal<any>>(sig: T, on?: boolean): T;
@@ -60,11 +66,29 @@ export class AegisWarning extends Error { code: string; what: string; why: strin
 /** Подписка на предупреждения (dev-режим): warnings-as-assertions в тестах. Возвращает unsubscribe */
 export function onWarn(fn: (w: WarningInfo) => void): () => void;
 /** Управление dev-режимом: dev.enable() (localStorage + reload на проде), dev.disable(), dev.resetWarnings() */
-export const dev: { readonly on: boolean; enable(): void; disable(): void; resetWarnings(): void };
+export interface ScopeInspection { scope: string | null; el: Element | null; signals: Array<{ name: string; value: string }>; effects: Array<{ name: string; deps: string[]; scope: string | null }>; children: number }
+export const dev: {
+    readonly on: boolean;
+    enable(): void;
+    disable(): void;
+    resetWarnings(): void;
+    /** performance.measure / console.timeStamp на каждый flush в треке «Aegis» Performance-панели */
+    profile(on?: boolean): void;
+    /** Реактивный мир острова по DOM-узлу: Aegis.dev.of($0) */
+    of(el: Element): ScopeInspection | null;
+    /** JSON-снимок компонентов (или одного scope) — для чата с ассистентом */
+    inspect(root?: Document | Element | Scope): ScopeInspection[] | ScopeInspection;
+    /** Граф зависимостей как Mermaid */
+    graph(root?: Scope): string;
+};
 /** Сбросить модульные синглтоны между тестами (компоненты, реестр, кэш ресурсов, live-region) */
 export function reset(opts?: { components?: boolean; cache?: boolean; registry?: boolean; dom?: boolean }): void;
 /** Синхронно выполнить отложенные рендеры show()/list() и очередь эффектов */
 export function flushSync(): void;
+/** Синхронно выполнить отложенные полосы micro/frame и очередь эффектов */
+export function flush(): void;
+/** Счётчики движка: flushes, effectRuns, maxRounds, slow (top-20 по мс при dev.profile), scopes, effects, components, кэши */
+export function stats(): { flushes: number; effectRuns: number; maxRounds: number; slow: Array<{ name: string; ms: number }>; scopes: number; effects: number; components: number; resourceCache: number; cssCache: number; queued: number };
 /** Корневой scope для тестов: const [api, dispose] = root(dispose => …) */
 export function root<T>(fn: (dispose: () => void) => T): [T, () => void];
 /** Дождаться сигнала: resolve при первом значении, для которого predicate истинен; reject TimeoutError / при dispose scope */
@@ -841,7 +865,7 @@ export interface HydrateOptions {
     watch?: boolean;
     /** перемонтировать уже живые */
     force?: boolean;
-    /** переопределить data-aegis-load для всех (тесты: 'eager') */
+    /** переопределить data-aegis-load для всех (тесты: 'eager'). Стратегии с аргументами: 'visible(300px)', 'idle(1500)', 'interaction(click,keydown)' */
     load?: 'eager' | 'visible' | 'idle' | 'interaction' | string;
     /** без предупреждений о незарегистрированных компонентах */
     quiet?: boolean;
@@ -1096,12 +1120,17 @@ export function command(root: Element, commands?: Record<string, (trigger: Eleme
 // ── Virtual Scroll ─────────────────────────────────────────────
 
 export function virtualScroll<T>(parent: Element, items: T[] | Signal<T[]> | ReadonlySignal<T[]> | (() => T[]), opts: {
+    /** 'cv' (default) — все строки в DOM под content-visibility; 'window' — DOM recycling, в DOM только видимые + overscan */
+    mode?: 'cv' | 'window';
+    overscan?: number;
+    /** высота контейнера для mode 'window' */
+    height?: number | string;
     itemHeight?: number;
     chunkSize?: number;
     /** ключ строки (по умолчанию "id"); строки keyed, со своим scope */
     key?: string | ((item: T, index: number) => string | number);
     renderItem: (item: T, index: number) => Element | DocumentFragment;
-}): { container: HTMLElement; refresh(): void; dispose(): void };
+}): { container: HTMLElement; refresh(): void; dispose(): void; /** mode 'window' */ range?: ReadonlySignal<{ start: number; end: number; total: number }>; scrollToIndex?(i: number, opts?: { align?: 'start' | 'center' | 'end' }): void };
 
 // ── Offline Resource ───────────────────────────────────────────
 
@@ -1231,6 +1260,8 @@ declare const Aegis: {
     AegisWarning: typeof AegisWarning;
     reset: typeof reset;
     flushSync: typeof flushSync;
+    flush: typeof flush;
+    stats: typeof stats;
     when: typeof when;
     cssVars: typeof cssVars;
     prevent: typeof prevent;
