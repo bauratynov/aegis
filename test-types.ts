@@ -192,6 +192,14 @@ when5(resource<{ n: number }>('/x'), { data: (d) => String(d.n) }, { busy: true,
 mutation5<[number], number>(async (x) => x, { announce: true }); mutation5<[], number>(async () => 1, { announce: { success: 'Saved', error: (e) => String(e), undone: false } });
 router({ '/': () => {} }, { focus: 'auto', announce: (to) => 'Page ' + to.path }); boost5({ focus: false, announce: false });
 
+import { tabbables, roving as roving5 } from './aegis.js';
+// ── a11y phase 5b — trap 3.0 / tabbables / roving 2.0
+const tb: HTMLElement[] = tabbables(document.body); void tb;
+const rel5 = trap(document.createElement('div'), { autoFocus: 'container', recapture: false, escape: true }); rel5.refresh(); rel5();
+const rv5 = roving5(document.createElement('div'), { orientation: 'grid', cols: 3, typeahead: true, dir: 'auto', initial: 'selected', observe: true, tree: false, page: 5 });
+rv5.setActive(0); const ai: number = rv5.active.value; void ai; rv5.refresh(); rv5.dispose();
+roving5(document.createElement('div'), { virtual: document.createElement('input'), onActivate: (el, i) => { void el; void i; } });
+
 // ── aegis/test — render / fire / waitFor / mockFetch
 import { render, fire, waitFor, mockFetch, cleanup, withScope, fakeClock } from './aegis-test.js';
 const clock = fakeClock(1000); await clock.advance(30_000); clock.restore();

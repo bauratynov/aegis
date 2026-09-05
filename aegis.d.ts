@@ -1342,8 +1342,10 @@ export function scaffold(el: HTMLElement): string;
  * Focus trap: Tab-цикл, autoFocus, возврат фокуса; escape / outside (release или свой обработчик); inert для фона (кроме allow)
  */
 export interface TrapOptions {
-    /** [data-autofocus] → первый focusable → сам контейнер */
-    autoFocus?: boolean;
+    /** true / 'first' — [data-autofocus] → первый tabbable → контейнер; 'container' — статичный контейнер (длинный текст, APG); селектор — свой элемент */
+    autoFocus?: boolean | 'first' | 'container' | string;
+    /** фокус, ушедший наружу (программно, из виджета), возвращается внутрь; default true */
+    recapture?: boolean;
     /** Escape: true — release(), функция — свой обработчик */
     escape?: boolean | ((e: KeyboardEvent) => void);
     /** клик вне контейнера (и вне allow) */
@@ -1354,13 +1356,33 @@ export interface TrapOptions {
     /** true — на элемент, активный до trap(); Element | () => Element — свой; если триггер удалён (строка list()) — ближайший живой сосед */
     returnFocus?: boolean | Element | (() => Element | null);
 }
-export function trap(container: Element, opts?: TrapOptions): (() => void) & { dispose(): void };
-export function roving(container: Element, opts?: {
+export function trap(container: Element, opts?: TrapOptions): (() => void) & { dispose(): void; refresh(): void };
+/** Tabbable-элементы в порядке документа, включая открытые shadow root и <slot>; inert/hidden/disabled/tabindex<0/закрытые <details> исключены */
+export function tabbables(root: Element | ShadowRoot): HTMLElement[];
+export interface RovingOptions {
     selector?: string;
-    orientation?: 'horizontal' | 'vertical' | 'both';
+    /** 'grid' — Left/Right по ячейкам, Up/Down по строкам, Home/End в строке, Ctrl+Home/End, PageUp/Down */
+    orientation?: 'horizontal' | 'vertical' | 'both' | 'grid';
     wrap?: boolean;
+    /** grid: число колонок или 'auto' (по геометрии первой строки) */
+    cols?: number | 'auto';
+    /** шаг PageUp/PageDown (строк для grid) */
+    page?: number;
+    /** буква → ближайший элемент по тексту / aria-label, буфер 500 мс */
+    typeahead?: boolean;
+    /** инверсия горизонтали; 'auto' — по computed direction */
+    dir?: 'ltr' | 'rtl' | 'auto';
+    /** tab-stop: 'selected' — [aria-selected/checked/current], 'first', индекс */
+    initial?: 'selected' | 'first' | number;
+    /** aria-activedescendant-режим (combobox): фокус остаётся на этом input, клавиши слушаются на нём */
+    virtual?: HTMLElement | null;
+    /** MutationObserver: refresh при смене детей; удалённый активный → фокус на элемент с тем же индексом */
+    observe?: boolean;
+    /** tree: ArrowRight раскрывает (aria-expanded), ArrowLeft сворачивает или идёт к родителю */
+    tree?: boolean;
     onActivate?: (el: Element, index: number) => void;
-}): { dispose(): void; moveFocus(delta: number): void; refresh(): void };
+}
+export function roving(container: Element, opts?: RovingOptions): { dispose(): void; moveFocus(delta: number): void; refresh(): void; active: ReadonlySignal<number>; setActive(i: number): void };
 /**
  * Объявление для скринридера: два постоянных региона (polite → role=status, assertive → role=alert), очередь без потерь,
  * дедуп одинакового текста 500 мс, авто-очистка 7 с. Возвращает clear(). announce.init() создаёт регионы заранее.

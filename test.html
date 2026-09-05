@@ -42,7 +42,7 @@
         defineElement, anchor, router, command, virtualScroll,
         offlineResource,
         lazy, nextTick, i18n, uncloak, injectStyles,
-        VERSION, mount, cache, withRetry, leader, predictor, speculate, prefetchOn, onError, lens, signals, fieldArray, min, wizard, draft, live, busy } from './aegis.js';
+        VERSION, mount, cache, withRetry, leader, predictor, speculate, prefetchOn, onError, lens, signals, fieldArray, min, wizard, draft, live, busy, tabbables } from './aegis.js';
 
     const results = document.getElementById('results');
     const sandbox = document.getElementById('sandbox');
@@ -4723,6 +4723,131 @@
 
         sc.dispose();
         offW(); dev.resetWarnings(); reset();
+    })();
+
+    section('💎 доступность фаза 5b — trap 3.0 (стек, recapture, tabbables) и roving 2.0 (grid, typeahead, RTL, activedescendant)');
+
+    await (async () => {
+        const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+        const key = (el, k, init = {}) => el.dispatchEvent(new KeyboardEvent('keydown', { key: k, bubbles: true, cancelable: true, ...init }));
+        const sc = createScope();
+        const stage = document.createElement('div'); document.body.appendChild(stage);   // видимый контейнер: фокус в display:none невозможен
+
+        // 1. tabbables(): shadow DOM, contenteditable, fixed, visibility:hidden, disabled, details
+        await sc.run(async () => {
+            if (!customElements.get('x-shadow-btn')) customElements.define('x-shadow-btn', class extends HTMLElement { constructor() { super(); this.attachShadow({ mode: 'open' }).innerHTML = '<button class="sb">in shadow</button>'; } });
+            const box = document.createElement('div');
+            box.innerHTML = '<button id="tb1">1</button><div contenteditable="true" id="tb2">edit</div><x-shadow-btn></x-shadow-btn><button style="position:fixed;top:0" id="tb3">fixed</button><button style="visibility:hidden">hidden</button><button disabled>dis</button><details><summary id="tb4">sum</summary><button>inside closed</button></details><a href="#" tabindex="-1">skip</a>';
+            stage.appendChild(box);
+            await sleep(1);
+            const t = tabbables(box);
+            const ids = t.map(el => el.id || el.className);
+            assert('tabbables: contenteditable, fixed, summary закрытого details и кнопка внутри shadow root учтены; hidden/disabled/tabindex=-1/содержимое закрытого details — нет', t.length === 5 && ids.join() === 'tb1,tb2,sb,tb3,tb4');
+            box.remove();
+        });
+
+        // 2. trap 3.0: стек ловушек (Escape только верхней), recapture, autoFocus: 'container' | селектор
+        await sc.run(async () => {
+            const outer = document.createElement('div'); outer.innerHTML = '<h2>Outer</h2><button id="o1">o</button><div id="inner"><h3>Inner</h3><button id="i1">i</button></div>'; stage.appendChild(outer);
+            const outsideBtn = document.createElement('button'); outsideBtn.textContent = 'outside'; stage.appendChild(outsideBtn);
+            let a = 0, b = 0;
+            const relOuter = trap(outer, { escape: () => a++ });
+            const relInner = trap(outer.querySelector('#inner'), { escape: () => b++ });
+            key(document.body, 'Escape');
+            assert('trap стек: Escape обрабатывает только верхняя ловушка', b === 1 && a === 0);
+            relInner();
+            key(document.body, 'Escape');
+            assert('trap стек: после release внутренней Escape идёт внешней', a === 1 && b === 1);
+            outsideBtn.focus();
+            await sleep(10);
+            assert('trap recapture: фокус, ушедший наружу, возвращается внутрь (без фокуса документа focusin не приходит — пропуск)', !document.hasFocus() || outer.contains(document.activeElement));
+            relOuter();
+            const box = document.createElement('div'); box.innerHTML = '<p>long text</p><button id="c1">x</button>'; stage.appendChild(box);
+            const r1 = trap(box, { autoFocus: 'container' });
+            assert("trap autoFocus: 'container' — фокус на самом контейнере с tabindex=-1", document.activeElement === box && box.getAttribute('tabindex') === '-1');
+            r1();
+            const r2 = trap(box, { autoFocus: '#c1' });
+            assert('trap autoFocus: селектор', document.activeElement === box.querySelector('#c1'));
+            r2();
+            // Tab с контейнера идёт на первый tabbable, Shift+Tab — на последний
+            const r3 = trap(box, { autoFocus: 'container' });
+            key(box, 'Tab');
+            assert('trap: Tab с контейнера → первый tabbable', document.activeElement === box.querySelector('#c1'));
+            r3();
+            outer.remove(); outsideBtn.remove(); box.remove();
+        });
+
+        // 3. roving 2.0: grid
+        await sc.run(async () => {
+            const grid = document.createElement('div'); grid.setAttribute('role', 'grid');
+            grid.innerHTML = Array.from({ length: 9 }, (_, i) => `<button class="cell">${i}</button>`).join('');
+            stage.appendChild(grid);
+            const rv = roving(grid, { orientation: 'grid', cols: 3, selector: '.cell', wrap: false, page: 1 });
+            const cells = [...grid.querySelectorAll('.cell')];
+            const at = () => cells.indexOf(document.activeElement);
+            rv.setActive(0);
+            key(grid, 'ArrowDown'); const s1 = at();
+            key(grid, 'ArrowRight'); const s2 = at();
+            key(grid, 'End'); const s3 = at();
+            key(grid, 'End', { ctrlKey: true }); const s4 = at();
+            key(grid, 'Home'); const s5 = at();
+            key(grid, 'PageUp'); const s6 = at();
+            assert('roving grid: Down → +cols, Right → +1, End → конец строки, Ctrl+End → последний, Home → начало строки, PageUp → на страницу вверх', [s1, s2, s3, s4, s5, s6].join() === '3,4,5,8,6,3' && rv.active.value === 3);
+            rv.dispose(); grid.remove();
+        });
+
+        // 4. roving 2.0: typeahead, RTL, initial: 'selected', observe, tree
+        await sc.run(async () => {
+            const lb = document.createElement('div'); lb.setAttribute('role', 'listbox');
+            lb.innerHTML = '<div role="option">Apple</div><div role="option" aria-selected="true">Banana</div><div role="option">Cherry</div>';
+            stage.appendChild(lb);
+            const rv = roving(lb, { selector: '[role=option]', orientation: 'vertical', typeahead: true });
+            const opts = [...lb.querySelectorAll('[role=option]')];
+            assert("roving initial: 'selected' — tab-stop на aria-selected", opts[1].getAttribute('tabindex') === '0' && opts[0].getAttribute('tabindex') === '-1' && lb.getAttribute('aria-orientation') === 'vertical');
+            opts[1].focus();
+            key(lb, 'c');
+            assert('roving typeahead: буква → элемент по тексту', document.activeElement === opts[2]);
+            key(lb, 'a');
+            assert('roving typeahead: буфер без совпадения откатывается к одной букве → Apple', document.activeElement === opts[0]);
+            rv.dispose();
+            const bar = document.createElement('div'); bar.style.direction = 'rtl'; bar.innerHTML = '<button>1</button><button>2</button><button>3</button>'; stage.appendChild(bar);
+            const rv2 = roving(bar, { orientation: 'horizontal' });
+            const bs = [...bar.querySelectorAll('button')];
+            rv2.setActive(1); key(bar, 'ArrowRight');
+            assert('roving RTL: ArrowRight движется влево по DOM', document.activeElement === bs[0]);
+            rv2.dispose();
+            const menu = document.createElement('div'); menu.setAttribute('role', 'menu'); menu.innerHTML = '<button role="menuitem">a</button><button role="menuitem">b</button><button role="menuitem">c</button>'; stage.appendChild(menu);
+            const rv3 = roving(menu, { orientation: 'vertical', selector: '[role=menuitem]', observe: true });
+            const mi = () => [...menu.querySelectorAll('[role=menuitem]')];
+            rv3.setActive(1);
+            mi()[1].remove();
+            await sleep(5);
+            assert('roving observe: удалённый активный элемент → фокус на элемент с тем же индексом', document.activeElement === mi()[1] && mi()[1].getAttribute('tabindex') === '0');
+            rv3.dispose();
+            const tree = document.createElement('ul'); tree.setAttribute('role', 'tree');
+            tree.innerHTML = '<li role="treeitem" aria-expanded="false" tabindex="0">root<ul><li role="treeitem">child</li></ul></li>';
+            stage.appendChild(tree);
+            const rv4 = roving(tree, { selector: '[role=treeitem]', orientation: 'vertical', tree: true });
+            const items = [...tree.querySelectorAll('[role=treeitem]')];
+            items[0].focus();
+            key(tree, 'ArrowRight');
+            const expanded = items[0].getAttribute('aria-expanded') === 'true';
+            key(tree, 'ArrowLeft');
+            assert('roving tree: ArrowRight раскрывает, ArrowLeft сворачивает', expanded && items[0].getAttribute('aria-expanded') === 'false');
+            rv4.dispose();
+            const input = document.createElement('input'); const list = document.createElement('div'); list.setAttribute('role', 'listbox'); list.innerHTML = '<div role="option">x</div><div role="option">y</div>'; stage.append(input, list);
+            const rv5 = roving(list, { selector: '[role=option]', orientation: 'vertical', virtual: input });
+            input.focus();
+            key(input, 'ArrowDown');
+            const o2 = list.querySelectorAll('[role=option]')[1];
+            assert('roving virtual: фокус остаётся в input, aria-activedescendant и data-active движутся по опциям', document.activeElement === input && input.getAttribute('aria-activedescendant') === o2.id && o2.hasAttribute('data-active') && rv5.active.value === 1);
+            rv5.dispose();
+            lb.remove(); bar.remove(); menu.remove(); tree.remove(); input.remove(); list.remove();
+        });
+
+        stage.remove();
+        sc.dispose();
+        reset();
     })();
 
     section('component() & destroy()');
