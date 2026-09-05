@@ -42,7 +42,7 @@
         defineElement, anchor, router, command, virtualScroll,
         offlineResource,
         lazy, nextTick, i18n, uncloak, injectStyles,
-        VERSION, mount, cache } from './aegis.js';
+        VERSION, mount, cache, withRetry } from './aegis.js';
 
     const results = document.getElementById('results');
     const sandbox = document.getElementById('sandbox');
@@ -3033,6 +3033,108 @@
         assert('poll: interval как функция от данных — остановился на n=3', nAt3 === 3 && n === 3 && pr.data.value.n === 3);
         sc4.dispose();
 
+        off(); dev.resetWarnings(); reset();
+        defaults.motion = true;
+    })();
+
+    section('💎 кэш фаза 4 — ETag/304, staleTime http/auto, Aegis-Invalidate, Retry-After, breaker, retry budget');
+
+    await (async () => {
+        reset();
+        const seen = [];
+        const off = onWarn(w => seen.push(w));
+        dev.resetWarnings();
+        const savedFetcher = defaults.fetcher;
+        // mock-сервер через configure({ fetch }): ETag + 304, Cache-Control, Aegis-Invalidate
+        const srv = { version: 1, log: [] };
+        const json = (data, status = 200, headers = {}) => new Response(status === 304 ? null : JSON.stringify(data), { status, headers: { 'Content-Type': 'application/json', ...headers } });
+        configure({ fetch: async (url, init) => {
+            const u = new URL(url, location.href); const h = new Headers(init && init.headers);
+            srv.log.push((init && init.method || 'GET') + ' ' + u.pathname + (h.get('If-None-Match') ? ' inm=' + h.get('If-None-Match') : ''));
+            if (u.pathname === '/t4/etag') { const tag = '"v' + srv.version + '"'; if (h.get('If-None-Match') === tag) return json(null, 304, { ETag: tag }); return json({ v: srv.version }, 200, { ETag: tag }); }
+            if (u.pathname === '/t4/http') return json({ ok: 1 }, 200, { 'Cache-Control': 'private, max-age=60, stale-while-revalidate=300', Age: '45' });
+            if (u.pathname === '/t4/users') return json([{ id: 1 }]);
+            if (u.pathname === '/t4/users/add') return json({ id: 2 }, 201, { 'Aegis-Invalidate': '/t4/users*' });
+            if (u.pathname === '/t4/flaky') return json({ message: 'down' }, 503);
+            if (u.pathname === '/t4/ra') return json({ message: 'slow down' }, 429, { 'Retry-After': '0.05' });
+            return json({ message: 'nf' }, 404);
+        } });
+
+        // ETag → If-None-Match → 304
+        const sc = createScope();
+        let et;
+        sc.run(() => { et = resource('/t4/etag', { cache: true, staleTime: 0 }); });
+        await settled();
+        await et.refresh();
+        const hist = cache.explain('/t4/etag').history;
+        assert('ETag: второй запрос ушёл с If-None-Match и получил 304, данные те же', srv.log.filter(l => l.includes('inm=')).length === 1 && hist.some(h => h.status === '304') && et.data.value.v === 1 && cache.explain('/t4/etag').etag === '"v1"');
+        srv.version = 2;
+        await et.refresh();
+        assert('ETag: изменение на сервере → 200 с новым телом', et.data.value.v === 2 && cache.explain('/t4/etag').etag === '"v2"');
+        sc.dispose();
+
+        // staleTime: 'http' — max-age 60 − Age 45 = 15 с свежести
+        const sc2 = createScope();
+        let hr;
+        sc2.run(() => { hr = resource('/t4/http', { cache: true, staleTime: 'http', cacheTime: 'http' }); });
+        await settled();
+        const hx = cache.explain('/t4/http');
+        assert('staleTime http: свежесть из Cache-Control/Age', hx.state === 'fresh' && hx.staleTime === 60000 && hx.age >= 45000 && /fresh for 1[0-5]\d{3} ms/.test(hx.why) && hx.staleTimeMode === 'http' && hx.cacheTime === 360000);
+        sc2.dispose();
+
+        // staleTime: 'auto' — без наблюдений консервативный минимум
+        const sc3 = createScope();
+        sc3.run(() => { resource('/t4/users', { cache: true, staleTime: 'auto' }); });
+        await settled();
+        assert('staleTime auto: min 1000 мс без наблюдений', cache.explain('/t4/users').staleTime === 1000 && cache.explain('/t4/users').staleTimeMode === 'auto');
+        // Aegis-Invalidate заголовок ответа
+        const before = srv.log.filter(l => l.endsWith('/t4/users')).length;
+        await api.post('/t4/users/add', { name: 'x' });
+        await settled();
+        assert('Aegis-Invalidate: ответ мутации перезапросил /t4/users*', srv.log.filter(l => l.endsWith('/t4/users')).length === before + 1);
+        sc3.dispose();
+
+        // Retry-After как floor: задержка ≥ 50 мс, потом успех
+        let tries = 0;
+        const t0 = performance.now();
+        try { await withRetry(async () => { tries++; if (tries < 2) throw Object.assign(new HttpError(429, { headers: new Headers({ 'Retry-After': '0.05' }) }, null), {}); return 'ok'; }, { retries: 3, base: 1 }); } catch (e) { /* */ }
+        assert('withRetry: Retry-After — нижняя граница задержки', tries === 2 && performance.now() - t0 >= 45);
+        let long = null;
+        try { await withRetry(async () => { throw new HttpError(429, { headers: new Headers({ 'Retry-After': '120' }) }, null); }, { retries: 3, maxWait: 100 }); } catch (e) { long = e; }
+        assert('withRetry: Retry-After больше maxWait → сразу ошибка с retryAfter', long && long.retryAfter === 120000);
+
+        // circuit breaker per origin
+        configure({ breaker: { threshold: 2, cooldown: 300 } });
+        let e1 = null, e2 = null, e3 = null;
+        const hits = srv.log.length;
+        try { await api.get('/t4/flaky'); } catch (e) { e1 = e; }
+        try { await api.get('/t4/flaky'); } catch (e) { e2 = e; }
+        try { await api.get('/t4/flaky'); } catch (e) { e3 = e; }
+        assert('breaker: после threshold ошибок запрос падает сразу, без сети', e1.status === 503 && !e1.circuit && e3 && e3.circuit === true && e3.retryAt > Date.now() - 1 && srv.log.length === hits + 2);
+        await wait(700);
+        let e4 = null;
+        try { await api.get('/t4/users'); } catch (e) { e4 = e; }
+        assert('breaker: после cooldown — probe проходит (half-open → closed при успехе)', e4 === null && srv.log.length === hits + 3);
+        configure({ breaker: null });
+
+        // retry budget
+        configure({ retryBudget: { ratio: 0, min: 1, window: 10000 } });
+        let b1 = null, n1 = 0;
+        try { await withRetry(async () => { n1++; throw new HttpError(503, { headers: new Headers() }, null); }, { retries: 5, base: 1 }); } catch (e) { b1 = e; }
+        assert('retry budget: сверх лимита повтор отклонён с e.budget', b1 && b1.budget === true && n1 === 2);
+        configure({ retryBudget: null });
+
+        // seedFrom: etag + max-age
+        const host = document.createElement('div');
+        host.innerHTML = '<script type="application/json" data-aegis-cache="/t4/seeded" data-aegis-etag="&quot;s1&quot;" data-aegis-max-age="120">{"x":1}<\/script>';
+        sandbox.appendChild(host);
+        seedFrom(host);
+        const sx = cache.explain('/t4/seeded');
+        assert('seedFrom: data-aegis-etag и data-aegis-max-age → fresh с ETag', sx.state === 'fresh' && sx.etag === '"s1"' && sx.staleTime === 0 && sx.gcIn !== null);
+        sandbox.innerHTML = '';
+
+        configure({ fetch: null });
+        defaults.fetcher = savedFetcher;
         off(); dev.resetWarnings(); reset();
         defaults.motion = true;
     })();

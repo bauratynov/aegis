@@ -416,6 +416,13 @@ export class HttpError extends Error {
     status: number;
     response: Response;
     data: unknown;
+    /** circuit breaker открыт — запрос не отправлялся; retryAt — когда попробовать снова (ms epoch) */
+    circuit?: boolean;
+    retryAt?: number;
+    /** повтор отклонён retry budget */
+    budget?: boolean;
+    /** сервер просил ждать дольше maxWait (мс) */
+    retryAfter?: number;
     constructor(status: number, response: Response, data: unknown);
 }
 
@@ -433,6 +440,12 @@ export interface AegisConfig {
     delegateEvents?: string[] | null;
     /** ёмкость SWR-кэша: maxEntries (default 500, SIEVE-вытеснение среди незанятых записей), maxBytes (default 0 — без лимита) */
     cache?: { maxEntries?: number; maxBytes?: number };
+    /** заголовок ответа с шаблонами ключей для invalidate() — 'Aegis-Invalidate: /api/users*, /api/stats' (same-origin); false — выключить */
+    invalidateHeader?: string | false;
+    /** circuit breaker per origin: после threshold retryable-ошибок подряд запросы падают сразу (e.circuit, e.retryAt) на cooldown, затем один probe */
+    breaker?: boolean | { threshold?: number; cooldown?: number; key?: (url: string) => string };
+    /** лимит повторов на клиент в скользящем окне: retries ≤ ratio × requests + min; отказ — e.budget === true */
+    retryBudget?: boolean | { ratio?: number; min?: number; window?: number };
     /** планировщик ревалидации: refill token bucket на причину (мс), параллелизм, стаггер между стартами, джиттер reconnect */
     revalidate?: { focus?: number; reconnect?: number; concurrency?: number; stagger?: number; reconnectJitter?: number };
     /** пресет или своя схема; null — выключить; без вызова — автодетект из <meta name="aegis-csrf"> / <meta name="csrf-token"> */
@@ -550,9 +563,10 @@ export interface CacheOptions {
     key?: string | CacheKeyPart[] | (() => string | CacheKeyPart[]);
     /** теги для invalidate({ tags }) */
     tags?: string | string[];
-    staleTime?: number;
-    /** мс до сборки незанятой записи; Infinity — держать до вытеснения по лимитам */
-    cacheTime?: number;
+    /** мс | 'http' (Cache-Control max-age / Age / Expires ответа; ['http', fallbackMs]) | 'auto' | { auto: true, k?, min?, max? } — T* = sqrt(2k/(λ̂μ̂)) − 1/λ̂ по наблюдаемым частотам */
+    staleTime?: number | 'http' | ['http', number] | 'auto' | { auto: true; k?: number; min?: number; max?: number };
+    /** мс до сборки незанятой записи; Infinity — держать до вытеснения по лимитам; 'http' — max-age + stale-while-revalidate из ответа */
+    cacheTime?: number | 'http';
     /** держать старые данные при смене URL (default true для реактивного source) */
     keepPrevious?: boolean;
     /** default ['focus', 'reconnect']; [] — выключить. События, пришедшие в скрытой вкладке, применяются при возврате в неё */
@@ -719,7 +733,7 @@ export interface CacheExplain {
     changeInterval?: number | null; readInterval?: number | null;
     /** staleTime по наблюдениям (≈5% устаревших чтений) */
     suggestedStaleTime?: number | null;
-    tags?: string[] | null; prefetched?: string | null; history: CacheEvent[];
+    tags?: string[] | null; prefetched?: string | null; /** ETag последнего ответа (If-None-Match → 304) */ etag?: string | null; staleTimeMode?: 'http' | 'auto' | string | null; history: CacheEvent[];
 }
 export interface CacheEntryStats { key: string; state: CacheState; age: number | null; staleTime: number; subscribers: number; inflight: boolean; error: string | null; size: number; gcIn: number | null; fetches: number; unchanged: number; suggestedStaleTime: number | null; prefetched: string | null; tags: string[] | null }
 export interface CacheStats { entries: CacheEntryStats[]; prefetch: { fired: number; used: number; wasted: number; byKind: Record<string, { p: number; n: number }> }; bytes: number; evictions: number; limits: { maxEntries: number; maxBytes: number }; now: number }

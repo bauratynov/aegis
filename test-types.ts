@@ -104,6 +104,9 @@ await invalidate('/api/users*'); await invalidate(['users', 42]); await invalida
 mutation(async () => 1, { invalidates: ['/api/users*', ['users']], awaitInvalidates: false });
 resource('/api/rows', { cache: { key: ['rows', () => 1], tags: 'rows', interval: (d: unknown) => (d ? 0 : 5000), background: true, pin: true, cacheTime: Infinity }, share: 'uuid', dedupe: false });
 configure({ cache: { maxEntries: 200, maxBytes: 4 << 20 }, revalidate: { focus: 10_000, concurrency: 4, stagger: 20 } });
+configure({ invalidateHeader: 'HX-Trigger', breaker: { threshold: 3, cooldown: 2000, key: (u) => new URL(u, 'http://x').pathname }, retryBudget: { ratio: 0.1, min: 3 } });
+resource('/api/a', { cache: { staleTime: 'http', cacheTime: 'http' } }); resource('/api/b', { cache: { staleTime: ['http', 5000] } }); resource('/api/c', { cache: { staleTime: { auto: true, k: 50, min: 2000 } } });
+const herr = new HttpError(503, new Response(), null); herr.circuit; herr.retryAt; herr.budget; herr.retryAfter; cache.explain('/api/a').etag;
 const sz: number = cache.size().bytes; void sz; cache.stats().limits.maxEntries;
 
 // ── aegis/test — render / fire / waitFor / mockFetch
