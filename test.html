@@ -35,7 +35,7 @@
         resource, watch, store, portal, transition, errorBoundary, ref,
         reactive, isReactive,
         form, required, minLen, maxLen, emailRule, matches,
-        wireForm, cachedResource, invalidate,
+        wireForm, cachedResource, invalidate, seed, seedFrom,
         spring, flip, animate,
         trap, roving, announce,
         css, adoptStyles, scopedStyle,
@@ -841,6 +841,116 @@
         input.dispatchEvent(new Event('input', { bubbles: true }));
         assert('wireForm: после dispose слушатели сняты', f.fields.q.value === 'b');
         assert('wireForm: созданный error-элемент удалён', !form.querySelector('.aegis-field-error'));
+        sandbox.innerHTML = '';
+    })();
+
+    section('💎 #18 — setup возвращает шаблон, slot()');
+
+    (() => {
+        const host = document.createElement('div');
+        host.innerHTML = '<p>server text</p><footer slot="footer">F</footer>';
+        sandbox.appendChild(host);
+        const count = signal(1);
+        const api = component(host, ({ slot, html }) => html`
+            <section>
+                <b>${count}</b>
+                ${slot('[slot=footer]')}
+                <div class="rest">${slot()}</div>
+            </section>`);
+        assert('component: шаблон из setup вставлен, серверная разметка не дублируется', host.querySelectorAll('section').length === 1 && host.querySelectorAll('p').length === 1);
+        assert('component: slot(selector) перенёс только footer', host.querySelector('section > footer')?.textContent === 'F' && !host.querySelector('.rest footer'));
+        assert('component: slot() перенёс остальное', host.querySelector('.rest p')?.textContent === 'server text');
+        assert('component: возвращает { el, destroy }', api.el === host && typeof api.destroy === 'function');
+        count.value = 2;
+        assert('component: привязки живые', host.querySelector('b').textContent === '2');
+        api.destroy();
+        count.value = 3;
+        assert('component: destroy() отключает эффекты', host.querySelector('b').textContent === '2');
+        sandbox.innerHTML = '';
+
+        const h2 = document.createElement('div');
+        sandbox.appendChild(h2);
+        const obj = component(h2, () => ({ open() { return 1; } }));
+        assert('component: объект из setup возвращается как раньше', typeof obj.open === 'function');
+        destroy(h2);
+        sandbox.innerHTML = '';
+    })();
+
+    section('💎 #19 — .prop / ?bool / bind: / авто-property');
+
+    await (async () => {
+        const name = signal('a');
+        const agree = signal(false);
+        const disabled = signal(true);
+        const f = html`
+            <input class="p" .value=${name}>
+            <input class="m" bind:value=${name}>
+            <input class="c" type="checkbox" bind:checked=${agree}>
+            <button class="b" ?disabled=${disabled}>x</button>
+            <input class="bare" value=${name}>
+            <textarea class="ta" value=${name}></textarea>`;
+        sandbox.appendChild(f);
+        const p = sandbox.querySelector('.p'), m = sandbox.querySelector('.m'), c = sandbox.querySelector('.c');
+        const b = sandbox.querySelector('.b'), bare = sandbox.querySelector('.bare'), ta = sandbox.querySelector('.ta');
+        assert('.value ставит свойство, не атрибут', p.value === 'a' && !p.hasAttribute('value') && !p.hasAttribute('.value'));
+        name.value = 'b';
+        assert('.value реактивно', p.value === 'b' && m.value === 'b' && bare.value === 'b' && ta.value === 'b');
+        m.value = 'typed';
+        m.dispatchEvent(new Event('input', { bubbles: true }));
+        assert('bind:value пишет в сигнал', name.value === 'typed' && p.value === 'typed');
+        bare.value = 'user edit';           // dirty value flag
+        name.value = 'from signal';
+        assert('голый value=${sig} обновляет поле даже после ввода пользователя', bare.value === 'from signal');
+        c.click();
+        assert('bind:checked пишет в сигнал', agree.value === true);
+        agree.value = false;
+        assert('bind:checked читает из сигнала', c.checked === false);
+        assert('?disabled из сигнала', b.disabled === true);
+        disabled.value = false;
+        assert('?disabled реактивно снимает атрибут', !b.hasAttribute('disabled'));
+
+        const points = signal([1, 2]);
+        const sel = signal('two');
+        const f2 = html`<x-chart-prop .points=${points}></x-chart-prop>
+            <select class="s" .value=${sel}><option value="one">1</option><option value="two">2</option></select>`;
+        sandbox.appendChild(f2);
+        const xc = sandbox.querySelector('x-chart-prop');
+        assert('.prop передаёт объект как свойство', Array.isArray(xc.points) && xc.points.length === 2 && !xc.hasAttribute('points'));
+        await wait(0);
+        assert('<select .value> выбирает опцию', sandbox.querySelector('.s').value === 'two');
+        sel.value = 'one';
+        assert('<select .value> реактивно', sandbox.querySelector('.s').value === 'one');
+        sandbox.innerHTML = '';
+    })();
+
+    section('💎 #97 — seed() / seedFrom()');
+
+    await (async () => {
+        sandbox.innerHTML = '<scr' + 'ipt type="application/json" data-aegis-cache="/test/seeded" data-aegis-age="100">{"items":[1,2,3]}</scr' + 'ipt>';
+        const n = seedFrom(sandbox);
+        assert('seedFrom: одна запись засеяна', n === 1 && seedFrom(sandbox) === 0);
+        let fetches = 0;
+        const scope = createScope();
+        let r;
+        scope.run(() => {
+            r = cachedResource('/test/seeded', { staleTime: 60000, fetcher: async () => { fetches++; return { items: [] }; } });
+        });
+        await wait(10);
+        assert('cachedResource: данные из seed без запроса', r.data.value?.items?.length === 3 && fetches === 0);
+        seed('/test/seeded', { items: [9] });
+        assert('seed(): обновляет данные активного ресурса', r.data.value.items[0] === 9);
+        scope.dispose();
+
+        seed('/test/seeded-swr', { v: 'seed' });
+        const scope2 = createScope();
+        let r2, fetches2 = 0, seenFirst = null;
+        scope2.run(() => {
+            r2 = cachedResource('/test/seeded-swr', { fetcher: async () => { fetches2++; return { v: 'net' }; } });
+            seenFirst = r2.data.peek()?.v;
+        });
+        await wait(10);
+        assert('seed без staleTime — SWR: данные сразу из seed, ревалидация ушла', seenFirst === 'seed' && fetches2 === 1 && r2.data.value.v === 'net');
+        scope2.dispose();
         sandbox.innerHTML = '';
     })();
 

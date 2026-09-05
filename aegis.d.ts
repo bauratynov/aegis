@@ -262,6 +262,15 @@ export function cachedResource<T = unknown>(source: string | (() => string), opt
 
 export function invalidate(keyOrPredicate: string | ((key: string) => boolean)): void;
 
+/** Положить данные в кэш cachedResource() вручную (ответ мутации, серверный payload). age — возраст данных в мс */
+export function seed<T = unknown>(key: string, data: T, opts?: { age?: number }): void;
+/**
+ * Засеять кэш из серверного HTML:
+ *   <script type="application/json" data-aegis-cache="/api/users" data-aegis-age="120">[…]</script>
+ * Идемпотентна; hydrate() вызывает её сама. Возвращает число засеянных записей.
+ */
+export function seedFrom(root?: Document | Element): number;
+
 // ── Form ───────────────────────────────────────────────────────
 
 export type ValidationRule = (value: unknown, key: string, fields: Record<string, Signal<unknown>>) => string | null;
@@ -316,8 +325,13 @@ export function wireForm(formEl: HTMLFormElement, opts?: {
  * Rich context passed to component setup functions.
  * All DOM helpers are pre-bound to the component's scope.
  */
-export interface ComponentContext {
-    el: Element;
+export interface ComponentContext<E extends Element = HTMLElement> {
+    el: E;
+    /**
+     * Серверные дети компонента (снимок до setup). Без селектора — все оставшиеся,
+     * с селектором ('[slot=footer]') — только совпадающие. Узлы переносятся, не копируются.
+     */
+    slot(selector?: string): DocumentFragment;
     signal: typeof signal;
     computed: typeof computed;
     effect: typeof effect;
@@ -347,7 +361,13 @@ export interface ComponentContext {
     onDispose(fn: () => void): void;
 }
 
-export function component(el: Element, setup: (ctx: ComponentContext) => void | object): object | void;
+/** Результат component(): если setup вернул шаблон (Node) — он вставлен в el, наружу отдаётся { el, destroy } */
+export type ComponentResult<R> = R extends Node ? { el: Element; destroy(): void } : R;
+
+export function component<E extends Element = HTMLElement, R = void>(
+    el: E,
+    setup: (ctx: ComponentContext<E>) => R
+): ComponentResult<R>;
 
 /**
  * Shorthand: mount component by CSS selector or element.
@@ -355,9 +375,17 @@ export function component(el: Element, setup: (ctx: ComponentContext) => void | 
  * @param setup — component setup function
  * @returns component API or undefined if element not found
  */
-export function mount(selector: string | Element, setup: (ctx: ComponentContext) => void | object): object | void | undefined;
+export function mount<R = void>(
+    selector: string | Element,
+    setup: (ctx: ComponentContext<HTMLElement>) => R
+): ComponentResult<R> | undefined;
 
-export function register(name: string, setup: (el: Element, data: Record<string, unknown>, ctx: ComponentContext) => void): void;
+/** D — форма data-* атрибутов элемента (JSON-значения парсятся); каст непроверяемый, как defineProps<T>() */
+export function register<D = Record<string, unknown>>(
+    name: string,
+    setup: (el: HTMLElement, data: D, ctx: ComponentContext<HTMLElement>) => void | object | Node
+): void;
+/** Гидрирует [data-aegis]; перед этим засевает кэш из <script type="application/json" data-aegis-cache> */
 export function hydrate(root?: Document | Element): void;
 export function destroy(el: Element): void;
 export function destroyAll(root?: Document | Element): void;
@@ -366,11 +394,11 @@ export function destroyAll(root?: Document | Element): void;
  * Error boundary: wraps component() in try/catch.
  * @param fallback — receives (error, el) on failure
  */
-export function errorBoundary(
+export function errorBoundary<R = void>(
     el: Element,
-    setup: (ctx: ComponentContext) => void,
+    setup: (ctx: ComponentContext) => R,
     fallback?: (error: Error, el: Element) => void
-): object | void;
+): ComponentResult<R> | undefined;
 
 /**
  * Render content into a different DOM location.
@@ -606,6 +634,8 @@ declare const Aegis: {
     watch: typeof watch;
     store: typeof store;
     cachedResource: typeof cachedResource;
+    seed: typeof seed;
+    seedFrom: typeof seedFrom;
     invalidate: typeof invalidate;
     form: typeof form;
     required: typeof required;
