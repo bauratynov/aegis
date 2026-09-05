@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="UTF-8"><title>Recipe — island on a server page</title>
+<script>addEventListener('error', e => parent.postMessage({ recipeError: e.message }, '*'));</script></head>
+<body>
+<!-- rendered by the server: visible before JS loads, replaced by the island's template after hydration -->
+<ul data-aegis="likes" data-url="/api/likes" data-count="12">
+    <li>12 likes</li>
+</ul>
+
+<script type="module">
+import { island, mutation, defaults } from '../aegis.js';
+
+defaults.fetcher = async () => ({ ok: true });   // demo: no server behind /api/likes
+
+island('likes', ({ props, signal, html }) => {
+    const count = signal(props.count);                     // data-count="12" → 12 (types)
+    const like = mutation(() => defaults.fetcher(props.url), { optimistic: () => count.value++ });
+    return html`<li>${count} likes <button @click=${like} ?disabled=${like.pending}>♥</button></li>`;
+}, { types: { count: Number } });
+// no mount(): every [data-aegis] on the page is hydrated after island()
+</script>
+</body>
+</html>

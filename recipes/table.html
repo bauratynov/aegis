@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="UTF-8"><title>Recipe — sortable, filterable table</title>
+<script>addEventListener('error', e => parent.postMessage({ recipeError: e.message }, '*'));</script></head>
+<body>
+<div id="app"></div>
+
+<script type="module">
+import { mount, reactive } from '../aegis.js';
+
+const ROWS = Array.from({ length: 200 }, (_, i) => ({ id: i + 1, name: `Item ${i + 1}`, price: (i * 37) % 500, stock: i % 7 }));
+
+mount('#app', ({ html, list, computed, signal }) => {
+    const state = reactive({ rows: ROWS, q: '', sortBy: 'id', dir: 1 });
+    // getters on reactive() are computeds; array methods track one dependency per call
+    const view = computed(() => state.rows
+        .filter(r => r.name.toLowerCase().includes(state.q.toLowerCase()))
+        .toSorted((a, b) => (a[state.sortBy] > b[state.sortBy] ? 1 : -1) * state.dir));
+    const sort = (key) => { if (state.sortBy === key) state.dir *= -1; else { state.sortBy = key; state.dir = 1; } };
+    const th = (key, label) => html`<th @click=${() => sort(key)} class=${{ active: () => state.sortBy === key }}>${label}</th>`;
+    return html`
+        <input placeholder="Filter…" @input=${(e) => { state.q = e.target.value; }}>
+        <span>${() => view.value.length} rows</span>
+        <table>
+            <thead><tr>${th('id', '#')}${th('name', 'Name')}${th('price', 'Price')}${th('stock', 'Stock')}</tr></thead>
+            <tbody>${list(view, (r) => html`<tr class=${{ low: r.stock === 0 }}><td>${r.id}</td><td>${r.name}</td><td>${r.price}</td><td>${r.stock}</td></tr>`, { key: 'id' })}</tbody>
+        </table>`;
+});
+</script>
+<style>th { cursor: pointer } th.active { text-decoration: underline } tr.low { color: crimson }</style>
+</body>
+</html>

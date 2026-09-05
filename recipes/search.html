@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="UTF-8"><title>Recipe — search with debounce</title>
+<script>addEventListener('error', e => parent.postMessage({ recipeError: e.message }, '*'));</script></head>
+<body>
+<div id="app"></div>
+
+<script type="module">
+import { mount, resource } from '../aegis.js';
+
+const CITIES = ['Almaty', 'Astana', 'Berlin', 'Boston', 'Lisbon', 'London', 'Madrid', 'Milan', 'Paris', 'Prague'];
+// demo fetcher: any resource() with { fetcher } talks to it instead of the network
+const fetcher = async (url) => { await new Promise(r => setTimeout(r, 150)); const q = new URL(url, location.href).searchParams.get('q').toLowerCase(); return CITIES.filter(c => c.toLowerCase().includes(q)); };
+
+mount('#app', ({ signal, html, when, list }) => {
+    const q = signal('');
+    // URL is a function of the query: empty query → null → no request; a new query aborts the previous one
+    const hits = resource(() => q.value.trim() ? `/api/cities?q=${encodeURIComponent(q.value.trim())}` : null, { fetcher, keepPrevious: true });
+    return html`
+        <input placeholder="Search cities…" @input.debounce.300=${(e) => { q.value = e.target.value; }}>
+        ${when(hits, {
+            loading: () => html`<p>Searching…</p>`,
+            error: (e, retry) => html`<p>${e.message} <button @click=${retry}>Retry</button></p>`,
+            data: (rows, rowsSignal) => html`<ul class=${{ dim: hits.validating }}>${list(rowsSignal, (c) => html`<li>${c}</li>`, { key: (c) => c })}</ul>`,
+        })}`;
+});
+</script>
+<style>.dim { opacity: .5 }</style>
+</body>
+</html>

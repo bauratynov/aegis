@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="UTF-8"><title>Recipe — progressive form</title>
+<script>addEventListener('error', e => parent.postMessage({ recipeError: e.message }, '*'));</script></head>
+<body>
+<!-- a normal server form: works without JS; the island adds live validation on top -->
+<form data-aegis="signup" method="post" action="/signup">
+    <label>Email <input name="email" type="email" required></label>
+    <label>Password <input name="password" type="password" required minlength="8"></label>
+    <label>Repeat <input name="repeat" type="password" required></label>
+    <button>Create account</button>
+</form>
+
+<script type="module">
+import { island, wireForm, required, emailRule, minLen, matches } from '../aegis.js';
+
+island('signup', ({ el }) => {
+    const f = wireForm(el, {
+        schema: {
+            email: [required, emailRule],
+            password: [required, minLen(8)],
+            repeat: [required, matches('password', 'Passwords differ')],
+        },
+        mode: 'blur-then-live',   // quiet until the field is left, live after that
+    });
+    // f.errors.email, f.valid, f.submitting are signals; errors are also written into the DOM (aria-invalid, :user-invalid)
+});
+</script>
+<style>input:user-invalid { outline: 2px solid crimson }</style>
+</body>
+</html>

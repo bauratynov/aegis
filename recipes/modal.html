@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="UTF-8"><title>Recipe — modal with focus trap</title>
+<script>addEventListener('error', e => parent.postMessage({ recipeError: e.message }, '*'));</script></head>
+<body>
+<div id="app"></div>
+<dialog id="confirm">
+    <form method="dialog">
+        <p>Delete the project?</p>
+        <button value="cancel">Cancel</button>
+        <button value="ok" autofocus>Delete</button>
+    </form>
+</dialog>
+
+<script type="module">
+import { mount, modal } from '../aegis.js';
+
+mount('#app', ({ signal, html, on }) => {
+    const open = signal(false);
+    const status = signal('');
+    const dialog = document.querySelector('#confirm');
+    modal(dialog, open);                                   // showModal()/close() follow the signal; Esc and backdrop write it back
+    on(dialog, 'close', () => { status.value = dialog.returnValue === 'ok' ? 'Deleted' : 'Kept'; });
+    return html`
+        <button @click=${() => { open.value = true; }}>Delete project…</button>
+        <p>${status}</p>`;
+});
+</script>
+</body>
+</html>

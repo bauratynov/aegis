@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Aegis — recipes</title>
+<style>
+    body { font: 14px system-ui, sans-serif; margin: 0; padding: 16px; background: #f6f7f9; color: #1f2328 }
+    h1 { font-size: 18px } .ok { color: #1a7f37 } .bad { color: #cf222e }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(420px, 1fr)); gap: 16px }
+    figure { margin: 0; background: #fff; border: 1px solid #d0d7de; border-radius: 8px; overflow: hidden }
+    figcaption { padding: 8px 12px; border-bottom: 1px solid #d0d7de; display: flex; justify-content: space-between }
+    figcaption a { color: inherit } iframe { width: 100%; height: 260px; border: 0 }
+</style>
+</head>
+<body>
+<h1>Aegis recipes <small id="status">— loading…</small></h1>
+<p>Each recipe is a self-contained HTML file (≤ 40 lines) that uses <code>../aegis.js</code> directly. Serve this folder over HTTP (ES modules do not load from <code>file://</code>). Errors thrown inside a recipe are counted here — this page doubles as a smoke test.</p>
+<div class="grid" id="grid"></div>
+<script>
+    const RECIPES = [
+        ['island.html', 'Island on a server page — island(), types, mutation with optimistic update'],
+        ['search.html', 'Search with debounce — resource() from a query, when(), keepPrevious'],
+        ['form.html', 'Progressive form — wireForm() over a plain <form>'],
+        ['modal.html', 'Modal — <dialog> driven by a signal, focus trap'],
+        ['table.html', 'Sortable, filterable table — reactive() + list()'],
+    ];
+    const grid = document.getElementById('grid');
+    const errors = {};
+    for (const [file, title] of RECIPES) {
+        errors[file] = 0;
+        const fig = document.createElement('figure');
+        fig.innerHTML = `<figcaption><span>${title}</span><a href="${file}" target="_blank">open ↗</a></figcaption><iframe src="${file}" title="${file}"></iframe>`;
+        grid.appendChild(fig);
+    }
+    addEventListener('message', (e) => {
+        if (!e.data || !e.data.recipeError) return;
+        const file = [...document.querySelectorAll('iframe')].find(f => f.contentWindow === e.source)?.getAttribute('src') || '?';
+        errors[file] = (errors[file] || 0) + 1;
+        render();
+    });
+    const render = () => {
+        const total = Object.values(errors).reduce((a, b) => a + b, 0);
+        const s = document.getElementById('status');
+        s.className = total ? 'bad' : 'ok';
+        s.textContent = total ? `— ${total} error(s): ${Object.entries(errors).filter(([, n]) => n).map(([f, n]) => `${f} ×${n}`).join(', ')}` : `— ${RECIPES.length} recipes, 0 errors`;
+    };
+    addEventListener('load', () => setTimeout(render, 1500));
+</script>
+</body>
+</html>
