@@ -2,8 +2,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-    signal, computed, effect, batch, untrack, isSignal, createScope, onDispose,
+    signal, computed, effect, batch, untrack, isSignal, createScope, onDispose, onError, flush,
 } from './aegis.js';
+import { fuzzGraph } from './fuzz-graph.mjs';
 
 test('signal: базовое чтение/запись, peek, update, equals', () => {
     const s = signal(1, 'n');
@@ -176,7 +177,10 @@ test('ошибка в одном effect не блокирует остальны
     let other = 0;
     effect(() => { if (s.value === 1) throw new Error('boom'); });
     effect(() => { s.value; other++; });
-    assert.throws(() => { s.value = 1; }, /boom/);
+    const errs = []; const off = onError((e) => errs.push(e));
+    s.value = 1;                                   // писатель исключение не получает — оно идёт в onError()
+    off();
+    assert.equal(errs.length, 1); assert.match(errs[0].message, /boom/); assert.equal(errs[0].aegis.effect, 'effect');
     assert.equal(other, 2);
     s.value = 2;   // ядро не осталось в состоянии flushing
     assert.equal(other, 3);
@@ -253,7 +257,9 @@ test('ошибка в effect не отписывает уже прочитанн
     const s = signal(0);
     let runs = 0;
     effect(() => { runs++; if (s.value === 1) throw new Error('once'); });
-    assert.throws(() => { s.value = 1; }, /once/);
+    const off = onError(() => {});
+    s.value = 1;
+    off();
     s.value = 2;
     assert.equal(runs, 3);
 });
@@ -261,4 +267,63 @@ test('ошибка в effect не отписывает уже прочитанн
 test('signal: JSON.stringify отдаёт значение', () => {
     const s = signal({ a: 1 });
     assert.equal(JSON.stringify({ s }), '{"s":{"a":1}}');
+});
+
+// ── ядро фаза 1: ошибка computed как значение, порядок раунда, полосы, фаззер ──
+test('computed: исключение кэшируется, подписки целы, второй эффект раунда не залипает', () => {
+    const user = signal(null); let calls = 0; const got = []; let other = 0, errs = 0;
+    const name = computed(() => { calls++; return user.value.name; }, 'name');
+    const sc = createScope(); sc.onError(() => errs++);
+    sc.run(() => { effect(() => { got.push(name.value); }, 'render'); effect(() => { user.value; other++; }, 'other'); });
+    assert.equal(errs, 1); assert.equal(other, 1);
+    let e1, e2; try { name.value; } catch (e) { e1 = e; } try { name.peek(); } catch (e) { e2 = e; }
+    assert.equal(calls, 1); assert.equal(e1, e2);
+    assert.equal(typeof name.version(), 'number');
+    user.value = { name: 'ann' };
+    assert.equal(got.at(-1), 'ann'); assert.equal(other, 2);
+    user.value = null; user.value = { name: 'bob' };
+    assert.equal(got.at(-1), 'bob'); assert.equal(errs, 2); assert.equal(other, 4);
+    assert.equal(user.subs.size, 2); assert.equal(name.subs.size, 1);
+    sc.dispose();
+});
+
+test('flush: порядок раунда по созданию — родитель раньше потомка после churn подписок', () => {
+    const mode = signal('x'), user = signal({ name: 'ann' }), other = signal(true);
+    const log = []; let childErr = 0, kid = null;
+    const sc = createScope();
+    sc.run(() => effect(() => {
+        log.push('P');
+        const vis = mode.value === 'x' ? user.value != null : other.value;
+        if (kid) { kid.dispose(); kid = null; }
+        if (vis) { kid = createScope(); kid.run(() => effect(() => { log.push('C'); try { user.value.name; } catch (e) { childErr++; } }, 'child')); }
+    }, 'parent'));
+    mode.value = 'o'; mode.value = 'x';
+    log.length = 0; user.value = null;
+    assert.equal(log.join(''), 'P'); assert.equal(childErr, 0);
+    sc.dispose();
+});
+
+test('полосы: самоцикл micro-полосы обнаружен, ошибки полосы — в onError', async () => {
+    const s = signal(0); let runs = 0, msg = '';
+    const sc = createScope(); sc.run(() => effect(() => { runs++; s.value = s.value + 1; }, { name: 'loop', flush: 'micro' }));
+    try { flush(); } catch (e) { msg = e.message; }
+    assert.match(msg, /Infinite reactive loop in "micro" lane/); assert.ok(runs <= 102);
+    sc.dispose();
+    const s3 = signal(0); let seen = 0; const off = onError(() => seen++);
+    const sc3 = createScope(); sc3.run(() => effect(() => { if (s3.value) throw new Error('lane'); }, { flush: 'micro' }));
+    s3.value = 1; await new Promise(r => setTimeout(r, 1));
+    assert.equal(seen, 1); off(); sc3.dispose();
+});
+
+test('фаззер графа: 1000 сидов × 60 операций против оракула без нарушений I1–I7', () => {
+    const api = { signal, computed, effect, batch, createScope, flush };
+    const fails = fuzzGraph(api, { seeds: 1000, ops: 60 });
+    assert.deepEqual(fails.slice(0, 3), [], JSON.stringify(fails.slice(0, 3)));
+});
+
+test('fault-фаззер: ядовитый computed — ни вылетов, ни застрявших эффектов', () => {
+    const api = { signal, computed, effect, batch, createScope, flush };
+    const fails = fuzzGraph(api, { seeds: 300, ops: 30, poison: 3 });
+    assert.deepEqual(fails.slice(0, 3), [], JSON.stringify(fails.slice(0, 3)));
+    assert.ok(fails.poisoned > 30, 'poison met on ' + fails.poisoned + ' seeds');
 });

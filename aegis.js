@@ -259,7 +259,7 @@ function _changedDeps(obs) {
     const deps = obs._deps, vers = obs._vers;
     if (!deps) return out;
     for (let i = 0; i < deps.length; i++) {
-        if (deps[i].version() !== vers[i]) out.push({ name: deps[i]._name || 'signal', value: _short(deps[i].peek()) });
+        if (deps[i].version() !== vers[i]) out.push({ name: deps[i]._name || 'signal', value: deps[i]._err ? '<error>' : _short(deps[i].peek()) });
     }
     return out;
 }
@@ -357,17 +357,21 @@ class Computed {
         this._n = 0;
         this._evict = null;
         this._unreg = null;
+        this._err = null;          // { e } — кэшированное исключение: перебрасывается при чтении, пока не изменится зависимость
     }
     get value() {
         if (this._dirty) this._recompute();
-        _track(this);
+        _track(this);                              // подписка ДО броска: читатель узнает о выздоровлении
+        if (this._err) throw this._err.e;
         return this._value;
     }
     /** Прочитать без подписки (зависимости самого computed переподписываются как обычно) */
     peek() {
         if (this._dirty) this._recompute();
+        if (this._err) throw this._err.e;
         return this._value;
     }
+    /** Версия значения; никогда не бросает (ошибка — тоже версия) */
     version() {
         if (this._dirty) this._recompute();
         return this._version;
@@ -388,8 +392,10 @@ class Computed {
         if (this.subs) _notify(this.subs);
     }
     _recompute() {
-        if (this._computing) {
-            throw new Error(`[Aegis] Circular dependency in computed "${this._name || '?'}"`);
+        if (this._computing) {         // цикл — тоже кэшированная ошибка, граф не рвётся
+            this._err = { e: new Error(`[Aegis] Circular dependency in computed "${this._name || '?'}"`) };
+            this._version = ++_epoch;
+            return;
         }
         this._computing = true;
         const prev = _tracking;
@@ -402,17 +408,17 @@ class Computed {
             }
             this._n = 0;
             _tracking = this;
-            let v;
+            let v, err = null;
             try {
                 v = this._fn(this._value);   // computed((prev) => …, { initial }) — предыдущее значение
             } catch (e) {
-                _tracking = prev;
-                _unsubscribe(this);      // неполный набор deps — при следующем чтении полный пересчёт
-                throw e;
+                err = { e };
             }
             _tracking = prev;
-            _endTrack(this);
-            if (this._version === 0 || !this._eq(this._value, v)) {
+            _endTrack(this);                 // deps, прочитанные до броска, остаются подписаны — push дойдёт при исправлении данных
+            if (err) { this._err = err; this._version = ++_epoch; }
+            else if (this._version === 0 || this._err || !this._eq(this._value, v)) {   // выздоровление — новая версия даже при равном значении
+                this._err = null;
                 this._value = v;
                 this._version = ++_epoch;
             }
@@ -423,7 +429,7 @@ class Computed {
         }
     }
     toJSON() { return this.peek(); }
-    toString() { return `Computed(${this._name || '?'}: ${this._dirty ? '<stale>' : this._value})`; }
+    toString() { return `Computed(${this._name || '?'}: ${this._dirty ? '<stale>' : this._err ? '<error>' : this._value})`; }
 }
 Computed.prototype[SIGNAL] = true;
 Computed.prototype._isComputed = true;
@@ -441,8 +447,17 @@ export function computed(fn, nameOrOpts) {
 
 // ---- Effect ------------------------------------------------------------------
 
+let _ordSeq = 0;                                   // порядок создания observers: родитель всегда раньше своих детей
+const _byOrd = (a, b) => a._ord - b._ord;
+/** O(n) проверка монотонности; сортировка только при нарушении (churn подписок переставил Set) */
+function _ordered(round) {
+    for (let i = 1; i < round.length; i++) if (round[i]._ord < round[i - 1]._ord) { _stats.reordered++; return round.sort(_byOrd); }
+    return round;
+}
+
 class Effect {
     constructor(fn, name, owner, trace, lane) {
+        this._ord = ++_ordSeq;
         this._fn = fn;
         this._name = name || 'effect';
         this._owner = owner;        // scope, под которым выполняется КАЖДЫЙ запуск
@@ -541,7 +556,7 @@ export function effect(fn, nameOrOpts) {
     // Регистрируем до первого запуска: в уже уничтоженном scope effect не стартует
     node._unreg = owner ? owner.onDispose(dispose) : null;
     if (!node._disposed) {
-        node._execute();
+        try { node._execute(); } catch (e) { if (!_dispatchError(owner, e)) throw e; }   // первый запуск: onError как у повторных; без обработчика — синхронно в setup (component/errorBoundary ловят)
         // Детектор потерянной реактивности: эффект, не прочитавший ни одного сигнала, больше не запустится
         if (_dev() && !explicitName && !node._disposed && (!node._deps || node._deps.length === 0)) {
             _warn('E019', {
@@ -559,6 +574,7 @@ export function effect(fn, nameOrOpts) {
 
 class Subscriber {
     constructor(src, fn, owner) {
+        this._ord = ++_ordSeq;
         this._src = src;
         this._fn = fn;
         this._owner = owner;
@@ -653,6 +669,29 @@ function _scopePath(scope) {
     for (let sc = scope; sc && parts.length < 4; sc = sc.parent) if (sc.name) parts.push(sc.name);
     return parts.join(' ‹ ');
 }
+/** Глобальные обработчики ошибок эффектов (после scope.onError, до reportError) */
+const _errHandlers = new Set();
+/**
+ * Ошибки эффектов, не поглощённые scope.onError / errorBoundary: onError(fn) → fn(error, error.aegis)
+ *   onError((e, info) => sentry.capture(e, { extra: info }));
+ * Без обработчиков — self.reportError(e) (событие 'error' на window). Писатель сигнала исключение не получает;
+ * __AEGIS_DEV__ = 'strict' — бросать синхронно писателю (тесты).
+ */
+export function onError(fn) {
+    _errHandlers.add(fn);
+    const off = () => { _errHandlers.delete(fn); };
+    if (_currentScope) _currentScope.onDispose(off);
+    return off;
+}
+function _reportErrors(errors) {
+    if (!errors.length) return;
+    if (globalThis.__AEGIS_DEV__ === 'strict') throw errors[0];
+    for (const e of errors) {
+        if (_errHandlers.size) { for (const h of _errHandlers) { try { h(e, (e && e.aegis) || null); } catch (x) { console.error('[Aegis] onError handler failed:', x); } } continue; }
+        if (typeof reportError === 'function') reportError(e);
+        else setTimeout(() => { throw e; });
+    }
+}
 /** Ошибка вверх по scope-дереву до первого onError; true — поглощена */
 function _dispatchError(scope, e) {
     for (let sc = scope; sc; sc = sc.parent) {
@@ -678,10 +717,33 @@ function _enqueueLane(obs) {
 }
 function _runLane(lane) {
     _laneScheduled[lane] = false;
-    const list = _lanes[lane];
-    if (!list.length) return;
-    _lanes[lane] = [];
-    for (const obs of list) { obs._queued = false; if (obs._disposed) continue; try { obs._run(); } catch (e) { if (!_dispatchError(obs._owner, e)) console.error(`[Aegis] error in "${obs._name}":`, e); } }
+    if (!_lanes[lane].length) return;
+    _laneScheduled[lane] = true;                        // записи во время дренажа не планируют новый тик — всё попадает в этот же microtask/кадр
+    let rounds = 0;
+    const errors = [];
+    try {
+        while (_lanes[lane].length) {
+            if (++rounds > _MAX_ROUNDS) {
+                const list = _lanes[lane]; _lanes[lane] = [];
+                for (const o of list) o._queued = false;
+                throw new Error(`[Aegis] Infinite reactive loop in "${lane}" lane — effect writes a signal it depends on (${list.map(o => o._name).join(', ')})`);
+            }
+            const list = _ordered(_lanes[lane]); _lanes[lane] = [];
+            for (const obs of list) {
+                obs._queued = false;
+                if (obs._disposed) continue;
+                try { obs._run(); } catch (e) { if (!_dispatchError(obs._owner, e)) errors.push(e); }
+            }
+        }
+    } finally {
+        _laneScheduled[lane] = false;
+        if (rounds > 3) _warn('E027', {
+            what: `${lane} lane took ${rounds} rounds — effects keep writing signals other effects depend on.`,
+            why: 'Each round is an effect reacting to a write from the previous round (ping-pong).',
+            fix: 'Replace the effect with a computed(), or write all values in one batch().',
+        }, 'rounds:' + lane);
+    }
+    _reportErrors(errors);
 }
 /** Синхронно выполнить все отложенные полосы (micro/frame) и очередь эффектов */
 export function flush() {
@@ -693,14 +755,14 @@ export function flush() {
 // ---- профилирование (Aegis.dev.profile(true)) и stats()
 let _profiling = false;
 let _profileMark = null;   // разметка Performance-панели — ставится dev.profile() (секция 3), ядро её не тянет
-const _stats = { flushes: 0, effectRuns: 0, maxRounds: 0, slow: [] };
+const _stats = { flushes: 0, effectRuns: 0, maxRounds: 0, slow: [], reordered: 0 };
 let _liveEffects = 0, _liveScopes = 0;
 
 function _flush() {
     if (_flushing || _batchDepth > 0 || _queue.length === 0) return;
     _flushing = true;
     let rounds = 0;
-    let error = null;
+    const errors = [];
     const t0 = _profiling ? performance.now() : 0;
     let total = 0;
     const names = _profiling ? [] : null;
@@ -713,32 +775,37 @@ function _flush() {
                 _queue = [];
                 throw new Error(`[Aegis] Infinite reactive loop — effect writes a signal it depends on (${names})`);
             }
-            const round = _queue;
+            const round = _ordered(_queue);              // порядок создания: родитель раньше детей, уничтоженные им — пропускаются
             _queue = [];
             total += round.length;
-            for (let i = 0; i < round.length; i++) {
-                const obs = round[i];
-                obs._queued = false;
-                if (obs._disposed) continue;
-                if (names && names.length < 30) names.push(obs._name);
-                try {
-                    if (_profiling) {
-                        const ts = performance.now();
-                        obs._run();
-                        const ms = performance.now() - ts;
-                        if (ms > 1) { _stats.slow.push({ name: obs._name, ms: +ms.toFixed(2) }); if (_stats.slow.length > 20) _stats.slow.shift(); }
-                    } else obs._run();
-                } catch (e) {
-                    if (e && typeof e === 'object' && !e.aegis) {
-                        e.aegis = { effect: obs._name, scope: _scopePath(obs._owner), changed: _changedDeps(obs) };
-                        if (obs._site) e.aegis.site = obs._site.short;
-                        try { e.message += `\n    in effect "${obs._name}"${e.aegis.scope ? ' · ' + e.aegis.scope : ''}${obs._site ? ' · at ' + obs._site.short : ''}${e.aegis.changed.length ? '\n    changed: ' + e.aegis.changed.map(d => d.name + ' → ' + d.value).join(', ') : ''}`; } catch (m) { /* readonly message */ }
+            let i = 0;
+            try {
+                for (; i < round.length; i++) {
+                    const obs = round[i];
+                    obs._queued = false;
+                    if (obs._disposed) continue;
+                    if (names && names.length < 30) names.push(obs._name);
+                    try {
+                        if (_profiling) {
+                            const ts = performance.now();
+                            obs._run();
+                            const ms = performance.now() - ts;
+                            if (ms > 1) { _stats.slow.push({ name: obs._name, ms: +ms.toFixed(2) }); if (_stats.slow.length > 20) _stats.slow.shift(); }
+                        } else obs._run();
+                    } catch (e) {
+                        try {
+                            if (e && typeof e === 'object' && !e.aegis) {
+                                e.aegis = { effect: obs._name, scope: _scopePath(obs._owner), changed: _changedDeps(obs) };
+                                if (obs._site) e.aegis.site = obs._site.short;
+                                try { e.message += `\n    in effect "${obs._name}"${e.aegis.scope ? ' · ' + e.aegis.scope : ''}${obs._site ? ' · at ' + obs._site.short : ''}${e.aegis.changed.length ? '\n    changed: ' + e.aegis.changed.map(d => d.name + ' → ' + d.value).join(', ') : ''}`; } catch (m) { /* readonly message */ }
+                            }
+                        } catch (x) { /* декоратор никогда не бросает */ }
+                        if (_dispatchError(obs._owner, e)) continue;   // поглощена scope.onError / errorBoundary
+                        errors.push(e);                                 // остальные эффекты раунда продолжают; отчёт — после flush
                     }
-                    if (_dispatchError(obs._owner, e)) continue;   // поглощена scope.onError / errorBoundary
-                    // не бросать остальные effects раунда; первую ошибку пробросить после
-                    if (error) console.error(`[Aegis] error in "${obs._name}":`, e);
-                    else error = e;
                 }
+            } finally {
+                for (let j = i + 1; j < round.length; j++) { const o = round[j]; if (o._disposed) o._queued = false; else _queue.push(o); }   // недобежавший хвост — в следующий раунд, а не вечный _queued=true
             }
         }
     } finally {
@@ -753,7 +820,7 @@ function _flush() {
             fix: 'Replace the effect with a computed(), or write all values in one batch().',
         }, 'rounds');
     }
-    if (error) throw error;
+    _reportErrors(errors);   // scope.onError не было: onError() → reportError; в 'strict' — синхронно писателю
 }
 
 

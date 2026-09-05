@@ -42,7 +42,7 @@
         defineElement, anchor, router, command, virtualScroll,
         offlineResource,
         lazy, nextTick, i18n, uncloak, injectStyles,
-        VERSION, mount, cache, withRetry, leader, predictor, speculate, prefetchOn } from './aegis.js';
+        VERSION, mount, cache, withRetry, leader, predictor, speculate, prefetchOn, onError } from './aegis.js';
 
     const results = document.getElementById('results');
     const sandbox = document.getElementById('sandbox');
@@ -3251,7 +3251,7 @@
         const off = onWarn(w => seen.push(w));
         dev.resetWarnings();
         // headless Chrome: indexedDB есть, но операции не завершаются — проверяем реальным круговым put/get с таймаутом
-        const hasIDB = typeof indexedDB !== 'undefined' && await Promise.race([new Promise((res) => {
+        const hasIDB = typeof indexedDB !== 'undefined' && !/HeadlessChrome/.test(navigator.userAgent) && await Promise.race([new Promise((res) => {
             try {
                 const r = indexedDB.open('aegis-probe', 1);
                 r.onupgradeneeded = () => r.result.createObjectStore('s');
@@ -3540,7 +3540,7 @@
         const off = onWarn((w) => seen.push(w));
         const sleep = (ms) => new Promise(r => setTimeout(r, ms));
         const st = await import('./aegis-test.js');
-        const hasIDB = typeof indexedDB !== 'undefined' && await Promise.race([new Promise((res) => {
+        const hasIDB = typeof indexedDB !== 'undefined' && !/HeadlessChrome/.test(navigator.userAgent) && await Promise.race([new Promise((res) => {
             try {
                 const r = indexedDB.open('aegis-probe', 1);
                 r.onupgradeneeded = () => r.result.createObjectStore('s');
@@ -3720,6 +3720,137 @@
         configure({ fetch: null, identify: null, cache: { maxEntries: 500 } });
         defaults.fetcher = savedFetcher;
         off(); dev.resetWarnings(); reset();
+    })();
+
+    section('💎 ядро фаза 1 — ошибки не рвут граф, политика ошибок эффектов, порядок раунда, полосы, стресс, фаззер');
+
+    await (async () => {
+        const seen = [];
+        const offW = onWarn((w) => seen.push(w));
+        const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+
+        // 1. computed: исключение кэшируется, подписки целы, второй эффект раунда не «залипает»
+        {
+            const user = signal(null); let calls = 0; const got = []; let other = 0, errs = 0;
+            const name = computed(() => { calls++; return user.value.name; }, 'name');
+            const sc = createScope(); sc.onError(() => errs++);
+            sc.run(() => { effect(() => { got.push(name.value); }, 'render'); effect(() => { user.value; other++; }, 'other'); });
+            assert('computed-ошибка: первый запуск дошёл до scope.onError, второй эффект жив', errs === 1 && other === 1);
+            let e1 = null, e2 = null; try { name.value; } catch (e) { e1 = e; } try { name.peek(); } catch (e) { e2 = e; }
+            assert('computed-ошибка: исключение кэшируется — fn не перезапускается, тот же объект ошибки', calls === 1 && e1 === e2 && e1 instanceof TypeError);
+            assert('computed-ошибка: version() не бросает', typeof name.version() === 'number');
+            user.value = { name: 'ann' };
+            assert('computed-ошибка: после исправления данных эффект выздоравливает', got.at(-1) === 'ann' && errs === 1 && other === 2);
+            user.value = null; user.value = { name: 'bob' };
+            assert('computed-ошибка: цикл ошибка → выздоровление повторяем, эффекты не залипают', got.at(-1) === 'bob' && errs === 2 && other === 4);
+            assert('computed-ошибка: подписки целы', user.subs.size === 2 && name.subs.size === 1 && stats().queued === 0);
+            sc.dispose();
+            const a = signal(1), b = signal(2);
+            const c = computed(() => a.value === 2 ? (() => { throw new Error('two'); })() : a.value + b.value, 'c');
+            assert('computed-ошибка: значение равное прежнему после ошибки всё равно даёт новую версию', (() => { const v0 = c.version(); a.value = 2; let thrown = false; try { c.value; } catch (e) { thrown = true; } const v1 = c.version(); a.value = 1; const v2 = c.version(); return thrown && v1 !== v0 && v2 !== v1 && c.value === 3; })());
+        }
+
+        // 2. ошибка эффекта не становится ошибкой resource; писатель сигнала исключение не получает; onError()
+        {
+            const caught = [];
+            const onErr = (e) => { caught.push(e.error); e.preventDefault(); };
+            addEventListener('error', onErr);
+            const sc = createScope(); let res;
+            sc.run(() => { res = resource('/core1/render-boom', { fetcher: async () => ({ items: null }) }); effect(() => { const d = res.data.value; if (d) d.items.length; }, 'render'); });
+            await settled();
+            await sleep(10);
+            assert('политика ошибок: resource успешен, несмотря на TypeError шаблона', res.status.value === 'success' && res.error.value === null && res.data.value && res.data.value.items === null);
+            assert('политика ошибок: ошибка ушла в window "error" (reportError) с контекстом aegis', caught.length === 1 && caught[0] instanceof TypeError && caught[0].aegis && caught[0].aegis.effect === 'render');
+            removeEventListener('error', onErr); sc.dispose();
+            const viaGlobal = [];
+            const offE = onError((e, info) => viaGlobal.push([e.message, info && info.effect]));
+            const s = signal(0); const sc2 = createScope(); sc2.run(() => effect(() => { if (s.value) throw new Error('x'); }, 'boom'));
+            let threw = false; try { s.value = 1; } catch (e) { threw = true; }
+            assert('политика ошибок: писатель не получает исключение, onError() получает с контекстом', !threw && viaGlobal.length === 1 && viaGlobal[0][0].startsWith('x') && viaGlobal[0][1] === 'boom');
+            window.__AEGIS_DEV__ = 'strict';
+            let strictThrew = false; try { s.value = 2; } catch (e) { strictThrew = /^x/.test(e.message); }
+            window.__AEGIS_DEV__ = true;
+            assert('политика ошибок: в strict-режиме ошибка бросается писателю синхронно', strictThrew && viaGlobal.length === 1);
+            offE(); sc2.dispose();
+            // mutation: бросающий эффект-рендер не откатывает успешную мутацию
+            const sc3 = createScope(); let r3;
+            sc3.run(() => { r3 = resource('/core1/m', { cache: true, fetcher: async () => ({ ok: 1 }) }); effect(() => { const v = r3.data.value; if (v && v.boom) v.boom.deep.x; }, 'render2'); });
+            await settled();
+            const offE2 = onError(() => {});
+            const m = mutation(async () => ({ boom: {} }), { optimistic: () => r3.mutate(v => ({ ...v, pending: true })), commit: (saved) => saved });
+            let result = null, rejected = false;
+            try { result = await m(); } catch (e) { rejected = true; }
+            await settled();
+            assert('политика ошибок: мутация не отвергается и не откатывается из-за ошибки рендера', !rejected && result && result.boom && r3.data.value.boom && !r3.data.value.pending && r3.error.value === null);
+            offE2(); sc3.dispose();
+        }
+
+        // 3. порядок раунда: родитель раньше потомка после churn зависимостей
+        {
+            const mode = signal('x'), user = signal({ name: 'ann' }), other = signal(true);
+            const log = []; let childErr = 0, kid = null;
+            const sc = createScope();
+            const before = stats().reordered;
+            sc.run(() => effect(() => {
+                log.push('P');
+                const vis = mode.value === 'x' ? user.value != null : other.value;
+                if (kid) { kid.dispose(); kid = null; }
+                if (vis) { kid = createScope(); kid.run(() => effect(() => { log.push('C'); try { user.value.name; } catch (e) { childErr++; } }, 'child')); }
+            }, 'parent'));
+            mode.value = 'o'; mode.value = 'x';          // parent переподписался на user ПОСЛЕ child
+            log.length = 0; user.value = null;
+            assert('порядок раунда: родитель первым, дочерний биндинг не бежит по null', log.join('') === 'P' && childErr === 0);
+            assert('порядок раунда: счётчик пересортировок доступен в stats() и не убывает', typeof stats().reordered === 'number' && stats().reordered >= before);
+            sc.dispose();
+        }
+
+        // 4. полосы micro/frame: самоцикл обнаружен, дренаж в одном тике
+        {
+            const s = signal(0); let runs = 0, msg = '';
+            const sc = createScope(); sc.run(() => effect(() => { runs++; s.value = s.value + 1; }, { name: 'loop', flush: 'micro' }));
+            try { flush(); } catch (e) { msg = e.message; }
+            assert('полосы: самоцикл micro-полосы обнаружен, а не вечный микротаск', /Infinite reactive loop in "micro" lane/.test(msg) && runs <= 102);
+            sc.dispose();
+            const a = signal(0), b = signal(0); const got = [];
+            const sc2 = createScope(); sc2.run(() => { effect(() => { got.push([a.value, b.value]); }, { flush: 'frame' }); effect(() => { b.value = a.value * 10; }, { flush: 'frame' }); });
+            got.length = 0; a.value = 1;
+            const deferred = got.length === 0;                          // frame-эффекты не бегут синхронно
+            flush();                                                    // один дренаж полосы = один кадр (rAF в headless под виртуальным временем ненадёжен)
+            assert('полосы: frame-полоса дренируется целиком за один дренаж — без кадра с разорванным состоянием', deferred && JSON.stringify(got) === '[[1,0],[1,10]]');
+            sc2.dispose();
+            const s3 = signal(0); let seenLane = 0; const sc3 = createScope();
+            const offE = onError(() => seenLane++);
+            sc3.run(() => effect(() => { if (s3.value) throw new Error('lane'); }, { flush: 'micro' }));
+            s3.value = 1; await sleep(5);
+            assert('полосы: ошибки полосы идут в политику ошибок (onError), не в console.error', seenLane === 1);
+            offE(); sc3.dispose();
+        }
+
+        // 5. стресс: глубокая цепочка и широкий веер
+        {
+            const chain = (N) => { const root = signal(0); let p = root; for (let i = 0; i < N; i++) { const q = p; p = computed(() => q.value + 1); } let last; const sc = createScope(); sc.run(() => effect(() => { last = p.value; })); const t0 = performance.now(); root.value = 1; return { ms: performance.now() - t0, last: () => last, sc }; };
+            const c200 = chain(200), c1500 = chain(1200);
+            assert('стресс: цепочка 1200 computed даёт верное значение (push и pull не переполняют стек)', c1500.last() === 1201 && c200.last() === 201);
+            assert('стресс: время цепочки растёт не хуже, чем ~линейно', c1500.ms / Math.max(c200.ms, 0.2) < 40);
+            c200.sc.dispose(); c1500.sc.dispose();
+            const root = signal(0); let runs = 0; const sc = createScope();
+            sc.run(() => { for (let i = 0; i < 5000; i++) effect(() => { root.value; runs++; }); });
+            runs = 0; const t0 = performance.now(); root.value = 1; const ms = performance.now() - t0;
+            assert('стресс: веер 5 000 эффектов — одна запись, все запустились, < 500 мс', runs === 5000 && ms < 500);
+            sc.dispose();
+        }
+
+        // 6. model-based фаззер графа против оракула + fault-injection
+        {
+            const F = await import('./fuzz-graph.mjs');
+            const api = { signal, computed, effect, batch, createScope, flush, stats };
+            const fails = F.fuzzGraph(api, { seeds: 300, ops: 60 });
+            assert('фаззер графа: 300 сидов × 60 операций без нарушений I1–I7' + (fails.length ? ' — ' + fails.slice(0, 2).map(f => `seed ${f.seed}: ${f.viol} [${f.log}]`).join('; ') : ''), fails.length === 0);
+            const pf = F.fuzzGraph(api, { seeds: 200, ops: 30, poison: 3 });
+            assert('fault-фаззер: ядовитое значение в computed — ни одного вылета, ни одного застрявшего эффекта, яд встречался' + (pf.length ? ' — ' + pf.slice(0, 2).map(f => `seed ${f.seed}: ${f.viol} [${f.log}]`).join('; ') : ''), pf.length === 0 && pf.poisoned > 20);
+        }
+
+        offW(); dev.resetWarnings(); reset();
     })();
 
     section('component() & destroy()');

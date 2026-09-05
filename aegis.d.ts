@@ -82,6 +82,11 @@ export interface WarningInfo {
 /** Предупреждение движка как исключение (window.__AEGIS_DEV__ = 'strict') */
 export class AegisWarning extends Error { code: string; what: string; why: string; fix: string }
 /** Подписка на предупреждения (dev-режим): warnings-as-assertions в тестах. Возвращает unsubscribe */
+/**
+ * Ошибки эффектов, не поглощённые scope.onError / errorBoundary: fn(error, error.aegis). Без обработчиков — self.reportError(e).
+ * Писатель сигнала исключение не получает (кроме __AEGIS_DEV__ = 'strict'). Возвращает unsubscribe; в scope снимается автоматически.
+ */
+export function onError(fn: (error: unknown, info: { effect: string; scope: string; changed: Array<{ name: string; value: string }>; site?: string } | null) => void): () => void;
 export function onWarn(fn: (w: WarningInfo) => void): () => void;
 /** Управление dev-режимом: dev.enable() (localStorage + reload на проде), dev.disable(), dev.resetWarnings() */
 export interface ScopeInspection { scope: string | null; el: Element | null; signals: Array<{ name: string; value: string; /** сам сигнал (не-перечислимое поле) */ readonly ref?: ReadonlySignal<unknown> }>; effects: Array<{ name: string; deps: string[]; scope: string | null; /** позиция effect() в исходнике (dev) */ site?: string | null }>; children: number }
@@ -114,7 +119,7 @@ export function flushSync(): void;
 /** Синхронно выполнить отложенные полосы micro/frame и очередь эффектов */
 export function flush(): void;
 /** Счётчики движка: flushes, effectRuns, maxRounds, slow (top-20 по мс при dev.profile), scopes, effects, components, кэши */
-export function stats(): { flushes: number; effectRuns: number; maxRounds: number; slow: Array<{ name: string; ms: number }>; scopes: number; effects: number; components: number; resourceCache: number; cssCache: number; queued: number; prefetch: { fired: number; used: number; wasted: number; hoverDelay: number } | null; speculation: { inflight: number; queued: number; fired: number; skipped: number; aborted: number } | null };
+export function stats(): { flushes: number; effectRuns: number; maxRounds: number; /** раундов, где порядок эффектов пришлось восстановить сортировкой (churn подписок) */ reordered: number; slow: Array<{ name: string; ms: number }>; scopes: number; effects: number; components: number; resourceCache: number; cssCache: number; queued: number; prefetch: { fired: number; used: number; wasted: number; hoverDelay: number } | null; speculation: { inflight: number; queued: number; fired: number; skipped: number; aborted: number } | null };
 /** Корневой scope для тестов: const [api, dispose] = root(dispose => …) */
 export function root<T>(fn: (dispose: () => void) => T): [T, () => void];
 /** Дождаться сигнала: resolve при первом значении, для которого predicate истинен; reject TimeoutError / при dispose scope */
