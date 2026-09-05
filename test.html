@@ -42,7 +42,7 @@
         defineElement, anchor, router, command, virtualScroll,
         offlineResource,
         lazy, nextTick, i18n, uncloak, injectStyles,
-        VERSION, mount, cache, withRetry, leader, predictor, speculate, prefetchOn, onError, lens, signals, fieldArray, min } from './aegis.js';
+        VERSION, mount, cache, withRetry, leader, predictor, speculate, prefetchOn, onError, lens, signals, fieldArray, min, wizard, draft } from './aegis.js';
 
     const results = document.getElementById('results');
     const sandbox = document.getElementById('sandbox');
@@ -4156,11 +4156,11 @@
             sandbox.appendChild(formEl);
             const el = formEl.querySelector('[name=email]');
             f.wire(el); f.wire(formEl.querySelector('[name=agree]'));
-            assert('wire: noValidate на форме, describedby дополнен, не затёрт', formEl.noValidate === true && el.getAttribute('aria-describedby') === 'hint email-error');
+            assert('wire: noValidate на форме, describedby автора не тронут до ошибки', formEl.noValidate === true && el.getAttribute('aria-describedby') === 'hint');
             ev(el, 'blur');
-            assert('wire: blur → touched, показ ошибки, aria-invalid, setCustomValidity (:invalid)', f.touched.email.value === true && f.errors.email.value !== null && el.getAttribute('aria-invalid') === 'true' && el.validity.customError === true && formEl.querySelector('#email-error').textContent === f.errors.email.value);
+            assert('wire: blur → touched, показ ошибки, aria-invalid, describedby = hint + ошибка, setCustomValidity (:invalid)', f.touched.email.value === true && f.errors.email.value !== null && el.getAttribute('aria-invalid') === 'true' && el.getAttribute('aria-describedby') === 'hint email-error' && el.validity.customError === true && formEl.querySelector('#email-error').textContent === f.errors.email.value);
             typeIn(el, 'a@b.c');
-            assert('wire: blur-then-live — исправление снимает ошибку синхронно', f.errors.email.value === null && el.validity.valid === true && el.getAttribute('aria-invalid') === 'false');
+            assert('wire: blur-then-live — исправление снимает ошибку синхронно, aria-invalid/errormessage сняты', f.errors.email.value === null && el.validity.valid === true && !el.hasAttribute('aria-invalid') && !el.hasAttribute('aria-errormessage'));
             const cb = formEl.querySelector('[name=agree]'); cb.checked = true; ev(cb, 'change');
             assert('wire: checkbox → boolean в сигнале', f.fields.agree.value === true);
             f.fields.email.value = 'x@y.z';
@@ -4174,9 +4174,9 @@
             ev(pw, 'blur');
             assert('wire(key) как директива html``: инпут подключён', f2.touched.pw.value === true && f2.errors.pw.value !== null && pw.getAttribute('aria-invalid') === 'true');
             typeIn(city, 'Almaty'); ev(city, 'blur');
-            assert('bind:field — значение, touched и контейнер ошибки по id', f2.fields.city.value === 'Almaty' && f2.touched.city.value === true && city.getAttribute('aria-describedby') === 'city-error');
+            assert('bind:field — значение, touched и контейнер ошибки по id', f2.fields.city.value === 'Almaty' && f2.touched.city.value === true && f2.field('city').errorId === 'city-error' && !!host.querySelector('#city-error'));
             f2.reset();
-            assert('reset: touched и aria сброшены', f2.touched.pw.value === false && pw.getAttribute('aria-invalid') === 'false');
+            assert('reset: touched и aria сброшены', f2.touched.pw.value === false && !pw.hasAttribute('aria-invalid'));
         });
 
         // 3. Standard Schema: issues по полям на blur без validate(), схема как правило поля, один прогон на изменение
@@ -4329,7 +4329,8 @@
             formEl.insertAdjacentHTML('beforeend', '<input name="items[1][qty]">');
             await sleep(10);
             const n1 = formEl.querySelector('[name="items[1][qty]"]');
-            assert('observe: новый input подключён с правилом по шаблону и a11y', 'items[1][qty]' in f.fields && f.keys.value.includes('items[1][qty]') && f.issues['items[1][qty]'].value !== null && n1.getAttribute('aria-describedby'));
+            ev(n1, 'blur');
+            assert('observe: новый input подключён с правилом по шаблону и a11y', 'items[1][qty]' in f.fields && f.keys.value.includes('items[1][qty]') && f.issues['items[1][qty]'].value !== null && f.errors['items[1][qty]'].value !== null && n1.getAttribute('aria-describedby') === 'items_1__qty_-error');
             n1.remove();
             await sleep(10);
             assert('observe: удалённый input отключён', !('items[1][qty]' in f.fields) && f.values.value.items.length === 1);
@@ -4391,6 +4392,150 @@
 
         sc4.dispose();
         offW(); dev.resetWarnings(); reset(); configure({ fetch: null });
+    })();
+
+    section('💎 формы фаза 4b — guard, draft, нативный reset, wizard, сводка ошибок и a11y без хора');
+
+    await (async () => {
+        const codes = [];
+        const offW = onWarn((w) => codes.push(w.code));
+        const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+        const ev = (el, type) => el.dispatchEvent(new Event(type, { bubbles: true }));
+        const typeIn = (el, v) => { el.value = v; ev(el, 'input'); };
+        const liveText = () => [...document.querySelectorAll('[aria-live]')].map(n => n.textContent).join(' | ');
+        const sc = createScope();
+
+        // 1. a11y-политика: без role=status, aria-invalid/aria-errormessage только при ошибке, группа radio на fieldset, hint не затирается
+        await sc.run(async () => {
+            const formEl = document.createElement('form');
+            formEl.innerHTML = '<label>Email<input name="email" required aria-describedby="hint4"></label><span id="hint4">hint</span>'
+                + '<fieldset><legend>Plan</legend><label><input type="radio" name="plan" value="a" required>A</label><label><input type="radio" name="plan" value="b">B</label></fieldset>'
+                + '<label>Name<input name="name" required></label><button>Go</button>';
+            document.body.appendChild(formEl);   // видимый контейнер: фокус в display:none невозможен
+            const f = wireForm(formEl, {});
+            const email = formEl.querySelector('[name=email]');
+            assert('a11y: до ошибки нет aria-invalid/errormessage и нет live-регионов у полей', !email.hasAttribute('aria-invalid') && formEl.querySelectorAll('[role="status"]').length === 0);
+            const live0 = liveText();
+            ev(email, 'blur');
+            assert('a11y: ошибка → aria-invalid + aria-errormessage на span, describedby = hint + ошибка', email.getAttribute('aria-invalid') === 'true' && email.getAttribute('aria-errormessage') === 'email-error' && email.getAttribute('aria-describedby') === 'hint4 email-error');
+            await sleep(30);
+            assert('a11y: blur с новой ошибкой — одно polite-объявление «Label: ошибка»', liveText() !== live0 && /Email/.test(liveText()));
+            typeIn(email, 'a@b.c');
+            assert('a11y: исправление снимает aria-invalid и errormessage', !email.hasAttribute('aria-invalid') && !email.hasAttribute('aria-errormessage') && email.getAttribute('aria-describedby') === 'hint4');
+            const radios = formEl.querySelectorAll('[name=plan]'), fs4 = formEl.querySelector('fieldset');
+            f.validate();
+            assert('a11y: группа radio — ошибка после legend, describedby на fieldset, aria-invalid на всех кнопках', fs4.getAttribute('aria-describedby') === 'plan-error' && fs4.querySelector('legend').nextElementSibling.id === 'plan-error' && [...radios].every(r => r.getAttribute('aria-invalid') === 'true'));
+            assert('a11y: errorList — список показанных ошибок с элементами', f.errorList.value.length === 2 && f.errorList.value[0].key === 'plan' && f.errorList.value[1].el === formEl.querySelector('[name=name]'));
+            // сводка GOV.UK
+            const box = f.summary();
+            assert('summary: role=alert, заголовок с числом ошибок, ссылки на поля', box.getAttribute('role') === 'alert' && box.tabIndex === -1 && /2/.test(box.querySelector('h2').textContent) && box.querySelectorAll('a[href^="#"]').length === 2);
+            const live1 = liveText();
+            f.validate();
+            await sleep(30);
+            assert('summary: провал validate — фокус на сводке и одно assertive-объявление', document.activeElement === box && liveText() !== live1);
+            box.querySelectorAll('a')[1].click();
+            assert('summary: клик по ссылке фокусирует поле', document.activeElement === formEl.querySelector('[name=name]'));
+            radios[0].checked = true; ev(radios[0], 'change'); typeIn(formEl.querySelector('[name=name]'), 'x');
+            assert('summary: без ошибок скрыта', box.hidden === true && f.errorList.value.length === 0);
+            formEl.remove();
+        });
+
+        // 2. нативный reset и guard()
+        await sc.run(async () => {
+            const formEl = document.createElement('form'); formEl.innerHTML = '<input name="q" value="init"><button type="reset">Reset</button>'; sandbox.appendChild(formEl);
+            const f = wireForm(formEl, {});
+            typeIn(formEl.querySelector('[name=q]'), 'changed');
+            assert('reset: форма dirty', f.dirty.value === true);
+            formEl.reset();
+            assert('нативный reset: сигналы и dirty сброшены', f.fields.q.value === 'init' && f.dirty.value === false);
+            typeIn(formEl.querySelector('[name=q]'), 'again');
+            let asked = 0, answer = false;
+            const off = f.guard({ confirm: () => { asked++; return Promise.resolve(answer); } });
+            const be = new Event('beforeunload', { cancelable: true });
+            window.dispatchEvent(be);
+            assert('guard: beforeunload при dirty предотвращён', be.defaultPrevented === true);
+            if (typeof navigation !== 'undefined' && typeof navigation.addEventListener === 'function') {
+                let navigated = 0; const orig = navigation.navigate; navigation.navigate = () => { navigated++; return { finished: Promise.resolve(), committed: Promise.resolve() }; };
+                const fake = (url) => { const e = new Event('navigate', { cancelable: true }); Object.defineProperty(e, 'destination', { value: { url } }); Object.defineProperty(e, 'formData', { value: null }); Object.defineProperty(e, 'downloadRequest', { value: null }); Object.defineProperty(e, 'navigationType', { value: 'push' }); return e; };
+                const e1 = fake(location.origin + '/away-1'); navigation.dispatchEvent(e1);
+                await sleep(1);
+                assert('guard: переход перехвачен, подтверждение спрошено, отказ — navigate не вызван', e1.defaultPrevented && asked === 1 && navigated === 0);
+                answer = true;
+                const e2 = fake(location.origin + '/away-2'); navigation.dispatchEvent(e2);
+                await sleep(1);
+                assert('guard: согласие — переход повторён программно один раз', asked === 2 && navigated === 1);
+                navigation.navigate = orig;
+            } else {
+                assert('guard: Navigation API недоступен — beforeunload достаточно', true);
+                assert('guard: (пропуск без Navigation API)', true);
+            }
+            off();
+        });
+
+        // 3. draft(): сохранение изменённых полей без password, восстановление, очистка при успехе
+        await sc.run(async () => {
+            const store = new Map(); const storage = { getItem: (k) => store.has(k) ? store.get(k) : null, setItem: (k, v) => store.set(k, v), removeItem: (k) => store.delete(k) };
+            const mk = () => { const formEl = document.createElement('form'); formEl.innerHTML = '<input name="email" value=""><input name="pw" type="password" value="">'; sandbox.appendChild(formEl); return formEl; };
+            const f1 = wireForm(mk(), {});
+            const d1 = draft(f1, 'd4', { storage, debounce: 10 });
+            typeIn(f1.el.querySelector('[name=email]'), 'x@y.z'); typeIn(f1.el.querySelector('[name=pw]'), 'secret');
+            await sleep(40);
+            const saved = JSON.parse(store.get('d4'));
+            assert('draft: сохранены изменённые поля, пароль исключён', saved.v.email === 'x@y.z' && !('pw' in saved.v) && d1.restored === false);
+            const f2 = wireForm(mk(), {});
+            const d2 = draft(f2, 'd4', { storage });
+            assert('draft: восстановлен в новую форму, dirty остаётся true (guard работает)', d2.restored === true && f2.fields.email.value === 'x@y.z' && f2.dirty.value === true);
+            f2.status.value = 'success';
+            await sleep(1);
+            assert('draft: успешный submit очищает черновик', !store.has('d4'));
+            d1.stop(); d2.stop();
+        });
+
+        // 4. wizard(): async-правило блокирует шаг, schema чужого шага молчит, go/prev, фокус и aria-current
+        await sc.run(async () => {
+            const schema = { '~standard': { version: 1, vendor: 'mini', validate: (v) => (v.city ? { value: v } : { issues: [{ message: 'city required', path: ['city'] }] }) } };
+            const f = form({ name: '', login: '', city: '' }, { rules: { name: [required], login: [async (v) => { await sleep(5); return v === 'taken' ? 'Занят' : null; }] }, schema });
+            const w = wizard(f, { steps: [['name', 'login'], ['city']] });
+            assert('wizard: сначала шаг 0, count 2, first/last', w.step.value === 0 && w.count === 2 && w.first.value === true && w.last.value === false);
+            assert('wizard: next на пустом шаге — false, ошибка шага показана, ошибка чужого шага (schema city) нет', (await w.next()) === false && w.step.value === 0 && f.errors.name.value !== null && f.errors.city.value === null);
+            f.fields.name.value = 'A'; f.fields.login.value = 'taken';
+            assert('wizard: async-правило блокирует шаг', (await w.next()) === false && f.errors.login.value === 'Занят');
+            f.fields.login.value = 'ok';
+            assert('wizard: шаг пройден, done', (await w.next()) === true && w.step.value === 1 && w.steps[0].done.value === true && w.last.value === true);
+            assert('wizard: prev назад без валидации', (await w.prev()) === true && w.step.value === 0);
+            assert('wizard: go(1) вперёд валидирует промежуточные', (await w.go(1)) === true && w.step.value === 1);
+            const formEl = document.createElement('form');
+            formEl.innerHTML = '<nav data-step-nav><a>1</a><a>2</a></nav><section data-step><h2>One</h2><input name="a" required></section><section data-step><h2>Two</h2><input name="b"></section>';
+            sandbox.appendChild(formEl);
+            const wf = wireForm(formEl, {});
+            const w2 = wizard(wf);
+            await sleep(1);
+            assert('wizard [data-step]: шаг 0 виден, role=group + aria-labelledby, aria-current в навигации', !formEl.querySelectorAll('[data-step]')[0].hidden && formEl.querySelectorAll('[data-step]')[1].hidden && formEl.querySelectorAll('[data-step]')[0].getAttribute('role') === 'group' && formEl.querySelector('[data-step-nav] a').getAttribute('aria-current') === 'step');
+            typeIn(formEl.querySelector('[name=a]'), 'v');
+            await w2.next(); await sleep(5);
+            assert('wizard [data-step]: переход показывает шаг 2 и переносит фокус/aria-current', formEl.querySelectorAll('[data-step]')[1].hidden === false && formEl.querySelectorAll('[data-step-nav] a')[1].getAttribute('aria-current') === 'step' && w2.progress.value === 1);
+            w.dispose(); w2.dispose();
+        });
+
+        // 5. router: beforeEach может отменить переход
+        await sc.run(async () => {
+            const host = document.createElement('div'); host.innerHTML = '<div id="be-out"></div>'; sandbox.appendChild(host);
+            const savedHash = location.hash;
+            history.replaceState(null, '', location.pathname + location.search + '#/a');
+            let allow = false;
+            const r = router({ '/a': () => {}, '/b': () => { host.querySelector('#be-out').textContent = 'b'; } }, { root: host, hash: true, beforeEach: (to) => to.path === '/b' ? Promise.resolve(allow) : true });
+            await r.ready;
+            await r.navigate('/b'); await sleep(20);
+            assert('beforeEach: false отменяет переход', r.route.value === '/a' && host.querySelector('#be-out').textContent === '');
+            allow = true;
+            await r.navigate('/b'); await sleep(20);
+            assert('beforeEach: true пропускает', r.route.value === '/b' && host.querySelector('#be-out').textContent === 'b');
+            r.dispose();
+            history.replaceState(null, '', location.pathname + location.search + savedHash);
+        });
+
+        sc.dispose();
+        offW(); dev.resetWarnings(); reset();
     })();
 
     section('component() & destroy()');

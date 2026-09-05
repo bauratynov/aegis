@@ -931,9 +931,15 @@ export interface FormCore {
     /** вывод Standard Schema (coerce / trim / default) — уходит в submit вместо сырых values; null при issues */
     parsed: ReadonlySignal<any>;
     /** форма растёт: добавить поле (правила — явные или по шаблону 'items[].qty'), удалить, переименовать (сигналы переезжают) */
-    addField(key: string, initial?: unknown, rules?: RuleLike[]): Signal<any>;
+    addField(key: string, initial?: unknown, rules?: RuleLike[], opts?: { initial?: unknown }): Signal<any>;
     removeField(key: string): void;
     renameField(from: string, to: string): void;
+    /** сводка ошибок GOV.UK: role=alert, заголовок с числом ошибок, ссылки на поля; при провале submit фокус идёт на неё */
+    summary(target?: string | Element, opts?: { heading?: 'h2' | 'h3' | 'p' }): Element;
+    /** показанные ошибки: [{ key, message, el }] — для своей сводки */
+    errorList: ReadonlySignal<Array<{ key: string; message: string; el: HTMLElement | null }>>;
+    /** защита от потери правок: beforeunload + перехват Navigation API с подтверждением; возвращает dispose */
+    guard(opts?: GuardOptions): () => void;
     validating: Record<string, ReadonlySignal<boolean>> & { $any: ReadonlySignal<boolean> };
     dirtyFields: ReadonlySignal<Record<string, true>>;
     /** только изменённые поля (для PATCH) */
@@ -952,7 +958,19 @@ export interface FormCore {
     setErrors(errors: Record<string, any> | Array<{ path?: string | string[]; pointer?: string; message: string }>): void;
     reset(): void;
 }
+export interface GuardOptions {
+    /** своё подтверждение (диалог) — Promise<boolean>; по умолчанию window.confirm */
+    confirm?: (toUrl: string) => boolean | Promise<boolean>;
+    /** считать переход по якорю (#) уходом */
+    hash?: boolean;
+}
+/** a11y-политика формы: field — как объявлять ошибку поля ('blur' — одно polite-объявление при blur, 'live' — span становится role=status, 'off'), summary — одно объявление при провале submit */
+export interface FormA11y { field?: 'blur' | 'live' | 'off'; summary?: boolean }
 export interface FormOptions {
+    a11y?: FormA11y;
+    /** при провале submit фокус на сводку (если есть) или на первое поле */
+    focusOnError?: 'summary' | 'field' | false;
+    types?: Record<string, typeof Date | typeof Number | typeof Array | typeof Boolean | typeof String>;
     rules?: Record<string, RuleLike[]>;
     schema?: StandardSchemaV1<any, any>;
     asyncDebounce?: number;
@@ -998,6 +1016,28 @@ export interface FieldArray<R extends Record<string, any> = Record<string, any>>
  *   const items = fieldArray(f, 'items', { row: { qty: 1, sku: '' } });   // правила формы: { 'items[].qty': [min(1)] }
  *   list(items.rows, row => html`<input bind:field=${row.field('qty')}>`, r => r.key)
  */
+export interface WizardStep { index: number; keys(): string[]; valid: ReadonlySignal<boolean>; dirty: ReadonlySignal<boolean>; done: ReadonlySignal<boolean> }
+export interface Wizard {
+    step: Signal<number>;
+    steps: WizardStep[];
+    count: number;
+    /** валидирует поля текущего шага (sync + async + схема только для них) и идёт дальше */
+    next(): Promise<boolean>;
+    prev(): Promise<boolean>;
+    go(i: number, opts?: { validate?: boolean }): Promise<boolean>;
+    validateStep(i: number): Promise<boolean>;
+    first: ReadonlySignal<boolean>;
+    last: ReadonlySignal<boolean>;
+    progress: ReadonlySignal<number>;
+    dispose(): void;
+}
+/**
+ * Мастер поверх form()/wireForm(): шаги — группы ключей ('address.*') или [data-step] у формы; фокус на новый шаг, announce «Шаг n из N»,
+ * [data-step-nav] дети получают aria-current="step"; history: true — ?step=i через Navigation API; persist: 'key' — шаг в sessionStorage
+ */
+export function wizard(f: FormCore | WireFormResult, opts?: { steps?: string[][]; persist?: string; history?: boolean; focus?: boolean }): Wizard;
+/** Черновик формы в sessionStorage: изменённые поля без password/file, восстановление при создании (dirty остаётся), очистка при успехе */
+export function draft(f: FormCore | WireFormResult, key: string, opts?: { storage?: Storage | { getItem(k: string): string | null; setItem(k: string, v: string): void; removeItem(k: string): void }; debounce?: number; ttl?: number; exclude?: (key: string, value: unknown) => boolean; restore?: (values: Record<string, unknown>, apply: () => void) => void }): { restored: boolean; clear(): void; stop(): void; key: string };
 export function fieldArray<R extends Record<string, any>>(f: FormCore | WireFormResult, path: string, opts?: { row?: R; rules?: { [K in keyof R]?: RuleLike[] }; name?: (i: number, sub?: string) => string; initial?: Partial<R>[] }): FieldArray<R>;
 export interface WireFormResult {
     /** сама <form> */
@@ -1016,6 +1056,9 @@ export interface WireFormResult {
     field(key: string): FieldRef;
     fields: Record<string, Signal<unknown>>;
     errors: Record<string, Signal<string | null>>;
+    summary(target?: string | Element, opts?: { heading?: 'h2' | 'h3' | 'p' }): Element;
+    errorList: ReadonlySignal<Array<{ key: string; message: string; el: HTMLElement | null }>>;
+    guard(opts?: GuardOptions): () => void;
     /** истина по полям (sync-правила + схема), независимо от показа */
     issues: Record<string, ReadonlySignal<string | null>> & { $any: ReadonlySignal<boolean>; $form: ReadonlySignal<string | null> };
     touched: Record<string, Signal<boolean>>;
@@ -1067,6 +1110,14 @@ export function wireForm(formEl: HTMLFormElement, opts?: {
     observe?: boolean;
     /** приведение значений: { birthday: Date, qty: Number, tags: Array, agree: Boolean } */
     types?: Record<string, typeof Date | typeof Number | typeof Array | typeof Boolean | typeof String>;
+    a11y?: FormA11y;
+    focusOnError?: 'summary' | 'field' | false;
+    /** сразу отрендерить сводку ошибок (true — контейнер перед формой) */
+    summary?: boolean | string | Element;
+    /** guard() сразу */
+    guard?: boolean | GuardOptions;
+    /** черновик в sessionStorage: ключ или true (action + id формы); также data-aegis-draft на <form> */
+    draft?: string | boolean;
     /** HTML-ответ сервера (Rails 422 render, Django form_invalid): 'morph' (default) — форма морфится на место и ошибки читаются из разметки; 'replace'; false — не трогать */
     html?: 'morph' | 'replace' | false;
     /** <button name="intent" value="add"> или data-intent — локальное действие без запроса; без JS та же кнопка уходит на сервер */
@@ -1402,7 +1453,8 @@ export interface RouterOptions {
     /** предиктор переходов: после каждого маршрута учится (pattern → pattern) и в idle греет top-K вероятных ссылок страницы (p ≥ minP, полезность > 0) */
     predict?: boolean | { predictor?: Predictor; topK?: number; minP?: number };
     scroll?: 'after-transition' | 'manual';
-    beforeEach?: (to: RouteInfo, from: RouteInfo) => void;
+    /** false / Promise<false> — отменить переход (форма с guard); строка — редирект */
+    beforeEach?: (to: RouteInfo, from: RouteInfo) => void | boolean | string | Promise<void | boolean | string>;
     /** пересоздавать scope при изменении только search (старое поведение) */
     searchReload?: boolean;
     /** маршруты в location.hash ('#/users/42', ссылки <a href="#/users/42">) — статический хостинг без rewrite-правил */

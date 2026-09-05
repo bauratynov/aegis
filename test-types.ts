@@ -174,6 +174,14 @@ f4.addField('extra', 1, [required]); f4.renameField('extra', 'more'); f4.removeF
 const w4 = wireForm3(document.createElement('form'), { observe: true, types: { d: Date, n: Number, tags: Array }, html: 'morph', intents: { add: (f, e) => { void f.keys; void e; } } });
 w4.wire(document.createElement('input')); w4.unwire('x'); w4.rewire(); w4.adoptErrors(); w4.el.noValidate; w4.parsed.value;
 
+import { wizard, draft, type Wizard } from './aegis.js';
+// ── forms phase 4b — guard / draft / wizard / summary / a11y
+const f5 = form3({ name: '', city: '' }, { a11y: { field: 'blur', summary: true }, focusOnError: 'summary' });
+const stopGuard = f5.guard({ confirm: async (url) => url.length > 0 }); stopGuard(); f5.summary(); const el5 = f5.errorList.value[0]?.el; void el5;
+const w5: Wizard = wizard(f5, { steps: [['name'], ['city']], history: true }); w5.next().then(ok => { void ok; }); w5.steps[0].done.value; w5.progress.value; w5.dispose();
+const d5 = draft(f5, 'k', { debounce: 100, exclude: (k) => k === 'city' }); d5.restored; d5.clear(); d5.stop();
+const w6 = wireForm3(document.createElement('form'), { a11y: { field: 'off' }, summary: true, guard: true, draft: 'x' }); w6.guard(); w6.summary('#s'); w6.errorList.value;
+
 // ── aegis/test — render / fire / waitFor / mockFetch
 import { render, fire, waitFor, mockFetch, cleanup, withScope, fakeClock } from './aegis-test.js';
 const clock = fakeClock(1000); await clock.advance(30_000); clock.restore();
