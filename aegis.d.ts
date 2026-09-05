@@ -528,15 +528,22 @@ export interface ResourceOptions<T> {
     transform?: (data: unknown) => T;
     fetcher?: Fetcher;
     immediate?: boolean;
-    /** structural sharing ответа: неизменённые части сохраняют identity (default true) */
-    share?: boolean;
+    /** structural sharing ответа: неизменённые части сохраняют identity; массивы объектов матчатся по полю 'id' (default), по своему полю или функции; false — выключить */
+    share?: boolean | string | ((item: any) => unknown);
+    /** один GET на URL в полёте для нескольких resource(url) (default true при fetcher по умолчанию) */
+    dedupe?: boolean;
     /** повторы с backoff: true → 3, число, или предикат (err, attempt) => boolean; default 0 */
     retry?: boolean | number | ((error: unknown, attempt: number) => boolean);
     /** перезапрос по событиям — только opt-in */
     refetch?: { focus?: boolean; reconnect?: boolean; interval?: number };
 }
+/** Часть ключа кэша: строка, число, объект params или функция (реактивная часть) */
+export type CacheKeyPart = string | number | boolean | null | Record<string, unknown> | (() => string | number | Record<string, unknown>);
 export interface CacheOptions {
-    key?: string;
+    /** ключ вместо URL: строка или иерархический массив ['users', () => id.value] (invalidate(['users']) матчит все) */
+    key?: string | CacheKeyPart[] | (() => string | CacheKeyPart[]);
+    /** теги для invalidate({ tags }) */
+    tags?: string | string[];
     staleTime?: number;
     cacheTime?: number;
     /** держать старые данные при смене URL (default true для реактивного source) */
@@ -584,7 +591,9 @@ export interface MutationOptions<A extends unknown[]> {
     /** ресурсы, чьи data снимаются перед optimistic и откатываются при ошибке */
     resources?: Array<{ data: { peek(): any }; mutate(v: any): void }>;
     optimistic?: (...args: A) => void;
-    invalidates?: string | ((key: string) => boolean) | Array<string | ((key: string) => boolean)>;
+    invalidates?: InvalidatePattern | InvalidatePattern[];
+    /** ждать перезапросы invalidates перед снятием pending (default true) */
+    awaitInvalidates?: boolean;
     /** 'ignore' (default, double-submit guard) | 'queue' | 'latest' | 'parallel' */
     concurrent?: 'ignore' | 'queue' | 'latest' | 'parallel';
     onSuccess?: (result: any, ...args: A) => void;
@@ -686,10 +695,14 @@ export function infiniteResource<P = unknown, T = unknown>(urlFor: (cursor: unkn
     retry?: boolean | number;
 }): ResourceResult<T[]> & { pages: ReadonlySignal<P[]>; hasMore: ReadonlySignal<boolean>; loadMore(): Promise<void>; reset(): Promise<void> };
 
-export function invalidate(keyOrPredicate: string | ((key: string) => boolean)): void;
+/** Шаблон ключей: точный ключ, 'prefix*', ['users'] (иерархический префикс), предикат или { prefix, exact, tags, refetch } */
+export type InvalidatePattern = string | CacheKeyPart[] | ((key: string, entry?: unknown) => boolean) | { prefix?: string; exact?: string | CacheKeyPart[]; tags?: string | string[]; refetch?: 'active' | 'all' | 'none' };
+/** Сбросить свежесть и перезапросить живые записи; Promise ждёт перезапросы. cancel: false — дождаться летящего запроса и перезапросить после него */
+export function invalidate(pattern: InvalidatePattern, opts?: { cancel?: boolean; refetch?: 'active' | 'all' | 'none' }): Promise<void>;
 
 /** Положить данные в кэш cachedResource() вручную (ответ мутации, серверный payload). age — возраст данных в мс */
-export function seed<T = unknown>(key: string, data: T, opts?: { age?: number }): void;
+/** Положить данные в кэш: age — возраст в мс, staleTime — сколько они считаются свежими (default 0: SWR-ревалидация при монтировании) */
+export function seed(key: string | CacheKeyPart[], data: unknown, opts?: { age?: number; staleTime?: number }): unknown;
 /**
  * Засеять кэш из серверного HTML:
  *   <script type="application/json" data-aegis-cache="/api/users" data-aegis-age="120">[…]</script>

@@ -45,4 +45,8 @@ Every warning has a code, and each message is printed once per place. Dev mode i
 | **E035** | A resource URL contains `undefined`, `null`, `NaN` or `[object …]`. | Return `null` from the URL function until the value is ready — a null URL skips the request. |
 | **E036** | `html()` was called as a function instead of a template tag. | `html`<p>${name}</p>`` with backticks; `tpl()` / `swap()` for server HTML strings. |
 | **E037** | `router`: no route matches the URL and there is no `*` route. | Add `'*': () => render404()` or fix the pattern / `base`. |
+| **E038** | `resource({ cache })` got a non-string cache key. | Pass a URL, an array key `cache: { key: ['users', id] }` or params — they are normalized. |
+| **E039** | `staleTime` is larger than `cacheTime` — the entry is collected while still fresh. | Set `cacheTime >= staleTime` (or `Infinity` for reference data). |
+| **E040** | `invalidate(key)` matched no cache entry (query order, trailing slash, typo). | Use the suggested key, the prefix form `invalidate('/api/users*')`, an array key or a predicate. |
+| **E041** | `revalidateOn` refetched 8+ entries at once on focus/reconnect (thundering herd). | Raise `staleTime` on slow-changing data or set `revalidateOn: []` where mutations already invalidate. |
 | **S001** | Attempt to set `__proto__` / `prototype` / `constructor` on a reactive object — blocked. | Use a regular property name. |
