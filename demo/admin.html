@@ -1,0 +1,241 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Aegis Admin — demo</title>
+<style>
+    :root { color-scheme: light dark; --bg: #fff; --fg: #1f2328; --muted: #656d76; --line: #d0d7de; --accent: #0969da; --card: #f6f8fa }
+    html[data-theme="dark"] { --bg: #0d1117; --fg: #e6edf3; --muted: #8b949e; --line: #30363d; --accent: #58a6ff; --card: #161b22 }
+    * { box-sizing: border-box }
+    body { margin: 0; font: 14px/1.5 system-ui, sans-serif; background: var(--bg); color: var(--fg); display: grid; grid-template-columns: auto 1fr; min-height: 100vh }
+    aside { border-right: 1px solid var(--line); padding: 16px; width: 220px; transition: width .2s } aside.collapsed { width: 56px } aside.collapsed .label { display: none }
+    aside a { display: block; padding: 6px 8px; border-radius: 6px; color: inherit; text-decoration: none } aside a[aria-current="page"] { background: var(--card); color: var(--accent); font-weight: 600 }
+    main { padding: 24px; max-width: 1100px } h1 { margin: 0 0 16px; font-size: 22px }
+    .bar { display: flex; gap: 8px; align-items: center; margin-bottom: 12px; flex-wrap: wrap }
+    .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; margin-bottom: 24px }
+    .card { background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 12px } .card b { font-size: 24px; display: block }
+    table { width: 100%; border-collapse: collapse } th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line) } th { cursor: pointer; user-select: none } th.active { color: var(--accent) }
+    tr.off td { color: var(--muted) } .dim { opacity: .5; transition: opacity .2s }
+    input, select, button { font: inherit; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: inherit } button.primary { background: var(--accent); color: #fff; border-color: transparent }
+    label { display: grid; gap: 4px; margin-bottom: 12px; max-width: 420px } .err { color: #cf222e; font-size: 12px } input[aria-invalid="true"] { border-color: #cf222e }
+    .toast { position: fixed; right: 16px; bottom: 16px; background: var(--fg); color: var(--bg); padding: 8px 12px; border-radius: 6px }
+    .fade-enter-from, .fade-leave-to { opacity: 0; transform: translateY(6px) } .fade-enter-active, .fade-leave-active { transition: all .2s }
+    .pending { height: 2px; background: var(--accent); position: fixed; top: 0; left: 0; right: 0; animation: p 1s infinite } @keyframes p { from { transform: scaleX(0) } to { transform: scaleX(1) } }
+    .log { font: 12px/24px ui-monospace, Menlo, monospace; white-space: pre } .log .warn { color: #b26a00 } .log .error { color: #cf222e }
+    footer { color: var(--muted); font-size: 12px; margin-top: 32px; border-top: 1px solid var(--line); padding-top: 8px }
+    .skeleton { background: linear-gradient(90deg, var(--card), var(--line), var(--card)); background-size: 200% 100%; animation: sk 1.2s infinite; height: 1em; border-radius: 4px } @keyframes sk { to { background-position: -200% 0 } }
+</style>
+</head>
+<body>
+<aside id="side"></aside>
+<main>
+    <div id="outlet"></div>
+    <footer id="foot"></footer>
+</main>
+
+<script type="module">
+import {
+    router, mount, resource, mutation, api, configure, HttpError, html, signal, computed, reactive, form, required, emailRule, minLen,
+    list, when, show, theme, i18n, persisted, virtualScroll, onDispose, stats, flushSync, defaults,
+} from '../aegis.js';
+
+// ───────────────────────────── mock server: latency, failures, an in-memory DB ─────────────────────────────
+const FIRST = ['Ada', 'Linus', 'Grace', 'Alan', 'Barbara', 'Dennis', 'Margaret', 'Ken', 'Radia', 'Bjarne', 'Anders', 'Brendan'];
+const LAST = ['Lovelace', 'Torvalds', 'Hopper', 'Turing', 'Liskov', 'Ritchie', 'Hamilton', 'Thompson', 'Perlman', 'Stroustrup', 'Hejlsberg', 'Eich'];
+const db = {
+    users: Array.from({ length: 120 }, (_, i) => ({ id: i + 1, name: `${FIRST[i % 12]} ${LAST[(i * 7) % 12]}`, email: `${FIRST[i % 12].toLowerCase()}${i + 1}@example.com`, role: ['admin', 'editor', 'viewer'][i % 3], active: i % 5 !== 0 })),
+    settings: { title: 'Aegis Admin', perPage: 20, notify: true },
+};
+const flaky = persisted('demo:flaky', false);          // toggle in the sidebar: 50% of writes fail with 500
+const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+const json = (data, status = 200) => new Response(JSON.stringify(data), { status, headers: { 'Content-Type': 'application/json' } });
+const mockFetch = async (input, init = {}) => {
+    const url = new URL(typeof input === 'string' ? input : input.url, location.href);
+    const method = (init.method || 'GET').toUpperCase();
+    await sleep(150 + Math.random() * 250);
+    if (init.signal && init.signal.aborted) throw new DOMException('The user aborted a request.', 'AbortError');
+    if (method !== 'GET' && flaky.peek() && Math.random() < 0.5) return json({ message: 'Server hiccup (flaky mode)' }, 500);
+    const body = init.body ? JSON.parse(init.body) : null;
+    const p = url.pathname;
+    if (p === '/api/stats') return json({ users: db.users.length, active: db.users.filter(u => u.active).length, admins: db.users.filter(u => u.role === 'admin').length });
+    if (p === '/api/users' && method === 'GET') {
+        const q = (url.searchParams.get('q') || '').toLowerCase(), page = +(url.searchParams.get('page') || 1), per = db.settings.perPage;
+        const all = db.users.filter(u => !q || u.name.toLowerCase().includes(q) || u.email.includes(q));
+        return json({ items: all.slice((page - 1) * per, page * per), total: all.length, page, pages: Math.max(1, Math.ceil(all.length / per)) });
+    }
+    if (p === '/api/users' && method === 'POST') { const u = { id: Math.max(...db.users.map(u => u.id)) + 1, active: true, ...body }; db.users.unshift(u); return json(u, 201); }
+    const m = p.match(/^\/api\/users\/(\d+)$/);
+    if (m) {
+        const u = db.users.find(x => x.id === +m[1]);
+        if (!u) return json({ message: 'No such user' }, 404);
+        if (method === 'GET') return json(u);
+        if (method === 'PUT') { if (!body.email.includes('@')) return json({ message: 'Validation failed', errors: { email: ['Must be an email'] } }, 422); Object.assign(u, body); return json(u); }
+        if (method === 'DELETE') { db.users = db.users.filter(x => x !== u); return json({ ok: true }); }
+    }
+    if (p === '/api/settings') { if (method === 'PUT') Object.assign(db.settings, body); return json(db.settings); }
+    return json({ message: 'Not found' }, 404);
+};
+configure({ fetch: mockFetch });
+
+// ───────────────────────────── app-wide state ─────────────────────────────
+const t = i18n({
+    en: { dashboard: 'Dashboard', users: 'Users', logs: 'Logs', settings: 'Settings', search: 'Search…', name: 'Name', email: 'Email', role: 'Role', status: 'Status', active: 'active', inactive: 'inactive', edit: 'Edit', delete: 'Delete', save: 'Save', saved: 'Saved', cancel: 'Cancel', newUser: 'New user', rows: '{n} rows', page: 'Page {page} of {pages}', prev: 'Prev', next: 'Next', retry: 'Retry', flaky: 'Flaky server', theme: 'Theme', totalUsers: 'Users', activeUsers: 'Active', admins: 'Admins', loading: 'Loading…', notify: 'Email notifications', perPage: 'Rows per page', title: 'Title', offline: 'served from IndexedDB while offline' },
+    ru: { dashboard: 'Обзор', users: 'Пользователи', logs: 'Логи', settings: 'Настройки', search: 'Поиск…', name: 'Имя', email: 'Почта', role: 'Роль', status: 'Статус', active: 'активен', inactive: 'выключен', edit: 'Изменить', delete: 'Удалить', save: 'Сохранить', saved: 'Сохранено', cancel: 'Отмена', newUser: 'Новый пользователь', rows: '{n} строк', page: 'Страница {page} из {pages}', prev: 'Назад', next: 'Вперёд', retry: 'Повторить', flaky: 'Сбойный сервер', theme: 'Тема', totalUsers: 'Пользователей', activeUsers: 'Активных', admins: 'Админов', loading: 'Загрузка…', notify: 'Уведомления на почту', perPage: 'Строк на странице', title: 'Заголовок', offline: 'офлайн — из IndexedDB' },
+}, { locale: persisted('demo:locale', 'en').peek() });
+const th = theme();
+const toast = signal('');
+const say = (msg) => { toast.value = msg; setTimeout(() => { if (toast.value === msg) toast.value = ''; }, 1800); };
+const outlet = document.getElementById('outlet');
+
+// ───────────────────────────── pages (one Component contract everywhere) ─────────────────────────────
+const Dashboard = ({ html, when, list }) => {
+    const s = resource('/api/stats', { cache: true, staleTime: 5_000 });
+    const recent = resource('/api/users?page=1', { cache: true, staleTime: 5_000 });
+    return html`
+        <h1>${() => t('dashboard')}</h1>
+        ${when(s, {
+            loading: () => html`<div class="cards"><div class="card skeleton"></div><div class="card skeleton"></div><div class="card skeleton"></div></div>`,
+            error: (e, retry) => html`<p>${e.message} <button @click=${retry}>${() => t('retry')}</button></p>`,
+            data: (d) => html`<div class="cards">
+                <div class="card"><b>${d.users}</b>${() => t('totalUsers')}</div>
+                <div class="card"><b>${d.active}</b>${() => t('activeUsers')}</div>
+                <div class="card"><b>${d.admins}</b>${() => t('admins')}</div></div>`,
+        })}
+        ${when(recent, { data: (d, ds) => html`<ul>${list(() => ds.value.items.slice(0, 5), (u) => html`<li><a href=${'#/users/' + u.id}>${u.name}</a> — ${u.email}</li>`, { key: 'id' })}</ul>` })}`;
+};
+
+const Users = ({ html, when, list, signal, computed }) => {
+    const q = r.search('q', { default: '' });
+    const page = r.search('page', { parse: Number, default: 1 });
+    const sort = reactive({ by: 'id', dir: 1 });
+    const users = resource(() => `/api/users?q=${encodeURIComponent(q.value)}&page=${page.value}`, { cache: true, staleTime: 10_000, keepPrevious: true });
+    const remove = mutation((id) => api.delete(`/api/users/${id}`), {
+        resources: [users],
+        optimistic: (id) => users.mutate(d => ({ ...d, items: d.items.filter(u => u.id !== id), total: d.total - 1 })),
+        invalidates: (k) => k.startsWith('/api/users') || k === '/api/stats',
+        onError: (e) => say(e instanceof HttpError ? `HTTP ${e.status}: ${e.data?.message || e.message}` : e.message),
+    });
+    const create = mutation(() => api.post('/api/users', { name: 'New User', email: `new${Date.now() % 1000}@example.com`, role: 'viewer' }), {
+        invalidates: (k) => k.startsWith('/api/users') || k === '/api/stats',
+        onSuccess: (u) => { say(t('saved')); r.navigate(`/users/${u.id}`); },
+        onError: (e) => say(e.message),
+    });
+    const sorted = computed(() => { const d = users.data.value; if (!d) return []; return d.items.toSorted((a, b) => (a[sort.by] > b[sort.by] ? 1 : a[sort.by] < b[sort.by] ? -1 : 0) * sort.dir); });
+    const col = (key, label) => html`<th class=${{ active: () => sort.by === key }} @click=${() => { if (sort.by === key) sort.dir *= -1; else { sort.by = key; sort.dir = 1; } }}>${() => t(label)}</th>`;
+    return html`
+        <h1>${() => t('users')}</h1>
+        <div class="bar">
+            <input .value=${q} placeholder=${() => t('search')} @input.debounce.300=${(e) => { q.value = e.target.value; page.value = 1; }}>
+            <button class="primary" @click=${create} ?disabled=${create.pending}>${() => t('newUser')}</button>
+            <span>${() => users.data.value ? t('rows', { n: users.data.value.total }) : ''}</span>
+        </div>
+        ${when(users, {
+            loading: () => html`<p>${() => t('loading')}</p>`,
+            error: (e, retry) => html`<p>${e.message} <button @click=${retry}>${() => t('retry')}</button></p>`,
+            data: (d, ds) => html`
+                <table class=${{ dim: users.validating }}>
+                    <thead><tr>${col('id', 'id')}${col('name', 'name')}${col('email', 'email')}${col('role', 'role')}<th>${() => t('status')}</th><th></th></tr></thead>
+                    <tbody>${list(sorted, (u) => html`<tr class=${{ off: !u.active }}>
+                        <td>${u.id}</td><td><a href=${'#/users/' + u.id}>${u.name}</a></td><td>${u.email}</td><td>${u.role}</td>
+                        <td>${u.active ? t('active') : t('inactive')}</td>
+                        <td><button @click=${() => remove(u.id)}>${() => t('delete')}</button></td></tr>`, { key: 'id', transition: 'fade' })}</tbody>
+                </table>
+                <div class="bar">
+                    <button @click=${() => { page.value = Math.max(1, page.value - 1); }} ?disabled=${() => page.value <= 1}>${() => t('prev')}</button>
+                    <span>${() => t('page', { page: ds.value.page, pages: ds.value.pages })}</span>
+                    <button @click=${() => { page.value = page.value + 1; }} ?disabled=${() => page.value >= ds.value.pages}>${() => t('next')}</button>
+                </div>`,
+        })}`;
+};
+
+const UserEdit = ({ html, props }) => {
+    const u = props.user;
+    const f = form({ name: u.name, email: u.email, role: u.role, active: u.active }, { rules: { name: [required, minLen(2)], email: [required, emailRule] } });
+    const save = mutation((values) => api.put(`/api/users/${u.id}`, values), {
+        invalidates: (k) => k.startsWith('/api/users') || k === '/api/stats',
+        onSuccess: () => { say(t('saved')); r.navigate('/users'); },
+        onError: (e) => { if (e instanceof HttpError && e.status === 422) f.setErrors(e.data.errors); else say(e.message); },
+    });
+    const field = (key, label, input) => html`<label>${() => t(label)} ${input} ${show(() => !!f.errors[key].value, () => html`<span class="err">${f.errors[key]}</span>`)}</label>`;
+    return html`
+        <h1>${() => t('edit')}: ${u.name}</h1>
+        <form @submit.prevent=${() => f.submit(save)} novalidate>
+            ${field('name', 'name', html`<input bind:value=${f.fields.name} ?aria-invalid=${() => !!f.errors.name.value}>`)}
+            ${field('email', 'email', html`<input bind:value=${f.fields.email} type="email" ?aria-invalid=${() => !!f.errors.email.value}>`)}
+            ${field('role', 'role', html`<select bind:value=${f.fields.role}><option>admin</option><option>editor</option><option>viewer</option></select>`)}
+            <label><span><input type="checkbox" bind:checked=${f.fields.active}> ${() => t('active')}</span></label>
+            <div class="bar">
+                <button class="primary" ?disabled=${() => save.pending.value || !f.dirty.value}>${() => t('save')}</button>
+                <a href="#/users">${() => t('cancel')}</a>
+            </div>
+        </form>`;
+};
+
+const Logs = ({ html, el }) => {
+    const LEVELS = ['info', 'info', 'info', 'warn', 'error'];
+    const lines = signal(Array.from({ length: 50_000 }, (_, i) => ({ i, level: LEVELS[(i * 7) % 5], msg: `${new Date(1_700_000_000_000 + i * 1000).toISOString()} request #${i} handled in ${(i * 37) % 900} ms` })));
+    const host = document.createElement('div');
+    virtualScroll(host, lines, { mode: 'window', itemHeight: 24, height: 480, key: 'i', renderItem: (l) => html`<div class=${'log ' + l.level}>${l.msg}</div>` });
+    return html`<h1>${() => t('logs')}</h1><p>50 000 lines, ~30 in the DOM (<code>virtualScroll</code> window mode)</p>${host}`;
+};
+
+const Settings = ({ html, when }) => {
+    const s = resource('/api/settings', { offline: true });
+    const save = mutation((v) => api.put('/api/settings', v), { onSuccess: (v) => { s.mutate(v); say(t('saved')); }, onError: (e) => say(e.message) });
+    return html`
+        <h1>${() => t('settings')}</h1>
+        ${when(s, {
+            loading: () => html`<p>${() => t('loading')}</p>`,
+            data: (v) => {
+                const f = form({ title: v.title, perPage: v.perPage, notify: v.notify }, { rules: { title: [required] } });
+                return html`<form @submit.prevent=${() => f.submit(save)}>
+                    <label>${() => t('title')} <input bind:value=${f.fields.title}></label>
+                    <label>${() => t('perPage')} <input type="number" bind:value=${f.fields.perPage} min="5" max="50"></label>
+                    <label><span><input type="checkbox" bind:checked=${f.fields.notify}> ${() => t('notify')}</span></label>
+                    <button class="primary" ?disabled=${() => save.pending.value || !f.dirty.value}>${() => t('save')}</button>
+                    ${show(s.offline, () => html`<p class="err">${() => t('offline')}</p>`)}
+                </form>`;
+            },
+        })}`;
+};
+
+// ───────────────────────────── shell + router (hash mode: works on any static host) ─────────────────────────────
+const page = (Component, props = {}) => {
+    const h = mount(outlet, (ctx) => Component({ ...ctx, props }));
+    onDispose(() => { if (h && h.destroy) h.destroy(); });
+};
+const r = router({
+    '/': () => page(Dashboard),
+    '/users': () => page(Users),
+    '/users/:id': { loader: (p, { signal }) => api.get(`/api/users/${p.id}`, { signal }), handler: (p, { data }) => page(UserEdit, { user: data }) },
+    '/logs': () => page(Logs),
+    '/settings': () => page(Settings),
+    '*': () => { outlet.replaceChildren(html`<h1>404</h1>`); },
+}, { hash: true, activeClass: 'active' });
+
+mount('#side', ({ html }) => {
+    const collapsed = persisted('demo:side', false);
+    const locale = persisted('demo:locale', 'en');
+    const link = (href, key) => html`<a href=${href}>${() => collapsed.value ? t(key)[0] : t(key)}</a>`;
+    return html`
+        <div class=${{ collapsed }} style="display:contents">
+            <button @click=${() => { collapsed.value = !collapsed.value; }}>☰</button>
+            ${link('#/', 'dashboard')}${link('#/users', 'users')}${link('#/logs', 'logs')}${link('#/settings', 'settings')}
+            <hr>
+            <label class="label"><span><input type="checkbox" bind:checked=${flaky}> ${() => t('flaky')}</span></label>
+            <label class="label">${() => t('theme')} <select .value=${th.mode} @change=${(e) => { th.mode.value = e.target.value; }}><option>system</option><option>light</option><option>dark</option></select></label>
+            <label class="label"><select .value=${locale} @change=${(e) => { locale.value = e.target.value; t.locale.value = e.target.value; }}><option>en</option><option>ru</option></select></label>
+        </div>
+        ${show(r.pending, () => html`<div class="pending"></div>`)}
+        ${show(() => !!toast.value, () => html`<div class="toast">${toast}</div>`, null, { transition: 'fade' })}`;
+});
+mount('#foot', ({ html, interval }) => {
+    const s = signal(stats());
+    interval(() => { s.value = stats(); }, 1000);
+    return html`route ${r.route} · effects ${() => s.value.effects} · scopes ${() => s.value.scopes} · flushes ${() => s.value.flushes} · cache ${() => s.value.resourceCache}`;
+});
+window.__demo = { r, db, flaky };
+</script>
+</body>
+</html>

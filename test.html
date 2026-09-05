@@ -2416,6 +2416,33 @@
         sandbox.innerHTML = '';
     })();
 
+    section('router: hash-режим и ссылки, отрендеренные после router()');
+
+    await (async () => {
+        const savedHash = location.hash;
+        const host = document.createElement('div');
+        sandbox.appendChild(host);
+        const outlet = document.createElement('div');
+        host.appendChild(outlet);
+        const seen = [];
+        const r = router({
+            '/': () => { outlet.textContent = 'home'; },
+            '/h/:id': { loader: async (p) => ({ id: p.id }), handler: (p, { data }) => { seen.push(data.id); outlet.textContent = 'item ' + data.id; } },
+        }, { hash: true, root: host });
+        // ссылки появляются ПОСЛЕ создания роутера (сайдбар монтируется позже)
+        host.insertAdjacentHTML('beforeend', '<nav><a href="#/" id="lh">home</a><a href="#/h/7" id="l7">seven</a></nav>');
+        await r.ready;
+        assert('router hash: первый маршрут из location.hash (пусто → "/")', r.route.value === '/' && outlet.textContent === 'home');
+        assert('router hash: ссылки, отрендеренные после router(), помечены после первого маршрута', host.querySelector('#lh').getAttribute('aria-current') === 'page');
+        await r.navigate('/h/7');
+        await settled();
+        assert('router hash: navigate пишет location.hash и проходит loader', location.hash === '#/h/7' && r.params.value.id === '7' && outlet.textContent === 'item 7');
+        assert('router hash: aria-current переехала', host.querySelector('#l7').getAttribute('aria-current') === 'page' && !host.querySelector('#lh').hasAttribute('aria-current'));
+        r.dispose();
+        sandbox.innerHTML = '';
+        history.replaceState(null, '', location.pathname + location.search + savedHash);
+    })();
+
     section('component() & destroy()');
 
     (() => {

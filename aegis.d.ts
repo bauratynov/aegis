@@ -1100,6 +1100,8 @@ export interface RouterOptions {
     beforeEach?: (to: RouteInfo, from: RouteInfo) => void;
     /** пересоздавать scope при изменении только search (старое поведение) */
     searchReload?: boolean;
+    /** маршруты в location.hash ('#/users/42', ссылки <a href="#/users/42">) — статический хостинг без rewrite-правил */
+    hash?: boolean;
 }
 export interface SearchOptions<T> {
     parse?: (raw: string) => T;
