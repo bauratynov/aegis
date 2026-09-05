@@ -207,3 +207,58 @@ test('scope: dispose уничтожает effects, computed и подписки;
     s.value = 3;
     assert.equal(runs, 2);   // effect в мёртвом scope уничтожается до первого запуска
 });
+
+test('deps: динамические зависимости — старый источник отписывается, новый подписывается', () => {
+    const flag = signal(true), a = signal(1), b = signal(1);
+    let runs = 0;
+    effect(() => { flag.value ? a.value : b.value; runs++; });
+    flag.value = false;          // теперь зависит от b
+    b.value = 2;
+    assert.equal(runs, 3);
+    a.value = 2;                 // a больше не зависимость
+    assert.equal(runs, 3);
+    assert.equal(a.subs.size, 0);
+    assert.equal(b.subs.size, 1);
+});
+
+test('scope: onDispose возвращает unregister', () => {
+    const scope = createScope();
+    let calls = 0;
+    const off = scope.onDispose(() => calls++);
+    scope.onDispose(() => calls += 10);
+    off();
+    assert.equal(scope._disposers.size, 1);
+    scope.dispose();
+    assert.equal(calls, 10);
+    let late = 0;
+    const offLate = scope.onDispose(() => late++);   // на мёртвом scope — сразу
+    assert.equal(late, 1);
+    assert.equal(typeof offLate, 'function');
+});
+
+test('effect: повторный запуск выполняется под своим scope, а не под scope писателя', () => {
+    const shared = signal(0);
+    const A = createScope(), B = createScope();
+    let child = null;
+    A.run(() => { effect(() => { shared.value; child = createScope(); }); });
+    B.run(() => { shared.value = 1; });   // запись из чужого scope
+    assert.equal(child.parent, A);
+    B.dispose();
+    assert.equal(child._disposed, false);
+    A.dispose();
+    assert.equal(child._disposed, true);
+});
+
+test('ошибка в effect не отписывает уже прочитанные зависимости', () => {
+    const s = signal(0);
+    let runs = 0;
+    effect(() => { runs++; if (s.value === 1) throw new Error('once'); });
+    assert.throws(() => { s.value = 1; }, /once/);
+    s.value = 2;
+    assert.equal(runs, 3);
+});
+
+test('signal: JSON.stringify отдаёт значение', () => {
+    const s = signal({ a: 1 });
+    assert.equal(JSON.stringify({ s }), '{"s":{"a":1}}');
+});

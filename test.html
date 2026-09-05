@@ -35,7 +35,7 @@
         resource, watch, store, portal, transition, errorBoundary, ref,
         reactive, isReactive,
         form, required, minLen, maxLen, emailRule, matches,
-        wireForm, cachedResource, invalidate, seed, seedFrom,
+        wireForm, cachedResource, invalidate, seed, seedFrom, attach, clone, expose, getOwner, runWithOwner,
         spring, flip, animate,
         trap, roving, announce,
         css, adoptStyles, scopedStyle,
@@ -952,6 +952,240 @@
         assert('seed без staleTime — SWR: данные сразу из seed, ревалидация ушла', seenFirst === 'seed' && fetches2 === 1 && r2.data.value.v === 'net');
         scope2.dispose();
         sandbox.innerHTML = '';
+    })();
+
+    section('💎 #99/#101/#102 — авто-batch в on(), самоотвязка disposers, owner');
+
+    await (async () => {
+        const a = signal(0), b = signal(0), c = signal(0);
+        let runs = 0;
+        const btn = document.createElement('button');
+        sandbox.appendChild(btn);
+        const scope = createScope();
+        scope.run(() => {
+            effect(() => { a.value; b.value; c.value; runs++; });
+            on(btn, 'click', function (e) { a.value++; b.value++; c.value++; this.dataset.self = this === btn ? 'yes' : 'no'; });
+        });
+        btn.click();
+        assert('on(): обработчик батчится — effect один раз на три записи', runs === 2);
+        assert('on(): this === el сохраняется', btn.dataset.self === 'yes');
+
+        let onceCalls = 0;
+        scope.run(() => on(btn, 'click', () => onceCalls++, { once: true }));
+        const before = scope._disposers.size;
+        btn.click(); btn.click();
+        assert('on({ once }): вызван один раз и снял себя со scope', onceCalls === 1 && scope._disposers.size === before - 1);
+
+        let fired = 0;
+        scope.run(() => { for (let i = 0; i < 20; i++) timeout(() => fired++, 0); });
+        const withTimers = scope._disposers.size;
+        await wait(20);
+        assert('timeout(): сработавшие таймеры не остаются в scope', fired === 20 && scope._disposers.size === withTimers - 20);
+        scope.dispose();
+        sandbox.innerHTML = '';
+    })();
+
+    section('💎 #23 — строки list() без обёртки');
+
+    await (async () => {
+        const rows = signal([{ id: 1, n: 'a' }, { id: 2, n: 'b' }, { id: 3, n: 'c' }]);
+        const scope = createScope();
+        const frag = scope.run(() => html`<table><tbody>${list(rows, r => html`<tr><td>${r.n}</td></tr><tr class="d"><td>${() => r.n + '!'}</td></tr>`)}</tbody></table>
+            <select class="sel">${list(rows, r => html`<option value=${r.id}>${r.n}</option>`)}</select>`);
+        sandbox.appendChild(frag);
+        await wait(0);
+        const tbody = sandbox.querySelector('tbody');
+        assert('list: tbody > tr без div-обёрток', tbody.querySelectorAll(':scope > tr').length === 6 && sandbox.querySelectorAll('tbody div').length === 0);
+        assert('list: <option> внутри <select> видны', sandbox.querySelector('.sel').options.length === 3);
+        rows.value = [rows.value[2], rows.value[0], rows.value[1]];
+        await wait(0);
+        assert('list: перестановка многоузловых строк', [...tbody.querySelectorAll('tr:not(.d) td')].map(t => t.textContent).join('') === 'cab' && tbody.querySelectorAll('tr.d')[0].textContent === 'c!');
+        rows.value = rows.value.filter(r => r.id !== 1);
+        await wait(0);
+        assert('list: удаление многоузловой строки убирает все её узлы', tbody.querySelectorAll('tr').length === 4);
+        rows.value = [];
+        await wait(0);
+        assert('list: bulk clear', tbody.childNodes.length === 1 && tbody.firstChild.nodeType === 8);
+        scope.dispose();
+        sandbox.innerHTML = '';
+    })();
+
+    section('💎 #100/#102 — строки list() принадлежат владельцу');
+
+    await (async () => {
+        const items = signal([{ id: 1 }]);
+        const A = createScope(), B = createScope();
+        let rowDisposed = 0;
+        const c = document.createElement('div');
+        sandbox.appendChild(c);
+        A.run(() => c.appendChild(list(items, (it) => { onDispose(() => rowDisposed++); const d = document.createElement('i'); d.textContent = it.id; return d; })));
+        await wait(0);
+        B.run(() => { items.value = [...items.value, { id: 2 }]; });   // запись из чужого scope
+        B.dispose();
+        assert('list: строка, созданная при записи из чужого scope, переживает его dispose', rowDisposed === 0 && c.querySelectorAll('i').length === 2);
+        A.dispose();
+        assert('list: dispose владельца уничтожает строки', rowDisposed === 2 && c.querySelectorAll('i').length === 0);
+        sandbox.innerHTML = '';
+    })();
+
+    section('💎 #21 — реактивные дети в html`` и clone()');
+
+    await (async () => {
+        const user = signal(null);
+        const tabs = signal([{ t: 'a' }, { t: 'b' }]);
+        const n = signal(0);
+        const scope = createScope();
+        const frag = scope.run(() => html`<nav>
+            ${() => user.value ? html`<b>${() => user.value.name}</b>` : html`<a class="login">Войти</a>`}
+            ${() => tabs.value.map(t => html`<span class="tab">${t.t}</span>`)}
+            ${() => n.value > 0 && html`<em>${n}</em>`}
+            <p>${n}</p>
+        </nav>`);
+        sandbox.appendChild(frag);
+        const nav = sandbox.querySelector('nav');
+        assert('html: функция вернула фрагмент → вставлен', !!nav.querySelector('a.login') && nav.querySelectorAll('.tab').length === 2);
+        assert('html: false → пусто, сигнал в тексте', nav.querySelector('em') === null && nav.querySelector('p').textContent === '0');
+        user.value = { name: 'Ann' };
+        assert('html: переключение ветки', nav.querySelector('a.login') === null && nav.querySelector('b').textContent === 'Ann');
+        user.value = { name: 'Bob' };
+        assert('html: вложенная привязка внутри ветки реактивна', nav.querySelector('b').textContent === 'Bob');
+        tabs.value = [{ t: 'x' }];
+        n.value = 2;
+        assert('html: массив и условие обновились', nav.querySelectorAll('.tab').length === 1 && nav.querySelector('em').textContent === '2');
+        n.value = 0;
+        assert('html: обратно в пусто', nav.querySelector('em') === null);
+        scope.dispose();
+        user.value = { name: 'Zed' }; n.value = 9;
+        assert('html: dispose замораживает DOM и отключает привязки', nav.querySelector('b').textContent === 'Bob' && nav.querySelector('p').textContent === '0');
+        sandbox.innerHTML = '';
+
+        const count = signal(1);
+        const tpl = html`<i class="cl">${count}</i>`;
+        const copy = clone(tpl);
+        sandbox.appendChild(copy);
+        count.value = 2;
+        assert('clone(): живые привязки в копии', sandbox.querySelector('i.cl').textContent === '2');
+        sandbox.innerHTML = '';
+
+        const vis = signal(true);
+        const badge = signal(1);
+        const s2 = createScope();
+        s2.run(() => sandbox.appendChild(show(vis, html`<span class="bd">${badge}</span>`)));
+        await wait(0);
+        badge.value = 5;
+        assert('show(cond, fragment): ветка реактивна (clone вместо cloneNode)', sandbox.querySelector('.bd').textContent === '5');
+        vis.value = false; await wait(0); vis.value = true; await wait(0);
+        badge.value = 7;
+        assert('show(cond, fragment): повторный показ тоже живой', sandbox.querySelector('.bd').textContent === '7');
+        s2.dispose();
+        sandbox.innerHTML = '';
+    })();
+
+    section('💎 #24 — attach()');
+
+    await (async () => {
+        const size = signal(10);
+        const log = [];
+        const scope = createScope();
+        const frag = scope.run(() => html`<canvas ${attach(c => { log.push('init:' + size.value + ':' + c.isConnected); return () => log.push('cleanup'); })}></canvas>
+            <div class="once" ${attach(el => { log.push('once:' + size.value); return () => log.push('once-cleanup'); }, { once: true })}></div>`);
+        assert('attach: не вызывается до вставки в DOM', log.length === 0);
+        sandbox.appendChild(frag);
+        await wait(0);
+        assert('attach: вызван после подключения', log.join(',') === 'init:10:true,once:10');
+        size.value = 20;
+        assert('attach: реактивный перезапуск с cleanup; once — без перезапуска', log.join(',') === 'init:10:true,once:10,cleanup,init:20:true');
+        scope.dispose();
+        assert('attach: dispose делает cleanup', log.slice(-2).join(',') === 'cleanup,once-cleanup' || log.includes('once-cleanup'));
+        sandbox.innerHTML = '';
+
+        const el = document.createElement('div');
+        sandbox.appendChild(el);
+        const s2 = createScope();
+        let inited = 0, cleaned = 0;
+        s2.run(() => attach(el, () => { inited++; return () => cleaned++; }));
+        assert('attach(el, fn): на серверном DOM сразу', inited === 1);
+        s2.dispose();
+        assert('attach(el, fn): cleanup при dispose', cleaned === 1);
+        sandbox.innerHTML = '';
+    })();
+
+    section('💎 #22/#103 — hydrate 2.0');
+
+    await (async () => {
+        let mounts = 0;
+        let destroyed = 0;
+        register('h2-island', (el, data, { html, onDispose }) => { mounts++; onDispose(() => destroyed++); return html`<b>${data.n}</b>`; });
+        register('h2-island', () => {}); // dev warning E010 только
+        register('h2-island', (el, data, { html, onDispose }) => { mounts++; onDispose(() => destroyed++); return html`<b>${data.n}</b>`; });
+        const root = document.createElement('div');
+        root.innerHTML = '<div data-aegis="h2-island" data-n="1"><p>server</p></div>';
+        sandbox.appendChild(root);
+        let events = [];
+        root.addEventListener('aegis:hydrated', e => events.push('hydrated:' + e.detail.name));
+        root.addEventListener('aegis:destroy', () => events.push('destroy'));
+        const handles = hydrate(root);
+        assert('hydrate: handles + api сразу (первый кусок синхронный)', handles.length === 1 && handles[0].api?.el === handles[0].el && root.querySelector('b').textContent === '1');
+        assert('hydrate: состояние и событие', handles[0].el.dataset.aegisState === 'hydrated' && events[0] === 'hydrated:h2-island');
+        hydrate(root);
+        assert('hydrate: повторный вызов идемпотентен', mounts === 1);
+        await handles.ready;
+
+        // root сам является островом
+        const solo = document.createElement('div');
+        solo.dataset.aegis = 'h2-island'; solo.dataset.n = '7';
+        sandbox.appendChild(solo);
+        hydrate(solo);
+        assert('hydrate(el): сам root оживает', solo.querySelector('b')?.textContent === '7');
+
+        // watch: вставка и удаление
+        const w = document.createElement('div');
+        sandbox.appendChild(w);
+        hydrate(w, { watch: true });
+        w.innerHTML = '<section><div data-aegis="h2-island" data-n="9"></div></section>';
+        await wait(20);
+        assert('hydrate({watch}): вставленный остров ожил', w.querySelector('b')?.textContent === '9' && mounts === 3);
+        const before = destroyed;
+        w.innerHTML = '';
+        await wait(20);
+        assert('hydrate({watch}): удалённый остров уничтожен', destroyed === before + 1);
+
+        // pending-стратегия отменяется destroy()
+        const lazy = document.createElement('div');
+        lazy.innerHTML = '<div data-aegis="h2-island" data-aegis-load="interaction" data-n="3"></div>';
+        sandbox.appendChild(lazy);
+        const [lh] = hydrate(lazy);
+        assert('hydrate: interaction — pending', lh.el.dataset.aegisState === 'pending' && lh.api === undefined);
+        destroy(lh.el);
+        lh.el.dispatchEvent(new Event('mouseenter'));
+        await wait(0);
+        assert('destroy() до монтирования отменяет ожидание', lh.api === undefined && mounts === 3);
+
+        // load: 'eager' переопределяет стратегию (тесты/fixture)
+        const lazy2 = document.createElement('div');
+        lazy2.innerHTML = '<div data-aegis="h2-island" data-aegis-load="visible" data-n="4"></div>';
+        sandbox.appendChild(lazy2);
+        const [eh] = hydrate(lazy2, { load: 'eager' });
+        assert('hydrate({load:"eager"}): visible-остров смонтирован сразу', eh.api !== undefined && lazy2.querySelector('b').textContent === '4');
+
+        // time-slicing: 40 островов с budget 0 — первый синхронно, остальные по кусочкам
+        const many = document.createElement('div');
+        many.innerHTML = Array.from({ length: 12 }, (_, i) => `<div data-aegis="h2-island" data-n="${i}"></div>`).join('');
+        sandbox.appendChild(many);
+        const hs = hydrate(many, { budget: 0 });
+        const syncMounted = many.querySelectorAll('b').length;
+        await hs.ready;
+        assert('hydrate: time-slicing — первый синхронно, все после ready', syncMounted >= 1 && syncMounted < 12 && many.querySelectorAll('b').length === 12);
+        sandbox.innerHTML = '';
+    })();
+
+    section('💎 #104 — expose()');
+
+    (() => {
+        assert('expose: window.Aegis не ставится автоматически', typeof window.Aegis === 'undefined');
+        const A = expose();
+        assert('expose(): ставит глобал и возвращает объект', window.Aegis === A && typeof A.signal === 'function' && typeof A.attach === 'function');
+        delete window.Aegis;
     })();
 
     section('component() & destroy()');

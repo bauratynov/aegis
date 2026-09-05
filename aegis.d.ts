@@ -51,12 +51,16 @@ export function isReactive(v: unknown): boolean;
 
 export interface Scope {
     run<T>(fn: () => T): T;
-    onDispose(fn: () => void): void;
+    /** Возвращает unregister — снять cleanup досрочно */
+    onDispose(fn: () => void): () => void;
     dispose(): void;
 }
 
 export function createScope(name?: string): Scope;
-export function onDispose(fn: () => void): void;
+/** Текущий scope-владелец (null вне scope). Для кода после await: runWithOwner(getOwner(), () => …) */
+export function getOwner(): Scope | null;
+export function runWithOwner<T>(scope: Scope | null, fn: () => T): T;
+export function onDispose(fn: () => void): () => void;
 
 // ── DOM Rendering ──────────────────────────────────────────────
 
@@ -122,6 +126,13 @@ export function show(
     opts?: ShowOptions
 ): Comment;
 
+/** Ленивый индекс строки list(): сигнал создаётся при первом чтении .value */
+export interface RowIndex {
+    readonly value: number;
+    peek(): number;
+    subscribe(fn: (i: number) => void): () => void;
+}
+
 export interface ListOptions {
     enter?: (el: Element) => void;
     exit?: (el: Element) => Promise<void> | void;
@@ -129,7 +140,8 @@ export interface ListOptions {
 export function list<T>(
     items: Signal<T[]> | ReadonlySignal<T[]> | (() => T[]) | T[],
     /** index — сигнал: актуален после сортировки/удаления. Строка перерисовывается, если объект под ключом заменён */
-    renderFn: (item: T, index: ReadonlySignal<number>) => Element | DocumentFragment,
+    /** renderFn может вернуть один узел, фрагмент из нескольких (<tr>+<tr>, <dt>+<dd>) или массив — обёрток нет */
+    renderFn: (item: T, index: RowIndex) => Node | Node[] | string | number,
     key?: string | ((item: T) => string | number),
     opts?: ListOptions
 ): Comment;
@@ -149,6 +161,28 @@ export interface Ref<T extends Element = Element> {
     _set(el: T): void;
 }
 export function ref<T extends Element = Element>(): Ref<T>;
+
+/** Маркер attach() для html``: <canvas ${attach(el => …)}> */
+export interface Attachment<E extends Element = Element> {
+    readonly fn: (el: E) => void | (() => void);
+    readonly opts: AttachOptions;
+}
+export interface AttachOptions {
+    /** только init + cleanup, без реактивного перезапуска (карты, редакторы) */
+    once?: boolean;
+}
+/**
+ * Поведение на элементе после монтирования: init + cleanup + реактивность одной функцией.
+ * fn выполняется как effect: перезапуск при изменении прочитанных сигналов, cleanup перед перезапуском и при dispose.
+ */
+export function attach<E extends Element = Element>(fn: (el: E) => void | (() => void), opts?: AttachOptions): Attachment<E>;
+export function attach<E extends Element>(el: E, fn: (el: E) => void | (() => void), opts?: AttachOptions): () => void;
+
+/**
+ * Живая копия фрагмента из html``: привязки создаются заново в текущем scope.
+ * Фрагмент с готовыми узлами (list()/show()-якоря) не воспроизводим — cloneNode + dev warning E013.
+ */
+export function clone(frag: DocumentFragment): DocumentFragment;
 
 // ── Events ─────────────────────────────────────────────────────
 
@@ -358,7 +392,8 @@ export interface ComponentContext<E extends Element = HTMLElement> {
     debounced: typeof debounced;
     throttled: typeof throttled;
     poll: typeof poll;
-    onDispose(fn: () => void): void;
+    /** Возвращает unregister — снять cleanup досрочно */
+    onDispose(fn: () => void): () => void;
 }
 
 /** Результат component(): если setup вернул шаблон (Node) — он вставлен в el, наружу отдаётся { el, destroy } */
@@ -385,8 +420,38 @@ export function register<D = Record<string, unknown>>(
     name: string,
     setup: (el: HTMLElement, data: D, ctx: ComponentContext<HTMLElement>) => void | object | Node
 ): void;
-/** Гидрирует [data-aegis]; перед этим засевает кэш из <script type="application/json" data-aegis-cache> */
-export function hydrate(root?: Document | Element): void;
+export interface HydrateOptions {
+    /** MutationObserver: вставленные острова оживают, удалённые уничтожаются (htmx/Turbo/jQuery) */
+    watch?: boolean;
+    /** перемонтировать уже живые */
+    force?: boolean;
+    /** переопределить data-aegis-load для всех (тесты: 'eager') */
+    load?: 'eager' | 'visible' | 'idle' | 'interaction' | string;
+    /** без предупреждений о незарегистрированных компонентах */
+    quiet?: boolean;
+    /** мс синхронной работы до scheduler.yield(); Infinity — всё синхронно. Default 8 */
+    budget?: number;
+    /** дедлайн для idle-островов, мс. Default 2000 */
+    idleTimeout?: number;
+}
+export interface HydrateHandle {
+    el: HTMLElement;
+    name: string;
+    /** undefined, пока остров ждёт своей стратегии загрузки */
+    api: unknown;
+    ready: Promise<unknown>;
+}
+/**
+ * Оживить серверный HTML: [data-aegis] (включая сам root). Идемпотентна.
+ * Сначала засевает кэш из <script type="application/json" data-aegis-cache>.
+ * События: aegis:hydrate (cancelable), aegis:hydrated (detail: { name, api }), aegis:destroy.
+ * Первый кусок монтируется синхронно; handles.ready — Promise завершения eager-части.
+ */
+export function hydrate(root?: Document | Element, opts?: HydrateOptions): HydrateHandle[] & { ready: Promise<void> };
+export namespace hydrate {
+    /** Авто-hydrate(document) после register(). Default true */
+    let auto: boolean;
+}
 export function destroy(el: Element): void;
 export function destroyAll(root?: Document | Element): void;
 
@@ -594,6 +659,12 @@ export const VERSION: string;
 
 // ── Default Export ─────────────────────────────────────────────
 
+/**
+ * Сделать Aegis глобальным (window.Aegis) для inline-скриптов без import.
+ * Не делается автоматически: модуль-левел глобал ломает tree-shaking.
+ */
+export function expose(target?: object): typeof Aegis;
+
 declare const Aegis: {
     VERSION: string;
     signal: typeof signal;
@@ -601,6 +672,8 @@ declare const Aegis: {
     effect: typeof effect;
     batch: typeof batch;
     untrack: typeof untrack;
+    getOwner: typeof getOwner;
+    runWithOwner: typeof runWithOwner;
     isSignal: typeof isSignal;
     reactive: typeof reactive;
     isReactive: typeof isReactive;
@@ -618,6 +691,9 @@ declare const Aegis: {
     clsMap: typeof clsMap;
     styleMap: typeof styleMap;
     ref: typeof ref;
+    attach: typeof attach;
+    clone: typeof clone;
+    expose: typeof expose;
     on: typeof on;
     delegate: typeof delegate;
     interval: typeof interval;
