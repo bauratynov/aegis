@@ -46,7 +46,10 @@ export type ClassValue = string | null | undefined | false | ClassValue[] | Reco
 
 export function signal<T>(initial: T, nameOrOpts?: string | SignalOptions<T>): Signal<T>;
 export function computed<T>(fn: (prev: T) => T, nameOrOpts?: string | ComputedOptions<T>): ReadonlySignal<T>;
-export function effect(fn: () => void | (() => void), name?: string): () => void;
+export interface EffectOptions { name?: string; /** печатать причину каждого перезапуска (dev) */ trace?: boolean }
+export function effect(fn: () => void | (() => void), nameOrOpts?: string | EffectOptions): () => void;
+/** Отладка: печатать стек каждой записи в сигнал. trace(sig, false) — выключить */
+export function trace<T extends Signal<any>>(sig: T, on?: boolean): T;
 export function batch<T>(fn: () => T): T;
 
 // ── Dev & testing ──────────────────────────────────────────────
@@ -109,7 +112,20 @@ export function isSignal(v: unknown): v is Signal<unknown>;
 
 // ── Reactive Object ────────────────────────────────────────────
 
-export function reactive<T extends object>(obj: T): T;
+export interface ReactiveExtras<T> {
+    readonly $signals: Record<string, Signal<unknown>>;
+    readonly $raw: T;
+    $snapshot(): T;
+    $patch(patch: Partial<T>): void;
+    /** effect над глубоким снимком */
+    $subscribe(fn: (snapshot: T) => void): () => void;
+    $reset(): void;
+}
+/**
+ * Глубоко-реактивный объект: поля → сигналы, геттеры → computed, методы → batched actions;
+ * массивы и plain-объекты реактивны глубоко, Date/Map/File/DOM — как есть. { shallow: true } = store()
+ */
+export function reactive<T extends object>(obj: T, opts?: { shallow?: boolean }): T & ReactiveExtras<T>;
 export function isReactive(v: unknown): boolean;
 
 // ── Scope ──────────────────────────────────────────────────────
@@ -123,6 +139,8 @@ export interface Scope {
     [Symbol.dispose]?(): void;
     /** Возвращает unregister — снять cleanup досрочно */
     onDispose(fn: () => void): () => void;
+    /** Обработчик ошибок эффектов этого scope и вложенных; ошибки несут e.aegis = { effect, scope, changed } */
+    onError(fn: (error: any) => void): () => void;
     dispose(): void;
 }
 
@@ -763,6 +781,12 @@ export interface ComponentContext<E extends Element = HTMLElement> {
     selector: typeof selector;
     /** Pre-bound guardedFetch — already tied to this component's scope */
     guardedFetch: GuardedFetch;
+    /** то же, короткое имя */
+    fetch: GuardedFetch;
+    /** scope компонента (для кода после await: scope.run(() => …)) */
+    scope: Scope;
+    /** errorBoundary без расширения браузера: ошибки эффектов компонента */
+    onError(fn: (error: any) => void): () => void;
     debounced: typeof debounced;
     throttled: typeof throttled;
     poll: typeof poll;
@@ -790,6 +814,12 @@ export function mount<R = void>(
 ): ComponentResult<R> | undefined;
 
 /** D — форма data-* атрибутов элемента (JSON-значения парсятся); каст непроверяемый, как defineProps<T>() */
+/** Компонент = функция (ctx) => Node | api | void; ctx.props — reactive()-объект props */
+export type Component<P = Record<string, any>, R = void | object | Node> = (ctx: ComponentContext & { props: P & ReactiveExtras<P> }) => R | Promise<R>;
+/** Остров из компонента-функции: data-* (с types) → ctx.props */
+export function island<P = Record<string, any>>(name: string, component: Component<P>, opts?: { types?: Record<string, PropType> }): void;
+/** Custom element из того же компонента: атрибуты → ctx.props (реактивно) */
+export function element<P = Record<string, any>>(tag: string, component: Component<P>, opts?: { props?: Record<string, PropType | { type: PropType; default?: unknown; reflect?: boolean }>; shadow?: boolean; styles?: CSSStyleSheet | string }): void;
 export type IslandSetup<D = Record<string, unknown>> = (el: HTMLElement, data: D, ctx: ComponentContext<HTMLElement>) => void | object | Node | Promise<void | object | Node>;
 /**
  * Зарегистрировать компонент по имени; { load } — код острова грузится import()-ом при монтировании
@@ -981,7 +1011,11 @@ export interface RouteContext<D = unknown> {
     route: RouteInfo;
     from: RouteInfo;
 }
-export type RouteHandler<D = unknown> = (params: Record<string, string>, ctx: RouteContext<D>) => void | Promise<void>;
+/** '/users/:id/posts/:postId' → { id: string; postId: string } */
+export type RouteParams<P extends string> = P extends `${string}:${infer Name}/${infer Rest}`
+    ? { [K in Name | keyof RouteParams<`/${Rest}`>]: string }
+    : P extends `${string}:${infer Name}` ? { [K in Name]: string } : Record<string, string>;
+export type RouteHandler<D = unknown, P extends string = string> = (params: RouteParams<P>, ctx: RouteContext<D>) => void | Promise<void>;
 export interface RouteDef<D = unknown> {
     handler?: RouteHandler<D>;
     /** данные до dispose старой страницы; отменяется через signal при новой навигации */
@@ -1048,7 +1082,7 @@ export interface Router {
  * guard/redirect как данные, search-параметры как сигналы, ленивые маршруты через import().
  * Не перехватывает: hash-ссылки, формы, download, data-aegis-reload, несовпавшие пути (уходят на сервер).
  */
-export function router(routes: Record<string, RouteHandler | RouteDef>, opts?: RouterOptions): Router;
+export function router<R extends Record<string, RouteHandler<any, any> | RouteDef>>(routes: { [K in keyof R & string]: RouteHandler<any, K> | (RouteDef & { handler?: RouteHandler<any, K> }) }, opts?: RouterOptions): Router;
 /** Идёт View Transition роутера */
 export const transitioning: ReadonlySignal<boolean>;
 
@@ -1206,6 +1240,9 @@ declare const Aegis: {
     reducedMotion: typeof reducedMotion;
     theme: typeof theme;
     getOwner: typeof getOwner;
+    trace: typeof trace;
+    island: typeof island;
+    element: typeof element;
     runWithOwner: typeof runWithOwner;
     isSignal: typeof isSignal;
     reactive: typeof reactive;

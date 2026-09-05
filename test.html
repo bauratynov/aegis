@@ -35,7 +35,7 @@
         resource, watch, store, portal, transition, errorBoundary, ref,
         reactive, isReactive,
         form, required, minLen, maxLen, emailRule, matches,
-        wireForm, cachedResource, invalidate, seed, seedFrom, attach, clone, expose, getOwner, runWithOwner, configure, request, api, HttpError, mutation, streamResource, settled, prefetch, infiniteResource, dev, onWarn, AegisWarning, reset, flushSync, root, until, from, history as undoHistory, size, inView, viewport, springSignal, tween, modal, scaffold, setValidationMessages, maxSize, mime, maxFiles, createContext, provide, inject, persisted, linked, selector, when, cssVars, media, defaults, swap, boost, tpl, adopt, jsonScript,
+        wireForm, cachedResource, invalidate, seed, seedFrom, attach, clone, expose, getOwner, runWithOwner, configure, request, api, HttpError, mutation, streamResource, settled, prefetch, infiniteResource, dev, onWarn, AegisWarning, reset, flushSync, root, until, trace, island, element, from, history as undoHistory, size, inView, viewport, springSignal, tween, modal, scaffold, setValidationMessages, maxSize, mime, maxFiles, createContext, provide, inject, persisted, linked, selector, when, cssVars, media, defaults, swap, boost, tpl, adopt, jsonScript,
         spring, flip, animate,
         trap, roving, announce,
         css, adoptStyles, scopedStyle,
@@ -2055,6 +2055,128 @@
         const pv = f.preview('avatar');
         assert('wireForm: preview() даёт objectURL', typeof pv.value === 'string' && pv.value.startsWith('blob:'));
         scope.dispose();
+        sandbox.innerHTML = '';
+    })();
+
+    section('💎 #54/#53/#34 — ошибки с контекстом, errorBoundary, trace, ctx did-you-mean');
+
+    await (async () => {
+        const host = document.createElement('div');
+        sandbox.appendChild(host);
+        const user = signal({ name: 'a' });
+        let caught = null;
+        errorBoundary(host, ({ html, effect }) => {
+            effect(() => { host.title = user.value.name; }, 'title-effect');
+            return html`<i>ok</i>`;
+        }, (e) => { caught = e; });
+        user.value = null;   // TypeError внутри эффекта после mount
+        assert('errorBoundary: ловит ошибку эффекта после mount', caught instanceof TypeError);
+        assert('ошибка с контекстом: effect, scope, изменившиеся сигналы', caught.aegis && caught.aegis.effect === 'title-effect' && /component:/.test(caught.aegis.scope) && caught.message.includes('in effect "title-effect"'));
+        destroyAll(host); sandbox.innerHTML = '';
+
+        const scope = createScope();
+        let seen = null;
+        const s = signal(0);
+        scope.run(() => { scope.onError(e => { seen = e.message; }); effect(() => { if (s.value === 1) throw new Error('boom'); }); });
+        let thrown = false;
+        try { s.value = 1; } catch (e) { thrown = true; }
+        assert('scope.onError: поглощает ошибку эффекта, наружу не бросает', !thrown && seen.startsWith('boom'));
+        scope.dispose();
+
+        const logs = [];
+        const origGroup = console.groupCollapsed, origTrace = console.trace, origEnd = console.groupEnd;
+        console.groupCollapsed = (m) => logs.push(m); console.trace = () => {}; console.groupEnd = () => {};
+        const t = signal(1, 'tsig');
+        trace(t);
+        t.value = 2;
+        const s2 = createScope();
+        s2.run(() => effect(() => { t.value; }, { name: 'tr', trace: true }));
+        t.value = 3;
+        console.groupCollapsed = origGroup; console.trace = origTrace; console.groupEnd = origEnd;
+        assert('trace(): запись сигнала и перезапуск эффекта печатаются с причиной', logs.some(l => l.includes('signal "tsig" set 1 → 2')) && logs.some(l => l.includes('effect "tr" — changed: tsig → 3')));
+        s2.dispose();
+
+        const codes = [];
+        const off = onWarn(w => codes.push(w.code + ':' + w.fix));
+        dev.resetWarnings();
+        const h2 = document.createElement('div'); sandbox.appendChild(h2);
+        component(h2, ({ resourse, signl }) => { void resourse; void signl; });
+        off();
+        assert('ctx did-you-mean: опечатка → E026 с подсказкой', codes.some(c => c.startsWith('E026') && c.includes('resource')) && codes.some(c => c.startsWith('E026') && c.includes('signal')));
+        destroyAll(h2); sandbox.innerHTML = '';
+    })();
+
+    section('💎 #117/#123 — прямая подписка сигнала, LIS в list()');
+
+    await (async () => {
+        const a = signal('x');
+        const scope = createScope();
+        const frag = scope.run(() => html`<p class="dp">${a}</p><input class="dv" .value=${a}>`);
+        sandbox.appendChild(frag);
+        const subsBefore = a.subs.size;
+        assert('${sig} в тексте: прямая подписка без effect', subsBefore >= 1 && [...a.subs].every(o => o._name === 'subscriber'));
+        a.value = 'y';
+        assert('${sig}: обновляет текст и свойство', sandbox.querySelector('.dp').textContent === 'y' && sandbox.querySelector('.dv').value === 'y');
+        scope.dispose();
+        assert('${sig}: dispose отписывает', a.subs.size === 0);
+        sandbox.innerHTML = '';
+
+        const items = signal(Array.from({ length: 8 }, (_, i) => ({ id: i })));
+        const s2 = createScope();
+        s2.run(() => sandbox.appendChild(list(items, it => html`<i>${it.id}</i>`, { key: 'id' })));
+        flushSync();
+        const orig = Node.prototype.insertBefore;
+        let moves = 0;
+        Node.prototype.insertBefore = function (...args) { moves++; return orig.apply(this, args); };
+        const arr = items.value.slice(); [arr[1], arr[6]] = [arr[6], arr[1]];
+        items.value = arr;
+        const after = [...sandbox.querySelectorAll('i')].map(n => n.textContent).join('');
+        Node.prototype.insertBefore = orig;
+        assert('list LIS: swap двух строк — минимум перемещений, порядок верный', after === '06234517' && moves <= 2);
+        let moves2 = 0;
+        Node.prototype.insertBefore = function (...args) { moves2++; return orig.apply(this, args); };
+        items.value = items.value.slice().reverse();
+        const rev = [...sandbox.querySelectorAll('i')].map(n => n.textContent).join('');
+        Node.prototype.insertBefore = orig;
+        assert('list LIS: reverse — порядок верный, перемещений n-1', rev === '71543260' && moves2 <= 7);
+        s2.dispose(); sandbox.innerHTML = '';
+    })();
+
+    section('💎 #55/#69 — reactive 2.0 и единый контракт компонента');
+
+    await (async () => {
+        const st = reactive({
+            items: [1], when: new Date(2026, 0, 1),
+            get count() { return this.items.length; },
+            add(x) { this.items.push(x); this.items.push(x + 1); },
+        });
+        let runs = 0, seen = null;
+        const scope = createScope();
+        scope.run(() => { effect(() => { st.count; runs++; }); st.$subscribe(snap => { seen = snap; }); });
+        runs = 0;
+        st.add(5);
+        assert('reactive: getter → computed, метод → batched action', st.count === 3 && runs === 1);
+        assert('reactive: Date не оборачивается', st.when instanceof Date && typeof st.when.getTime === 'function');
+        assert('reactive: $subscribe со снимком', seen && seen.items.length === 3);
+        st.$patch({ items: [9] });
+        assert('reactive: $patch и $snapshot', st.count === 1 && st.$snapshot().items[0] === 9);
+        st.$reset();
+        assert('reactive: $reset к initial', st.items.length === 1 && st.items[0] === 1 && st.count === 1);
+        scope.dispose();
+
+        const Counter = ({ props, html }) => { const n = signal(props.count ?? 0); return html`<button class="cnt" @click=${() => n.value++}>${n}</button>`; };
+        island('uni-counter', Counter, { types: { count: Number } });
+        const host = document.createElement('div');
+        host.innerHTML = '<div data-aegis="uni-counter" data-count="5"></div>';
+        sandbox.appendChild(host);
+        hydrate(host);
+        assert('island(): компонент-функция с props', host.querySelector('button.cnt').textContent === '5');
+        element('x-uni-counter', Counter, { props: { count: Number } });
+        const ce = document.createElement('x-uni-counter');
+        ce.setAttribute('count', '7');
+        sandbox.appendChild(ce);
+        await wait(0);
+        assert('element(): тот же компонент как custom element', ce.querySelector('button.cnt')?.textContent === '7');
         sandbox.innerHTML = '';
     })();
 

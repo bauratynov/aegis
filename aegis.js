@@ -190,6 +190,20 @@ function _unsubscribe(obs) {
     obs._evict = null;
 }
 
+/** Список изменившихся зависимостей (для ошибок и trace) */
+function _changedDeps(obs) {
+    const out = [];
+    const deps = obs._deps, vers = obs._vers;
+    if (!deps) return out;
+    for (let i = 0; i < deps.length; i++) {
+        if (deps[i].version() !== vers[i]) out.push({ name: deps[i]._name || 'signal', value: _short(deps[i].peek()) });
+    }
+    return out;
+}
+function _short(v) {
+    try { const s = typeof v === 'string' ? JSON.stringify(v) : JSON.stringify(v) ?? String(v); return s.length > 60 ? s.slice(0, 57) + '…' : s; } catch (e) { return String(v); }
+}
+
 /** Изменилась ли хоть одна зависимость с момента последнего запуска */
 function _depsChanged(obs) {
     const deps = obs._deps, vers = obs._vers;
@@ -222,6 +236,7 @@ class Signal {
             });
         }
         if (this._eq(this._value, v)) return;
+        if (this._traceSet) { console.groupCollapsed(`▸ [Aegis] signal "${this._name || '?'}" set ${_short(this._value)} → ${_short(v)}`); console.trace(); console.groupEnd(); }
         this._value = v;
         this._version = ++_epoch;
         if (this.subs) _notify(this.subs);
@@ -248,6 +263,12 @@ Signal.prototype[SIGNAL] = true;
  */
 export function signal(initial, nameOrOpts) {
     return new Signal(initial, _nm(nameOrOpts), _eqOf(nameOrOpts));
+}
+
+/** Отладка: печатать стек каждой записи в сигнал (trace(sig)) или причину перезапуска эффекта (effect(fn, { trace: true })) */
+export function trace(sig, on = true) {
+    if (sig && typeof sig === 'object') sig._traceSet = on;
+    return sig;
 }
 
 /** Является ли объект сигналом (signal или computed) */
@@ -358,10 +379,11 @@ export function computed(fn, nameOrOpts) {
 // ---- Effect ------------------------------------------------------------------
 
 class Effect {
-    constructor(fn, name, owner) {
+    constructor(fn, name, owner, trace) {
         this._fn = fn;
         this._name = name || 'effect';
         this._owner = owner;        // scope, под которым выполняется КАЖДЫЙ запуск
+        this._trace = !!trace;
         this._cleanup = null;
         this._disposed = false;
         this._queued = false;
@@ -375,6 +397,12 @@ class Effect {
         if (this._disposed) return;
         // pull-фаза: запускаться только если зависимости реально изменились
         if (this._deps && this._deps.length > 0 && !_depsChanged(this)) return;
+        if (this._trace && this._deps) {
+            const changed = _changedDeps(this);
+            console.groupCollapsed(`▸ [Aegis] effect "${this._name}" — changed: ${changed.map(d => `${d.name} → ${d.value}`).join(', ') || '(first run)'}`);
+            console.trace();
+            console.groupEnd();
+        }
         this._execute();
     }
     _runCleanup() {
@@ -428,8 +456,10 @@ Effect.prototype._isComputed = false;
  *
  * Dev warning если вызван вне scope
  */
-export function effect(fn, name) {
+export function effect(fn, nameOrOpts) {
     const owner = _currentScope;
+    let name = typeof nameOrOpts === 'string' ? nameOrOpts : (nameOrOpts && nameOrOpts.name) || null;
+    const trace = !!(nameOrOpts && typeof nameOrOpts === 'object' && nameOrOpts.trace);
     const explicitName = !!name;                   // именованные (движок, пользователь с name) — без детектора E019
     if (!name && _dev()) name = fn.name || null;   // авто-имя в dev: function search() {…} → "search"
     if (!owner) {
@@ -439,7 +469,7 @@ export function effect(fn, name) {
             fix: `Wrap in component(el, ({ effect }) => { ... }) or scope.run(() => effect(...))`,
         });
     }
-    const node = new Effect(fn, name, owner);
+    const node = new Effect(fn, name, owner, trace);
     const dispose = () => node.dispose();
     // Регистрируем до первого запуска: в уже уничтоженном scope effect не стартует
     node._unreg = owner ? owner.onDispose(dispose) : null;
@@ -549,6 +579,22 @@ function _notify(subs) {
     if (_notifyDepth === 0 && _batchDepth === 0) _flush();
 }
 
+function _scopePath(scope) {
+    const parts = [];
+    for (let sc = scope; sc && parts.length < 4; sc = sc.parent) if (sc.name) parts.push(sc.name);
+    return parts.join(' ‹ ');
+}
+/** Ошибка вверх по scope-дереву до первого onError; true — поглощена */
+function _dispatchError(scope, e) {
+    for (let sc = scope; sc; sc = sc.parent) {
+        if (sc._errHandlers && sc._errHandlers.length) {
+            for (const h of sc._errHandlers) { try { h(e); } catch (x) { console.error('[Aegis] onError handler failed:', x); } }
+            return true;
+        }
+    }
+    return false;
+}
+
 function _flush() {
     if (_flushing || _batchDepth > 0 || _queue.length === 0) return;
     _flushing = true;
@@ -572,6 +618,11 @@ function _flush() {
                 try {
                     obs._run();
                 } catch (e) {
+                    if (e && typeof e === 'object' && !e.aegis) {
+                        e.aegis = { effect: obs._name, scope: _scopePath(obs._owner), changed: _changedDeps(obs) };
+                        try { e.message += `\n    in effect "${obs._name}"${e.aegis.scope ? ' · ' + e.aegis.scope : ''}${e.aegis.changed.length ? '\n    changed: ' + e.aegis.changed.map(d => d.name + ' → ' + d.value).join(', ') : ''}`; } catch (m) { /* readonly message */ }
+                    }
+                    if (_dispatchError(obs._owner, e)) continue;   // поглощена scope.onError / errorBoundary
                     // не бросать остальные effects раунда; первую ошибку пробросить после
                     if (error) console.error(`[Aegis] error in "${obs._name}":`, e);
                     else error = e;
@@ -635,6 +686,12 @@ class Scope {
      * timeout/снятый listener не держал замыкание до смерти scope.
      * На уничтоженном scope — вызывается сразу.
      */
+    /** Обработчик ошибок эффектов этого scope и вложенных (errorBoundary без расширения браузера) */
+    onError(fn) {
+        (this._errHandlers || (this._errHandlers = [])).push(fn);
+        return () => { const i = this._errHandlers.indexOf(fn); if (i >= 0) this._errHandlers.splice(i, 1); };
+    }
+
     onDispose(fn) {
         if (this._disposed) { fn(); return _noop; }
         this._disposers.add(fn);
