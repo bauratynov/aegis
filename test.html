@@ -2951,6 +2951,92 @@
         defaults.motion = true;
     })();
 
+    section('💎 кэш фаза 3 — лимиты SIEVE, байтовый бюджет, ленивое истечение, планировщик, polling');
+
+    await (async () => {
+        reset();
+        const T = await import('./aegis-test.js');
+        const seen = [];
+        const off = onWarn(w => seen.push(w));
+        dev.resetWarnings();
+        const fetcher = async (u) => ({ u, rows: Array.from({ length: 50 }, (_, i) => ({ id: i, name: 'row ' + i })) });
+
+        // maxEntries: незанятые записи вытесняются по SIEVE, занятые остаются
+        configure({ cache: { maxEntries: 5 } });
+        const sc = createScope();
+        let live;
+        sc.run(() => { live = resource('/t3/live', { cache: true, fetcher }); });
+        await settled();
+        for (let i = 0; i < 10; i++) cache.set('/t3/idle/' + i, { i });
+        assert('SIEVE: размер кэша ≤ maxEntries, живая запись не вытеснена', cache.size().entries <= 5 && cache.has('/t3/live') && cache.size().evictions >= 5);
+        cache.get('/t3/idle/9');                   // «посещена» — переживёт следующий проход
+        for (let i = 10; i < 12; i++) cache.set('/t3/idle/' + i, { i });   // 2 вставки при 4 свободных слотах: посещённая переживает
+        assert('SIEVE: посещённая запись переживает проход, старые непосещённые уходят', cache.has('/t3/idle/9') && !cache.has('/t3/idle/1'));
+
+        // pin: не вытесняется
+        cache.remove('/t3/idle*');
+        sc.run(() => { resource('/t3/pinned', { cache: { pin: true }, fetcher }); });
+        await settled();
+        for (let i = 20; i < 30; i++) cache.set('/t3/idle/' + i, { i });
+        assert('SIEVE: pin защищает запись', cache.has('/t3/pinned'));
+        sc.dispose();
+
+        // maxBytes: байтовый бюджет
+        reset();
+        configure({ cache: { maxEntries: 500, maxBytes: 20000 } });
+        for (let i = 0; i < 20; i++) cache.set('/t3/big/' + i, { rows: Array.from({ length: 100 }, (_, k) => ({ id: k, name: 'row number ' + k })) });
+        const sz = cache.size();
+        assert('maxBytes: суммарный размер ≤ бюджета, часть записей вытеснена', sz.bytes <= 20000 && sz.entries < 20 && sz.evictions > 0);
+        configure({ cache: { maxEntries: 500, maxBytes: 0 } });
+
+        // ленивое истечение без таймера на запись: cacheTime: Infinity живёт, обычная истекает при следующем обращении
+        reset();
+        const clock = T.fakeClock(5_000_000);
+        const sc2 = createScope();
+        sc2.run(() => { resource('/t3/inf', { cache: true, cacheTime: Infinity, fetcher }); resource('/t3/short', { cache: true, cacheTime: 1000, fetcher }); });
+        await settled();
+        sc2.dispose();
+        clock.set(5_000_000 + 5000);
+        assert('lazy GC: истёкшая запись собрана, cacheTime: Infinity живёт до лимитов', !cache.has('/t3/short') && cache.has('/t3/inf') && cache.explain('/t3/inf').gcIn === Infinity);
+        clock.restore();
+
+        // планировщик: focus → одна склейка, token bucket, приоритет, стаггер; события в скрытой вкладке откладываются
+        reset();
+        configure({ revalidate: { focus: 5000, reconnect: 2000, concurrency: 2, stagger: 0, reconnectJitter: 0 } });
+        let calls = 0;
+        const f2 = async (u) => { calls++; return { u }; };
+        const sc3 = createScope();
+        sc3.run(() => { for (let i = 0; i < 6; i++) resource('/t3/rv/' + i, { cache: true, staleTime: 0, fetcher: f2 }); });
+        await settled();
+        calls = 0;
+        window.dispatchEvent(new Event('focus'));
+        window.dispatchEvent(new Event('focus'));          // второй в пределах bucket — дропается
+        await T.waitFor(() => calls === 6, { timeout: 2000 });
+        assert('scheduler: focus перезапросил все живые записи ровно один раз (склейка + token bucket)', calls === 6);
+        calls = 0;
+        window.dispatchEvent(new Event('online'));
+        await T.waitFor(() => calls === 6, { timeout: 2000 });
+        assert('scheduler: reconnect с джиттером 0 — те же 6, не 12', calls === 6);
+        sc3.dispose();
+        configure({ revalidate: { focus: 5000, reconnect: 2000, concurrency: 6, stagger: 40, reconnectJitter: 2000 } });
+
+        // polling: interval с функцией от данных, backoff при ошибке, один таймер
+        reset();
+        let n = 0;
+        const sc4 = createScope();
+        let pr;
+        sc4.run(() => { pr = resource('/t3/poll', { cache: true, interval: (d) => (d && d.n >= 3 ? 0 : 60), fetcher: async () => ({ n: ++n }) }); });
+        await settled();
+        await T.waitFor(() => n >= 3, { timeout: 5000 });
+        const nAt3 = n;
+        await wait(250);
+        assert('poll: interval как функция от данных — остановился на n=3', nAt3 === 3 && n === 3 && pr.data.value.n === 3);
+        sc4.dispose();
+
+        off(); dev.resetWarnings(); reset();
+        defaults.motion = true;
+    })();
+
     section('component() & destroy()');
 
     (() => {

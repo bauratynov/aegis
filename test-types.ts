@@ -93,7 +93,7 @@ router({
 });
 
 // ── cache API, useClock, invalidate grammar
-import { cache, useClock, invalidate, mutation } from './aegis.js';
+import { cache, useClock, invalidate, mutation, configure } from './aegis.js';
 const cached: User[] | undefined = cache.get<User[]>(['users', 1]);
 cache.set({ b: 1, a: 2 }, { x: 1 }, { staleTime: 30_000 });
 const ex = cache.explain('/api/users'); const st: 'fresh' | 'stale' | 'inflight' | 'error' | 'empty' | 'absent' = ex.state; void st; void cached;
@@ -102,7 +102,9 @@ const offCache = cache.on((key, ev) => { void key; void ev.result; }); offCache(
 const restore = useClock(() => 1000); restore();
 await invalidate('/api/users*'); await invalidate(['users', 42]); await invalidate({ tags: ['users'], refetch: 'all' }); await invalidate((k) => k.startsWith('/api/'));
 mutation(async () => 1, { invalidates: ['/api/users*', ['users']], awaitInvalidates: false });
-resource('/api/rows', { cache: { key: ['rows', () => 1], tags: 'rows' }, share: 'uuid', dedupe: false });
+resource('/api/rows', { cache: { key: ['rows', () => 1], tags: 'rows', interval: (d: unknown) => (d ? 0 : 5000), background: true, pin: true, cacheTime: Infinity }, share: 'uuid', dedupe: false });
+configure({ cache: { maxEntries: 200, maxBytes: 4 << 20 }, revalidate: { focus: 10_000, concurrency: 4, stagger: 20 } });
+const sz: number = cache.size().bytes; void sz; cache.stats().limits.maxEntries;
 
 // ── aegis/test — render / fire / waitFor / mockFetch
 import { render, fire, waitFor, mockFetch, cleanup, withScope, fakeClock } from './aegis-test.js';

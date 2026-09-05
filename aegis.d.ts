@@ -431,6 +431,10 @@ export interface CsrfConfig {
 export interface AegisConfig {
     /** делегирование событий: один listener на document для перечисленных типов (только всплывающие; capture/passive/once и @ev.direct — напрямую) */
     delegateEvents?: string[] | null;
+    /** ёмкость SWR-кэша: maxEntries (default 500, SIEVE-вытеснение среди незанятых записей), maxBytes (default 0 — без лимита) */
+    cache?: { maxEntries?: number; maxBytes?: number };
+    /** планировщик ревалидации: refill token bucket на причину (мс), параллелизм, стаггер между стартами, джиттер reconnect */
+    revalidate?: { focus?: number; reconnect?: number; concurrency?: number; stagger?: number; reconnectJitter?: number };
     /** пресет или своя схема; null — выключить; без вызова — автодетект из <meta name="aegis-csrf"> / <meta name="csrf-token"> */
     csrf?: CsrfPreset | CsrfConfig | null;
     /** заголовки по умолчанию (default: X-Requested-With: XMLHttpRequest) */
@@ -547,11 +551,18 @@ export interface CacheOptions {
     /** теги для invalidate({ tags }) */
     tags?: string | string[];
     staleTime?: number;
+    /** мс до сборки незанятой записи; Infinity — держать до вытеснения по лимитам */
     cacheTime?: number;
     /** держать старые данные при смене URL (default true для реактивного source) */
     keepPrevious?: boolean;
-    /** default ['focus', 'reconnect']; [] — выключить */
+    /** default ['focus', 'reconnect']; [] — выключить. События, пришедшие в скрытой вкладке, применяются при возврате в неё */
     revalidateOn?: Array<'focus' | 'reconnect'>;
+    /** polling: мс или функция от данных (0 — стоп); один таймер на все ресурсы, сетка 1 с, backoff при ошибках, сон в скрытой вкладке */
+    interval?: number | ((data: any) => number);
+    /** продолжать polling в скрытой вкладке (браузер всё равно троттлит) */
+    background?: boolean;
+    /** не вытеснять запись по лимитам кэша */
+    pin?: boolean;
 }
 export interface OfflineOptions {
     dbName?: string;
@@ -711,7 +722,7 @@ export interface CacheExplain {
     tags?: string[] | null; prefetched?: string | null; history: CacheEvent[];
 }
 export interface CacheEntryStats { key: string; state: CacheState; age: number | null; staleTime: number; subscribers: number; inflight: boolean; error: string | null; size: number; gcIn: number | null; fetches: number; unchanged: number; suggestedStaleTime: number | null; prefetched: string | null; tags: string[] | null }
-export interface CacheStats { entries: CacheEntryStats[]; prefetch: { fired: number; used: number; wasted: number; byKind: Record<string, { p: number; n: number }> }; now: number }
+export interface CacheStats { entries: CacheEntryStats[]; prefetch: { fired: number; used: number; wasted: number; byKind: Record<string, { p: number; n: number }> }; bytes: number; evictions: number; limits: { maxEntries: number; maxBytes: number }; now: number }
 /** Публичный доступ к кэшу ресурсов — ключи нормализуются как в resource() */
 export const cache: {
     get<T = unknown>(key: string | CacheKeyPart[] | Record<string, unknown>): T | undefined;
@@ -728,6 +739,8 @@ export const cache: {
     on(fn: (key: string, ev: CacheEvent) => void): () => void;
     /** явная сборка мусора по часам (тесты с fakeClock, low-memory); возвращает число удалённых */
     gc(now?: number): number;
+    /** записи, байты (при maxBytes), вытеснения и лимиты */
+    size(): { entries: number; bytes: number; evictions: number; maxEntries: number; maxBytes: number };
     /** почему запись свежая/устаревшая, кто её запрашивал, что рекомендовать */
     explain(key: string | CacheKeyPart[]): CacheExplain;
     stats(): CacheStats;
