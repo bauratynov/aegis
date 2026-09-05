@@ -91,6 +91,16 @@ export function persisted<T>(key: string, initial: T, opts?: {
 /** Writable derived: запись живёт до следующего изменения источника */
 export function linked<T>(source: () => T, name?: string): Signal<T>;
 export function linked<S, T>(opts: { source: () => S; compute: (source: S, prev: { source: S; value: T } | undefined) => T }, name?: string): Signal<T>;
+/** Внешний источник как сигнал: (EventTarget, event, map) | (producer(set) => unsubscribe, initial) | { subscribe } */
+export function from<T, E extends EventTarget = EventTarget>(target: E, event: string, map?: (target: E) => T): ReadonlySignal<T>;
+export function from<T>(producer: (set: (v: T) => void) => (() => void) | void, initial?: T): ReadonlySignal<T>;
+export function from<T>(subscribable: { subscribe(fn: (v: T) => void): (() => void) | { unsubscribe(): void }; value?: T; peek?(): T }): ReadonlySignal<T>;
+/** Undo/redo для сигнала, reactive() или store() */
+export function history<T>(source: Signal<T> | object, opts?: { limit?: number; debounce?: number }): {
+    undo(): void; redo(): void; canUndo: ReadonlySignal<boolean>; canRedo: ReadonlySignal<boolean>;
+    pause(): void; resume(): void; commit(): void; clear(): void;
+    past: ReadonlySignal<unknown[]>; future: ReadonlySignal<unknown[]>;
+};
 /** O(2) обновлений вместо N для «выбранной строки»: const isSelected = selector(selectedId) */
 export function selector<K, S = K>(source: Signal<S> | ReadonlySignal<S> | (() => S), equals?: (source: S, key: K) => boolean): (key: K) => boolean;
 /** Выполнить fn без подписки на прочитанные сигналы */
@@ -205,6 +215,8 @@ export function theme(opts?: { attr?: string; storage?: string }): { mode: Signa
 export interface ShowOptions {
     /** Ветки создаются один раз и прячутся через display:none (аналог v-show): DOM и состояние сохраняются */
     keep?: boolean;
+    /** CSS-контракт `${name}-enter-from|active|to` / `${name}-leave-*` (true → 'aegis'); leave доигрывается до удаления */
+    transition?: boolean | string;
 }
 export function show(
     condition: Signal<boolean> | (() => boolean) | boolean,
@@ -220,10 +232,25 @@ export interface RowIndex {
     subscribe(fn: (i: number) => void): () => void;
 }
 
-export interface ListOptions {
-    enter?: (el: Element) => void;
-    exit?: (el: Element) => Promise<void> | void;
+export interface ListOptions<T = any> {
+    key?: string | ((item: T, index: number) => string | number);
+    /** разметка пустого списка */
+    fallback?: (() => Node | DocumentFragment | string) | Node;
+    /** CSS-контракт enter/leave для строк (true → 'aegis'); уходящая строка получает data-leaving */
+    transition?: boolean | string;
+    /** 'signal' — renderFn получает Signal<T>; замена объекта под ключом патчит сигнал вместо перерисовки */
+    item?: 'signal';
 }
+export function list<T>(
+    items: Signal<T[]> | ReadonlySignal<T[]> | (() => T[]) | T[],
+    renderFn: (item: Signal<T>, index: RowIndex) => Node | Node[] | string | number,
+    opts: ListOptions<T> & { item: 'signal' }
+): Comment;
+export function list<T>(
+    items: Signal<T[]> | ReadonlySignal<T[]> | (() => T[]) | T[],
+    renderFn: (item: T, index: RowIndex) => Node | Node[] | string | number,
+    opts: ListOptions<T>
+): Comment;
 export function list<T>(
     items: Signal<T[]> | ReadonlySignal<T[]> | (() => T[]) | T[],
     /** index — сигнал: актуален после сортировки/удаления. Строка перерисовывается, если объект под ключом заменён */
@@ -378,6 +405,13 @@ export interface RetryOptions {
 }
 /** Повтор с exponential backoff и full jitter; уважает Retry-After; AbortError не повторяется */
 export function withRetry<T>(fn: (attempt: number) => Promise<T>, opts?: RetryOptions): Promise<T>;
+
+/** Размер элемента как сигналы (ResizeObserver) */
+export function size(el: Element, opts?: { box?: 'border-box' | 'content-box' }): { width: ReadonlySignal<number>; height: ReadonlySignal<number> };
+/** Видимость элемента как сигналы (IntersectionObserver) */
+export function inView(el: Element, opts?: IntersectionObserverInit): { visible: ReadonlySignal<boolean>; ratio: ReadonlySignal<number> };
+/** Окно как сигналы (singleton, один passive listener, запись в rAF) */
+export function viewport(): { width: ReadonlySignal<number>; height: ReadonlySignal<number>; scrollX: ReadonlySignal<number>; scrollY: ReadonlySignal<number> };
 
 export function debounced<T extends (...args: any[]) => any>(fn: T, ms: number): T & { cancel(): void };
 export function throttled<T extends (...args: any[]) => any>(fn: T, ms: number): T;
@@ -839,6 +873,7 @@ export function portal(
  * @param opts — CSS class names and optional duration
  * @returns effect disposer
  */
+/** Анимированный show/hide через CSS-контракт `${name}-enter-*` / `${name}-leave-*` (interrupt-safe); legacy { enter, enterActive, leave, leaveActive, duration } поддерживаются */
 export function transition(
     el: Element,
     condition: Signal<boolean> | (() => boolean) | boolean,
@@ -867,11 +902,22 @@ export interface SpringOptions {
 }
 
 export function spring(el: Element, props: Record<string, [from: string | number, to: string | number]>, opts?: SpringOptions): Animation;
+/** Пружина как значение: target пишем, current читаем; скорость сохраняется при смене цели */
+export function springSignal<T extends number | number[] | Record<string, number>>(initial: T, opts?: { stiffness?: number; damping?: number; mass?: number; precision?: number }): { target: Signal<T>; current: ReadonlySignal<T>; set(v: T, opts?: { hard?: boolean }): void };
+/** Твин как значение */
+export function tween<T extends number | number[] | Record<string, number>>(initial: T, opts?: { duration?: number; easing?: (t: number) => number }): { target: Signal<T>; current: ReadonlySignal<T>; set(v: T, opts?: { hard?: boolean }): void };
 export function flip(nodes: ArrayLike<Element>, opts?: { stiffness?: number; damping?: number }): () => void;
 export function animate(target: Element, mutate: () => void, opts?: { name?: string; cls?: string }): Promise<void>;
 
 // ── Accessibility ──────────────────────────────────────────────
 
+/** Нативная модалка: open → showModal(); Esc/close → open = false */
+export function modal(dialog: HTMLDialogElement, open: Signal<boolean>): () => void;
+/** Каркас register() для острова по его серверной разметке (dev) */
+export function scaffold(el: HTMLElement): string;
+/**
+ * Focus trap: Tab-цикл, autoFocus, возврат фокуса; escape / outside (release или свой обработчик); inert для фона (кроме allow)
+ */
 export function trap(container: Element, opts?: { autoFocus?: boolean }): () => void;
 export function roving(container: Element, opts?: {
     selector?: string;
@@ -885,6 +931,9 @@ export function announce(message: string, politeness?: 'polite' | 'assertive'): 
 
 export function css(strings: TemplateStringsArray | string, ...values: unknown[]): CSSStyleSheet;
 export function adoptStyles(root: Document | ShadowRoot, ...sheets: CSSStyleSheet[]): void;
+/** Стили в каскадном слое: css.layer('components')`.card { … }` */
+export namespace css { function layer(name: string): (strings: TemplateStringsArray | string, ...values: unknown[]) => CSSStyleSheet; }
+/** Scoped-стили без мутации id: атрибут data-aegis-css, один sheet на текст (refcount), снятие при dispose scope */
 export function scopedStyle(el: Element, cssText: string): CSSStyleSheet;
 
 // ── Custom Elements ────────────────────────────────────────────
@@ -1097,6 +1146,16 @@ export interface TranslationFunction {
  *
  * @param dict — flat key→translation map (single language)
  */
+/** Сообщения встроенных правил валидации: словарь по кодам или (code, params) => string; null — дефолт по <html lang> */
+export function setValidationMessages(dict: Record<string, string> | ((code: string, params?: Record<string, unknown>) => string) | null): void;
+export function maxSize(size: number | string, msg?: string): ValidationRule<any>;
+export function mime(types: string | string[], msg?: string): ValidationRule<any>;
+export function maxFiles(n: number, msg?: string): ValidationRule<any>;
+/**
+ * Переводы: plural через Intl.PluralRules ({ one, few, many, other } по params.n/count), вложенные ключи,
+ * реактивная локаль t.locale с ленивой подгрузкой (t.loading), Intl-форматтеры t.num/t.date/t.rel/t.list.
+ * i18n(flatDict) — плоский словарь одной локали.
+ */
 export function i18n(dict?: Record<string, string>): TranslationFunction;
 
 // ── Helpers ────────────────────────────────────────────────────
@@ -1222,6 +1281,19 @@ declare const Aegis: {
     flip: typeof flip;
     animate: typeof animate;
     trap: typeof trap;
+    modal: typeof modal;
+    scaffold: typeof scaffold;
+    from: typeof from;
+    history: typeof history;
+    size: typeof size;
+    inView: typeof inView;
+    viewport: typeof viewport;
+    springSignal: typeof springSignal;
+    tween: typeof tween;
+    setValidationMessages: typeof setValidationMessages;
+    maxSize: typeof maxSize;
+    mime: typeof mime;
+    maxFiles: typeof maxFiles;
     roving: typeof roving;
     announce: typeof announce;
     css: typeof css;

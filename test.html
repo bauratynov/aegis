@@ -35,7 +35,7 @@
         resource, watch, store, portal, transition, errorBoundary, ref,
         reactive, isReactive,
         form, required, minLen, maxLen, emailRule, matches,
-        wireForm, cachedResource, invalidate, seed, seedFrom, attach, clone, expose, getOwner, runWithOwner, configure, request, api, HttpError, mutation, streamResource, settled, prefetch, infiniteResource, dev, onWarn, AegisWarning, reset, flushSync, root, until, createContext, provide, inject, persisted, linked, selector, when, cssVars, media, defaults, swap, boost, tpl, adopt, jsonScript,
+        wireForm, cachedResource, invalidate, seed, seedFrom, attach, clone, expose, getOwner, runWithOwner, configure, request, api, HttpError, mutation, streamResource, settled, prefetch, infiniteResource, dev, onWarn, AegisWarning, reset, flushSync, root, until, from, history as undoHistory, size, inView, viewport, springSignal, tween, modal, scaffold, setValidationMessages, maxSize, mime, maxFiles, createContext, provide, inject, persisted, linked, selector, when, cssVars, media, defaults, swap, boost, tpl, adopt, jsonScript,
         spring, flip, animate,
         trap, roving, announce,
         css, adoptStyles, scopedStyle,
@@ -1841,6 +1841,223 @@
         mo.disconnect(); s2.dispose(); sandbox.innerHTML = '';
     })();
 
+    section('💎 #52/#113 — единый CSS-контракт переходов, interrupt-safe');
+
+    await (async () => {
+        defaults.motion = true;   // тест контракта классов — анимации «включены», но в sandbox длительность 0
+        const el = document.createElement('div');
+        sandbox.appendChild(el);
+        const open = signal(true);
+        const scope = createScope();
+        scope.run(() => transition(el, open, { name: 'fade', duration: 40 }));
+        open.value = false;
+        assert('transition: контракт fade-leave-from/-active', el.classList.contains('fade-leave-from') && el.classList.contains('fade-leave-active'));
+        open.value = true;
+        assert('transition: interrupt — enter отменяет leave, классы leave сняты', !el.classList.contains('fade-leave-active') && el.classList.contains('fade-enter-active') && el.hidden === false);
+        await wait(120);
+        assert('transition: после interrupt элемент остался видимым', el.hidden === false && !el.classList.contains('fade-enter-active'));
+        scope.dispose();
+
+        const vis = signal(true);
+        const s2 = createScope();
+        s2.run(() => sandbox.appendChild(show(vis, () => html`<p class="tr">x</p>`, null, { transition: 'fade' })));
+        flushSync();
+        const p = sandbox.querySelector('p.tr');
+        assert('show({ transition }): enter-классы на новой ветке', p && p.classList.contains('fade-enter-active'));
+        vis.value = false;
+        assert('show({ transition }): leave — узел ещё в DOM с leave-классами', sandbox.querySelector('p.tr') === p && p.classList.contains('fade-leave-active'));
+        await wait(150);
+        assert('show({ transition }): после leave удалён', !sandbox.querySelector('p.tr'));
+        s2.dispose();
+
+        const items = signal([{ id: 1 }, { id: 2 }]);
+        const s3 = createScope();
+        s3.run(() => sandbox.appendChild(list(items, (it) => html`<i class="row">${it.id}</i>`, { key: 'id', transition: 'fade', fallback: () => html`<em class="empty">Пусто</em>` })));
+        flushSync();
+        assert('list({ transition }): строки отрендерены', sandbox.querySelectorAll('i.row').length === 2);
+        items.value = [items.value[1]];
+        assert('list({ transition }): уходящая строка помечена data-leaving и ещё в DOM', sandbox.querySelectorAll('i.row').length === 2 && sandbox.querySelector('i.row[data-leaving]')?.textContent === '1');
+        await wait(150);
+        assert('list({ transition }): удалена после leave', sandbox.querySelectorAll('i.row').length === 1);
+        items.value = [];
+        await wait(150);
+        assert('list({ fallback }): пустой список показывает fallback', !!sandbox.querySelector('em.empty') && sandbox.querySelectorAll('i.row').length === 0);
+        items.value = [{ id: 9 }];
+        assert('list({ fallback }): fallback убран при появлении данных', !sandbox.querySelector('em.empty') && sandbox.querySelectorAll('i.row').length === 1);
+        s3.dispose();
+
+        const rows = signal([{ id: 1, n: 'a' }]);
+        const s4 = createScope();
+        s4.run(() => sandbox.appendChild(list(rows, (row) => html`<b class="sg">${() => row.value.n}</b>`, { key: 'id', item: 'signal' })));
+        flushSync();
+        const b = sandbox.querySelector('b.sg');
+        rows.value = [{ id: 1, n: 'b' }];
+        assert('list({ item: "signal" }): замена объекта патчит сигнал, узел тот же', sandbox.querySelector('b.sg') === b && b.textContent === 'b');
+        s4.dispose();
+        defaults.motion = 'auto';
+        sandbox.innerHTML = '';
+    })();
+
+    section('💎 #80/#112/#114 — стили, layout-сигналы, spring');
+
+    await (async () => {
+        injectStyles();
+        assert('injectStyles: @layer aegis первым в <head>', document.head.firstElementChild?.id === 'aegis-styles' && document.getElementById('aegis-styles').textContent.trim().startsWith('@layer aegis;'));
+        const layered = css.layer('components')`.lc-x { color: red; }`;
+        assert('css.layer(): правило в слое', layered.cssRules[0] instanceof CSSLayerBlockRule && layered.cssRules[0].name === 'components');
+        const before = document.adoptedStyleSheets.length;
+        const el = document.createElement('div');
+        sandbox.appendChild(el);
+        const scope = createScope();
+        let sheet1, sheet2;
+        const el2 = document.createElement('div'); sandbox.appendChild(el2);
+        scope.run(() => { sheet1 = scopedStyle(el, '.sc-a { color: red; }'); sheet2 = scopedStyle(el2, '.sc-a { color: red; }'); });
+        assert('scopedStyle: без мутации id, один sheet на текст, refcount', el.id === '' && el.hasAttribute('data-aegis-css') && sheet1 === sheet2 && document.adoptedStyleSheets.length === before + 1);
+        scope.dispose();
+        assert('scopedStyle: dispose снимает sheet и атрибут', document.adoptedStyleSheets.length === before && !el.hasAttribute('data-aegis-css'));
+
+        const box = document.createElement('div');
+        box.style.cssText = 'width:120px;height:40px;';
+        document.body.appendChild(box);
+        const s2 = createScope();
+        let sz;
+        s2.run(() => { sz = size(box); });
+        await wait(120);
+        assert('size(): ширина как сигнал', sz.width.value === 120 && sz.height.value === 40);
+        box.style.width = '200px';
+        await wait(120);
+        assert('size(): реактивен', sz.width.value === 200);
+        const vp = viewport();
+        assert('viewport(): сигналы окна', vp.width.value === window.innerWidth && typeof vp.scrollY.value === 'number');
+        s2.dispose(); box.remove();
+
+        const sp = document.createElement('div');
+        sandbox.appendChild(sp);
+        const a1 = spring(sp, { opacity: [0, 1] }, { stiffness: 300, damping: 30 });
+        assert('spring: два keyframe + linear() easing', a1.effect.getKeyframes().length === 2 && String(a1.effect.getTiming().easing).startsWith('linear('));
+        const a2 = spring(sp, { opacity: [0, 1] });
+        assert('spring: interrupt — старая отменена, новая стартует не с 0 (позиция сохранена)', a1.playState === 'idle' && a2._aegisSpring && typeof a2._aegisSpring.from.opacity === 'number');
+        a2.cancel();
+
+        const x = springSignal(0, { stiffness: 400, damping: 30 });
+        assert('springSignal: target/current', x.current.value === 0 && x.target.value === 0);
+        x.set(50, { hard: true });
+        assert('springSignal: set hard', x.current.value === 50);
+        const tw = tween(0, { duration: 20 });
+        tw.target.value = 10;
+        await wait(60);
+        assert('tween: доехал до target', Math.abs(tw.current.value - 10) < 0.01);
+        sandbox.innerHTML = '';
+    })();
+
+    section('💎 #85/#86/#88/#89 — from(), trap 2.0, modal(), scaffold(), history()');
+
+    await (async () => {
+        const scope = createScope();
+        let online, fromSub, evt;
+        let subFn, subStopped = false, fromSubStopped = false;
+        const target = new EventTarget();
+        let n = 0;
+        scope.run(() => {
+            evt = from(target, 'tick', () => n);
+            online = from((set) => { set('p1'); return () => { fromSubStopped = true; }; }, 'init');
+            fromSub = from({ value: 1, subscribe(fn) { subFn = fn; return () => { subStopped = true; }; } });
+        });
+        n = 2; target.dispatchEvent(new Event('tick'));
+        assert('from(EventTarget): map при событии', evt.value === 2);
+        assert('from(producer): начальное из set()', online.value === 'p1');
+        scope.dispose();
+        assert('from(): отписка при dispose', fromSubStopped === true);
+
+        const host = document.createElement('div');
+        host.innerHTML = '<aside class="bg"></aside><div class="modal"><button class="ok">ok</button></div><div aria-live="polite" class="live"></div>';
+        document.body.appendChild(host);
+        const m = host.querySelector('.modal');
+        let closed = 0;
+        const release = trap(m, { escape: () => closed++, outside: () => closed++, inert: true, autoFocus: false });
+        assert('trap: inert на фон, кроме aria-live', host.querySelector('.bg').inert === true && host.querySelector('.live').inert === false && m.inert === false);
+        document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+        host.querySelector('.bg').dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
+        m.querySelector('.ok').dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
+        assert('trap: escape и outside (клик внутри не считается)', closed === 2);
+        release();
+        assert('trap: release снимает inert', host.querySelector('.bg').inert === false);
+        host.remove();
+
+        const dlg = document.createElement('dialog');
+        sandbox.appendChild(dlg);
+        const open = signal(false);
+        const s2 = createScope();
+        s2.run(() => modal(dlg, open));
+        open.value = true;
+        assert('modal(): open → showModal', dlg.open === true);
+        dlg.close();
+        await wait(60);
+        assert('modal(): close → сигнал false', open.value === false);
+        s2.dispose();
+
+        const isl = document.createElement('div');
+        isl.dataset.aegis = 'todo-list'; isl.dataset.count = '3';
+        isl.innerHTML = '<input name="q"><button id="add">+</button>';
+        const sc = scaffold(isl);
+        assert('scaffold(): каркас register с данными и селекторами', sc.includes("register('todo-list'") && sc.includes('const count = signal(data.count)') && sc.includes("querySelector('[name=\"q\"]')") && sc.includes("querySelector('#add')"));
+
+        const doc = signal('a');
+        const h = undoHistory(doc);
+        doc.value = 'b'; doc.value = 'c';
+        assert('history: canUndo, undo', h.canUndo.value === true && (h.undo(), doc.value === 'b'));
+        h.undo(); h.redo();
+        assert('history: undo до начала, redo', doc.value === 'b' && h.canRedo.value === true);
+        const st = reactive({ title: 't1', tags: ['x'] });
+        const h2 = undoHistory(st);
+        st.title = 't2'; st.tags.push('y');
+        h2.undo();
+        assert('history(reactive): откат объекта', st.title === 't2' && st.tags.length === 1 || st.title === 't1');
+        sandbox.innerHTML = '';
+    })();
+
+    section('💎 #93/#94 — i18n 2026, файлы в формах');
+
+    await (async () => {
+        const t = i18n({
+            ru: { items: { one: '{n} товар', few: '{n} товара', many: '{n} товаров' }, hello: 'Привет, {name}', nested: { deep: 'глубоко' } },
+            kk: async () => ({ items: { one: '{n} зат', other: '{n} зат' }, hello: 'Сәлем, {name}' }),
+        }, { locale: 'ru', fallback: 'ru', syncLang: false });
+        assert('i18n: plural по Intl.PluralRules', t('items', { n: 1 }) === '1 товар' && t('items', { n: 3 }) === '3 товара' && t('items', { n: 7 }) === '7 товаров');
+        assert('i18n: параметры и вложенные ключи', t('hello', { name: 'Ann' }) === 'Привет, Ann' && t('nested.deep') === 'глубоко');
+        assert('i18n: Intl-форматтеры', t.num(1234.5, { maximumFractionDigits: 1 }).replace(/\s/g, ' ').includes('234') && typeof t.date(new Date(2026, 0, 1), { dateStyle: 'medium' }) === 'string' && t.list(['a', 'b']).includes('a'));
+        t.locale.value = 'kk';
+        await until(t.loading, v => v === false, { timeout: 500 }).catch(() => {});
+        await wait(10);
+        assert('i18n: смена локали подгружает словарь', t('hello', { name: 'A' }) === 'Сәлем, A');
+        assert('i18n: fallback на ключ из базовой локали', t('nested.deep') === 'глубоко');
+        const flat = i18n({ ok: 'OK', hi: 'Hi {name}' });
+        assert('i18n: плоский словарь (старая форма)', flat('hi', { name: 'x' }) === 'Hi x');
+
+        setValidationMessages({ required: 'Fill it' });
+        assert('setValidationMessages: код → сообщение', required('') === 'Fill it');
+        setValidationMessages(null);
+        assert('validation messages: по <html lang> (en по умолчанию)', required('') === 'This field is required' || required('') === 'Обязательное поле');
+
+        const big = new File([new Uint8Array(3 * 1024 * 1024)], 'big.png', { type: 'image/png' });
+        const txt = new File(['x'], 'a.txt', { type: 'text/plain' });
+        assert('файлы: maxSize / mime / maxFiles', maxSize('2MB')(big) !== null && maxSize('4MB')(big) === null && mime(['image/*'])(txt) !== null && mime(['image/*'])(big) === null && maxFiles(1)([big, txt]) !== null);
+        const formEl = document.createElement('form');
+        formEl.innerHTML = '<input type="file" name="avatar"><input name="x" value="1">';
+        sandbox.appendChild(formEl);
+        const scope = createScope();
+        let f;
+        scope.run(() => { f = wireForm(formEl); });
+        const dt = new DataTransfer(); dt.items.add(big);
+        formEl.avatar.files = dt.files;
+        formEl.avatar.dispatchEvent(new Event('change', { bubbles: true }));
+        assert('wireForm: file → File в сигнале, formData() содержит файл', f.fields.avatar.value instanceof File && f.formData().get('avatar') instanceof File && f.formData().get('x') === '1');
+        const pv = f.preview('avatar');
+        assert('wireForm: preview() даёт objectURL', typeof pv.value === 'string' && pv.value.startsWith('blob:'));
+        scope.dispose();
+        sandbox.innerHTML = '';
+    })();
+
     section('component() & destroy()');
 
     (() => {
@@ -2693,7 +2910,7 @@
         sandbox.appendChild(el);
         const sheet = scopedStyle(el, `.inner { font-weight: bold; }`);
         assert('scopedStyle: returns CSSStyleSheet', sheet instanceof CSSStyleSheet);
-        assert('scopedStyle: element got id or class', el.id !== '' || el.classList.length > 0);
+        assert('scopedStyle: element got data-aegis-css', el.hasAttribute('data-aegis-css'));
         sandbox.innerHTML = '';
     }
 

@@ -1,0 +1,84 @@
+# Aegis — contract for AI assistants
+
+Aegis is a zero-build reactive UI engine: one ES module (`aegis.js`), no dependencies, no compiler.
+Server renders HTML; Aegis hydrates islands (`[data-aegis]`) and adds fine-grained reactivity with signals.
+Read `aegis.d.ts` for exact types, `ERRORS.md` for warning codes, `test.html` for working examples.
+
+## Rules (the mistakes assistants make most)
+
+- Reactive text is a signal or a function: `${count}` or `${() => count.value * 2}`. NEVER `${count.value}` — that is a one-time snapshot (E019).
+- Same for helpers: `text(el, count)` / `show(() => open.value, …)` / `cls(el, 'on', isOn)`. A plain value renders once.
+- Never build HTML from data with `innerHTML`. Data goes through `${}` in `html``` (text nodes, never parsed). Server HTML goes through `swap()`.
+- Everything that subscribes (effects, listeners, timers, resources) must be created inside a component setup or `scope.run()`; it is disposed with the scope. Outside a scope you get E001.
+- `on(el, 'click', fn)` — not `addEventListener`; `interval`/`timeout`/`observe` — not the raw APIs. They clean themselves up.
+- Islands: `register(name, (el, data, ctx) => html`…`)` + server `<div data-aegis="name" data-x="…">`. `hydrate(document)` runs automatically after `register()`.
+- `data-*` props are strings; declare `{ types: { count: Number, on: Boolean } }` in `register()` to coerce. Big JSON goes in `<script type="application/json">` inside the island → `data.props`.
+- Async work lives in `resource()` / `mutation()` — not in `effect(async …)` (E016).
+- In `ctx` you get: `el, slot, signal, computed, effect, batch, provide, inject, when, selector, on, delegate, bind, text, attr, cls, style, clsMap, styleMap, html, show, list, interval, timeout, observe, resize, mutate, guardedFetch (pre-bound), debounced, throttled, poll, onDispose`. Everything else — `import` from `./aegis.js`.
+
+## Canonical island
+
+```js
+import { register, resource, mutation, api } from './aegis.js';
+
+register('todos', (el, data, { signal, html, when, list }) => {
+    const todos = resource(data.url, { cache: true, staleTime: 30_000 });      // { data, loading, validating, error, refresh }
+    const draft = signal('');
+    const add = mutation((text) => api.post(data.url, { text }), {
+        resources: [todos],
+        optimistic: (text) => todos.mutate(l => [...l, { id: 'tmp', text }]),
+        invalidates: [data.url],
+    });
+    return html`
+        <form @submit.prevent=${() => { add(draft.value); draft.value = ''; }}>
+            <input bind:value=${draft} placeholder="New todo">
+            <button ?disabled=${add.pending}>Add</button>
+        </form>
+        ${when(todos, {
+            loading: () => html`<p class="skeleton">…</p>`,
+            error: (e, retry) => html`<p>${e.message} <button @click=${retry}>Retry</button></p>`,
+            data: (rows, rowsSignal) => html`<ul>${list(rowsSignal, t => html`<li>${t.text}</li>`, { key: 'id' })}</ul>`,
+        })}`;
+}, { types: { url: String } });
+```
+
+Server side:
+
+```html
+<div data-aegis="todos" data-url="/api/todos"></div>
+<script type="module">import './aegis.js';</script>   <!-- register() lives in your module; hydrate() is automatic -->
+```
+
+## Template syntax (html``)
+
+| Syntax | Meaning |
+|---|---|
+| `${sig}` / `${() => expr}` | reactive text |
+| `${() => cond ? html`…` : null}` | reactive child (node, template, array, text) |
+| `${list(items, row => html`<li>…`, { key: 'id' })}` | keyed list, rows are exactly what you return |
+| `${show(open, () => html`…`, null, { transition: 'fade' })}` | conditional branch with its own scope |
+| `@click=${fn}` `@submit.prevent` `@keydown.enter` `@click.outside` `@input.debounce.300` | events with modifiers |
+| `.value=${sig}` `?disabled=${sig}` `bind:value=${sig}` `:title=${sig}` | property / boolean attribute / two-way / reactive attribute |
+| `class=${{ active: sig }}` `style=${{ '--x': sig }}` | class objects, style objects, custom properties |
+| `<canvas ${attach(el => { const c = new Chart(el); return () => c.destroy(); })}>` | third-party widget lifecycle |
+| `<input ${ref}>` | `ref()` |
+
+## API by task
+
+- State: `signal`, `computed`, `effect`, `batch`, `untrack`, `reactive`, `store`, `linked`, `persisted`, `selector`, `until`, `watch`, `from`, `history`
+- Context: `createContext`, `provide`, `inject`
+- Data: `resource` (`{ cache }`, `{ offline }`, `{ params, loader }`), `mutation`, `streamResource`, `sse`, `prefetch`, `infiniteResource`, `settled`, `seed`
+- HTTP: `configure({ csrf: 'django' })`, `request`, `api.get|post|put|patch|delete`, `HttpError`, `withRetry`
+- DOM: `html`, `when`, `list`, `show`, `text`, `attr`, `cls`, `style`, `cssVars`, `bind`, `attach`, `ref`, `clone`, `flushSync`
+- Islands: `register`, `hydrate`, `component`, `mount`, `destroy`, `defineElement`, `scaffold`
+- Server HTML: `swap` (morph), `boost`, `tpl`, `adopt`, `jsonScript`
+- Router: `router({ '/users/:id': { loader, handler, guard } }, { transition: true })`, `r.search('page', { parse: Number })`
+- Forms: `wireForm(formEl, { schema, rules })`, `form(defaults, { rules, schema })`, rules `required minLen maxLen pattern email min max matches maxSize mime maxFiles`
+- Motion: `transition`, `spring`, `springSignal`, `tween`, `flip`, `animate`, `media`, `reducedMotion`, `theme`, `defaults.motion`
+- Layout: `size`, `inView`, `viewport`
+- A11y: `trap`, `modal`, `roving`, `announce`
+- Testing: `reset()`, `root()`, `settled()`, `onWarn()`, `__AEGIS_DEV__ = 'strict'`, `defaults.fetcher`, `flushSync()`
+
+## Dev codes
+
+See `ERRORS.md`. Warnings print `what / why / fix` and appear once per place.
