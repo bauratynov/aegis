@@ -1624,6 +1624,153 @@
         sandbox.innerHTML = '';
     })();
 
+    section('💎 #26/#45/#46/#62/#63/#83/#92 — router 2.0');
+
+    await (async () => {
+        const scope = createScope();
+        const log = [];
+        const auth = signal(false);
+        let layoutRuns = 0, outletEl = null, loaded = null;
+        const nav = document.createElement('nav');
+        nav.innerHTML = '<a href="/r2/admin">Admin</a><a href="/r2/admin/users">Users</a><a href="/r2/lazy">Lazy</a>';
+        sandbox.appendChild(nav);
+        let r;
+        scope.run(() => {
+            r = router({
+                '/r2': () => log.push('home'),
+                '/r2/login': () => log.push('login'),
+                '/r2/profile': { redirect: '/r2/login' },
+                '/r2/admin': {
+                    guard: () => auth.value || '/r2/login',
+                    layout: ({ outlet }) => { layoutRuns++; outletEl = outlet; },
+                    children: {
+                        '/': () => log.push('dashboard'),
+                        '/users': { loader: async (p, { signal }) => { await wait(5); return ['u1']; }, handler: (p, { data, outlet }) => { log.push('users:' + data.join()); log.push(outlet === outletEl ? 'outlet-ok' : 'outlet-bad'); } },
+                    },
+                },
+                '/r2/lazy': { load: async () => ({ default: (p) => { loaded = 'lazy-handler'; } }) },
+                '/r2/items/:id': (p) => log.push('item:' + p.id),
+                '*': () => log.push('404'),
+            }, { root: nav, activeClass: 'on', preload: 'hover' });
+        });
+        await r.ready;
+        await r.navigate('/r2/profile', { replace: true });
+        await wait(20);
+        assert('router: redirect как данные маршрута', r.route.value === '/r2/login' && log.includes('login'));
+        await r.navigate('/r2/admin', { replace: true });
+        await wait(20);
+        assert('router: guard → redirect на /login, старый scope не тронут', r.route.value === '/r2/login' && layoutRuns === 0);
+        auth.value = true;
+        await r.navigate('/r2/admin', { replace: true });
+        await wait(20);
+        assert('router: layout + дочерний маршрут', layoutRuns === 1 && log.at(-1) === 'dashboard' && outletEl instanceof Element);
+        const p = r.navigate('/r2/admin/users', { replace: true });
+        assert('router: pending во время loader', r.pending.value === true);
+        await p; await wait(20);
+        assert('router: loader → data в handler, outlet передан, layout не перемонтирован', log.at(-2) === 'users:u1' && log.at(-1) === 'outlet-ok' && layoutRuns === 1);
+        assert('router: активные ссылки aria-current + класс', nav.querySelector('a[href="/r2/admin/users"]').getAttribute('aria-current') === 'page' && nav.querySelector('a[href="/r2/admin/users"]').classList.contains('on') && !nav.querySelector('a[href="/r2/admin"]').classList.contains('on') === false);
+        await r.navigate('/r2/lazy', { replace: true });
+        await wait(30);
+        assert('router: ленивый маршрут через load()', loaded === 'lazy-handler');
+
+        // search как сигнал, scope не пересоздаётся
+        await r.navigate('/r2/items/7', { replace: true });
+        await wait(20);
+        const before = log.length;
+        const page = r.search('page', { parse: Number, default: 1 });
+        assert('router: search default', page.value === 1);
+        page.value = 3;
+        await wait(20);
+        assert('router: search → URL и сигнал, handler не перезапущен', location.search === '?page=3' && page.value === 3 && log.length === before && r.query.value.page === '3');
+        page.value = 1;
+        await wait(20);
+        assert('router: search = default убирает ключ', location.search === '');
+        assert('router: params', r.params.value.id === '7' && log.includes('item:7'));
+        scope.dispose();
+        history.replaceState(null, '', '/test.html');
+        sandbox.innerHTML = '';
+    })();
+
+    section('💎 #27/#48/#64/#65/#70/#84 — формы 2.0');
+
+    await (async () => {
+        // Standard Schema (минимальная реализация контракта)
+        const schema = { '~standard': { version: 1, vendor: 'test', validate: (v) => {
+            const issues = [];
+            if (!v.email || !v.email.includes('@')) issues.push({ message: 'bad email', path: ['email'] });
+            if (v.address && v.address.city === 'x') issues.push({ message: 'bad city', path: ['address', 'city'] });
+            return issues.length ? { issues } : { value: v };
+        } } };
+        const formEl = document.createElement('form');
+        formEl.setAttribute('action', '/f2/save');
+        formEl.innerHTML = '<input name="email" value="a"><input name="address[city]" value="x"><input name="items[0][qty]" type="number" value="2" required><input name="login" value="joe"><input name="avatar" type="file">';
+        sandbox.appendChild(formEl);
+        const calls = [];
+        const scope = createScope();
+        let f;
+        scope.run(() => {
+            f = wireForm(formEl, {
+                schema,
+                rules: { login: [async (v, k, fields, { signal }) => { calls.push(v); await wait(5); return v === 'taken' ? 'Логин занят' : null; }] },
+                asyncDebounce: 0,
+            });
+        });
+        assert('wireForm: noValidate (мост с Constraint Validation)', formEl.noValidate === true);
+        assert('wireForm: values вложенный объект', f.values.value.address.city === 'x' && f.values.value.items[0].qty === 2);
+        assert('wireForm: schema issues → поля по пути', f.validate() === false && f.errors.email.value === 'bad email' && f.errors['address[city]'].value === 'bad city');
+        const qty = formEl.querySelector('[name="items[0][qty]"]');
+        qty.value = ''; qty.dispatchEvent(new Event('input', { bubbles: true })); qty.dispatchEvent(new Event('blur'));
+        assert('wireForm: нативное правило с сообщением браузера + setCustomValidity', typeof f.errors['items[0][qty]'].value === 'string' && f.errors['items[0][qty]'].value.length > 0 && !qty.validity.valid);
+        f.fields.login.value = 'taken';
+        f.validateField('login');
+        assert('wireForm: async-правило — validating', f.validating.login.value === true);
+        await settled(); await wait(15);
+        assert('wireForm: async-правило — ошибка после ответа', f.errors.login.value === 'Логин занят' && f.validating.login.value === false);
+        f.fields.login.value = 'a'; f.validateField('login');
+        f.fields.login.value = 'b'; f.validateField('login');
+        await wait(15);
+        assert('wireForm: устаревший async-ответ отброшен', f.errors.login.value === null && calls.slice(-2).join() === 'a,b');
+        f.setErrors({ 'items.0.qty': ['Нет на складе'], address: { city: ['Не тот город'] } });
+        assert('wireForm: setErrors с dot-путём и вложенным объектом', f.errors['items[0][qty]'].value === 'Нет на складе' && f.errors['address[city]'].value === 'Не тот город');
+
+        // setInitial / dirty / changes
+        f.setInitial({ email: 'a@b.c', login: 'joe', 'address[city]': 'x', 'items[0][qty]': null, avatar: null });
+        assert('wireForm: setInitial → не dirty', f.dirty.value === false && f.fields.email.value === 'a@b.c');
+        f.fields.login.value = 'zed';
+        assert('wireForm: dirtyFields / changes', f.dirtyFields.value.login === true && JSON.stringify(f.changes.value) === '{"login":"zed"}');
+        f.commit();
+        assert('wireForm: commit', f.dirty.value === false);
+
+        // серверный submit: FormData, 422 → ошибки, 200 JSON → result
+        configure({ fetch: async (url, init) => {
+            calls.push('POST ' + url + ' ' + (init.body instanceof FormData ? 'formdata:' + [...init.body.keys()].join(',') : 'json'));
+            if (url.includes('save')) return new Response(JSON.stringify({ errors: { email: ['Занят'] } }), { status: 422, headers: { 'Content-Type': 'application/json' } });
+            return new Response(JSON.stringify({ id: 1 }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+        } });
+        f.fields.email.value = 'ok@x.io'; f.fields['address[city]'].value = 'y'; qty.value = '1'; qty.dispatchEvent(new Event('input', { bubbles: true })); f.fields.login.value = 'joe';
+        const handler = f.submit();
+        await handler(new Event('submit', { cancelable: true }));
+        assert('wireForm: серверный submit — FormData + 422 → ошибка поля', calls.some(c => c.startsWith('POST /f2/save formdata:email,address[city]')) && f.errors.email.value === 'Занят');
+        formEl.setAttribute('action', '/f2/ok');
+        f.fields.email.value = 'ok2@x.io';
+        await f.submit({ as: 'json' })(new Event('submit', { cancelable: true }));
+        assert('wireForm: submit({ as: "json" }) → result', f.result.value?.data?.id === 1 && f.submitCount.value === 2);
+        configure({ fetch: null });
+        scope.dispose();
+        sandbox.innerHTML = '';
+
+        // form(defaults, { rules, schema }) + submit(handler)
+        const f2 = form({ name: '', qty: 2 }, { rules: { name: [required] }, schema });
+        assert('form(defaults): поля из defaults', f2.fields.qty.value === 2 && f2.fields.name.value === '');
+        f2.fields.name.value = 'n';
+        let got = null;
+        await f2.submit(async (values) => { got = values; return 'done'; });
+        assert('form(defaults): schema блокирует submit', got === null && f2.errors.$form.value === 'bad email');
+        const f3 = form({ email: 'e@x.io', address: { city: 'ok' } }, { schema });
+        await f3.submit(async (values) => { got = values; });
+        assert('form: submit(handler) получает вложенные values', got && got.email === 'e@x.io');
+    })();
+
     section('component() & destroy()');
 
     (() => {

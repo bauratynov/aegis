@@ -600,13 +600,58 @@ export interface FormResult<T extends Record<string, { value: any; rules?: Valid
     setErrors(errors: Partial<{ [K in keyof T]: string | string[] }>): void;
 }
 
-export function form<T extends Record<string, { value: any; rules?: ValidationRule[] }>>(schema: T): FormResult<T> & FormSubmitState;
+export function form<T extends Record<string, { value: any; rules?: ValidationRule[] }>>(schema: T): FormResult<T> & FormSubmitState & FormCore;
 export interface FormSubmitState {
     submitting: ReadonlySignal<boolean>;
     submitCount: ReadonlySignal<number>;
     submitError: ReadonlySignal<unknown>;
     result: ReadonlySignal<unknown>;
 }
+/** Standard Schema (zod v4 / valibot / arktype / …) — без зависимости */
+export interface StandardSchemaV1<I = unknown, O = I> {
+    readonly '~standard': {
+        readonly version: 1;
+        readonly vendor: string;
+        readonly validate: (value: unknown) => StandardResult<O> | Promise<StandardResult<O>>;
+    };
+}
+export type StandardResult<O> = { value: O; issues?: undefined } | { issues: ReadonlyArray<{ message: string; path?: ReadonlyArray<PropertyKey | { key: PropertyKey }> }> };
+/** Правило: (value, key, fields, { signal }) → строка ошибки | null | Promise (async — с debounce, отменой и validating[key]) */
+export type AsyncValidationRule<V = any> = (value: V, key: string, fields: Record<string, Signal<any>>, ctx: { signal: AbortSignal | null }) => string | null | undefined | Promise<string | null | undefined>;
+export interface FormCore {
+    /** вложенный объект значений: items[0][qty] → { items: [{ qty }] } */
+    values: ReadonlySignal<any>;
+    validating: Record<string, ReadonlySignal<boolean>> & { $any: ReadonlySignal<boolean> };
+    dirtyFields: ReadonlySignal<Record<string, true>>;
+    /** только изменённые поля (для PATCH) */
+    changes: ReadonlySignal<any>;
+    /** sync-правила + schema; async-правила запускаются в фоне */
+    validate(): boolean;
+    validateField(key: string): boolean;
+    /** sync + async + schema */
+    validateAsync(): Promise<boolean>;
+    /** новые «начальные» значения (объект или сигнал, например resource().data) */
+    setInitial(values: Record<string, any> | ReadonlySignal<any> | Signal<any>): void;
+    /** текущие значения становятся начальными (после успешного PATCH) */
+    commit(): void;
+    /** beforeunload при dirty; возвращает dispose */
+    guardUnload(): () => void;
+    setErrors(errors: Record<string, any> | Array<{ path?: string | string[]; pointer?: string; message: string }>): void;
+    reset(): void;
+}
+export interface FormOptions {
+    rules?: Record<string, AsyncValidationRule[]>;
+    schema?: StandardSchemaV1<any, any>;
+    asyncDebounce?: number;
+}
+/** form(defaults, { rules, schema }) — виртуальная форма из значений по умолчанию */
+export function form<T extends Record<string, any>>(defaults: T, opts: FormOptions): FormResult<{ [K in keyof T]: { value: T[K] } }> & FormSubmitState & FormCore & {
+    submit(handler: (values: T) => unknown | Promise<unknown>): Promise<unknown>;
+    submit(url: string, opts?: { headers?: HeadersInit; transform?: (v: T) => unknown; fetchOpts?: RequestOptions }): Promise<{ ok: boolean; status?: number; data?: any; error?: unknown }>;
+};
+export const email: ValidationRule<string>;
+export function min(n: number, msg?: string): ValidationRule<number | string | null>;
+export function max(n: number, msg?: string): ValidationRule<number | string | null>;
 
 export const required: ValidationRule;
 export function minLen(n: number): ValidationRule;
@@ -633,6 +678,12 @@ export interface WireFormResult {
     prev: (() => void) | null;
 }
 
+/**
+ * Оживить серверную <form>: signals, валидация (нативные ограничения через Constraint Validation API с сообщениями браузера,
+ * правила, Standard Schema, async-правила), a11y, wizard, серверный submit.
+ *   const f = wireForm(el, { schema: zodSchema, rules: { login: [unique] }, submit: true });   // submit: true — FormData на action формы
+ *   on(el, 'submit', f.submit(values => api.post('/save', values)));
+ */
 export function wireForm(formEl: HTMLFormElement, opts?: {
     schema?: Record<string, ValidationRule[]>;
     mode?: 'blur-then-live' | 'live' | 'submit';
@@ -862,20 +913,86 @@ export function anchor(floating: Element, reference: Element, opts?: {
 
 // ── Router ─────────────────────────────────────────────────────
 
-export interface RouterResult {
-    route: Signal<string>;
-    params: Signal<Record<string, string>>;
-    query: Signal<Record<string, string>>;
-    navigate(path: string, opts?: { replace?: boolean }): void;
+export interface RouteInfo { path: string | null; params: Record<string, string>; query: Record<string, string>; search?: string }
+export interface RouteContext<D = unknown> {
+    /** результат loader */
+    data: D;
+    params: Record<string, string>;
+    query: Record<string, string>;
+    /** элемент для дочерних маршрутов (layout) */
+    outlet: Element | null;
+    signal: AbortSignal | undefined;
+    route: RouteInfo;
+    from: RouteInfo;
+}
+export type RouteHandler<D = unknown> = (params: Record<string, string>, ctx: RouteContext<D>) => void | Promise<void>;
+export interface RouteDef<D = unknown> {
+    handler?: RouteHandler<D>;
+    /** данные до dispose старой страницы; отменяется через signal при новой навигации */
+    loader?: (params: Record<string, string>, ctx: { signal: AbortSignal | undefined; query: Record<string, string>; params: Record<string, string> }) => D | Promise<D>;
+    /** true — идём; false — отменить (sync); строка — redirect; Promise — ждём */
+    guard?: (to: RouteInfo, from: RouteInfo) => boolean | string | void | Promise<boolean | string | void>;
+    redirect?: string | ((to: RouteInfo, from: RouteInfo) => string);
+    /** ленивый маршрут: default export модуля = handler */
+    load?: () => Promise<RouteHandler<D> | { default: RouteHandler<D> }>;
+    /** прогрев данных при hover/visible (router({ preload })) */
+    preload?: (params: Record<string, string>) => void;
+    /** layout переживает смену дочернего маршрута; получает живой outlet */
+    layout?: (ctx: RouteContext<D>) => void | Promise<void>;
+    children?: Record<string, RouteHandler | RouteDef>;
+}
+export interface RouterOptions {
+    base?: string;
+    root?: Element | Document;
+    /** View Transitions между страницами: true → types ['page', 'back'|'forward'] в data-vt-type на <html>; функция — свои types; false */
+    transition?: boolean | ((info: { back: boolean }) => string[] | false);
+    /** класс активной ссылки (aria-current="page" ставится всегда) */
+    activeClass?: string;
+    /** прогрев ленивых маршрутов/данных: 'hover' | 'visible' | false */
+    preload?: 'hover' | 'visible' | false;
+    scroll?: 'after-transition' | 'manual';
+    beforeEach?: (to: RouteInfo, from: RouteInfo) => void;
+    /** пересоздавать scope при изменении только search (старое поведение) */
+    searchReload?: boolean;
+}
+export interface SearchOptions<T> {
+    parse?: (raw: string) => T;
+    serialize?: (v: T) => string;
+    default?: T;
+    /** ?tag=a&tag=b → T[] */
+    multi?: boolean;
+    history?: 'replace' | 'push';
+}
+export interface Router {
+    route: ReadonlySignal<string>;
+    params: ReadonlySignal<Record<string, string>>;
+    query: ReadonlySignal<Record<string, string>>;
+    pending: ReadonlySignal<boolean>;
+    error: ReadonlySignal<unknown>;
+    state: ReadonlySignal<unknown>;
+    transitioning: ReadonlySignal<boolean>;
+    /** search-параметр как двусторонний сигнал (URL = state); scope маршрута не пересоздаётся */
+    search<T = string>(name: string, opts?: SearchOptions<T>): Signal<T>;
+    search<T = string>(name: string, opts: SearchOptions<T> & { multi: true }): Signal<T[]>;
+    navigate(path: string, opts?: { replace?: boolean; state?: unknown }): Promise<unknown>;
     back(): void;
     forward(): void;
+    /** per-entry state без навигации */
+    setState(state: unknown): void;
+    /** первый маршрут отрендерен */
+    ready: Promise<unknown>;
     cleanup(): void;
+    dispose(): void;
 }
-
-export function router(routes: Record<string, (params: Record<string, string>, search?: string) => void>, opts?: {
-    base?: string;
-    root?: Element;
-}): RouterResult;
+/**
+ * Роутер поверх Navigation API (fallback: popstate + перехват <a>).
+ * Вложенные маршруты с layout, async handler/loader (нативный индикатор, scroll после данных, отмена гонок),
+ * guard/redirect как данные, search-параметры как сигналы, ленивые маршруты через import().
+ * Не перехватывает: hash-ссылки, формы, download, data-aegis-reload, несовпавшие пути (уходят на сервер).
+ */
+export function router(routes: Record<string, RouteHandler | RouteDef>, opts?: RouterOptions): Router;
+/** Идёт View Transition роутера */
+export const transitioning: ReadonlySignal<boolean>;
 
 // ── Commands ───────────────────────────────────────────────────
 

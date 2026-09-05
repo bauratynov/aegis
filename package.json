@@ -1,13 +1,18 @@
 {
   "name": "aegis-engine",
   "version": "0.7.0",
-  "description": "Zero-build reactive UI engine — signals, components, routing, forms, animations, offline. One file, no dependencies.",
+  "description": "Zero-build reactive UI engine — signals, islands, html templates, data layer, routing, forms, animations, offline. One ES module, no dependencies.",
   "type": "module",
   "main": "aegis.js",
   "types": "aegis.d.ts",
   "files": [
     "aegis.js",
-    "aegis.d.ts"
+    "aegis.min.js",
+    "aegis.min.js.map",
+    "aegis.core.js",
+    "aegis.core.min.js",
+    "aegis.d.ts",
+    "build.mjs"
   ],
   "license": "MIT",
   "author": "atynov",
@@ -38,6 +43,33 @@
   },
   "sideEffects": false,
   "scripts": {
-    "test": "node --test test-core.mjs"
-  }
+    "test": "node --test test-core.mjs",
+    "build": "node build.mjs",
+    "prepublishOnly": "npm run build && npm test"
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.2"
+  },
+  "module": "aegis.js",
+  "exports": {
+    ".": {
+      "types": "./aegis.d.ts",
+      "default": "./aegis.js"
+    },
+    "./min": {
+      "types": "./aegis.d.ts",
+      "default": "./aegis.min.js"
+    },
+    "./core": {
+      "types": "./aegis.d.ts",
+      "default": "./aegis.core.js"
+    },
+    "./core/min": {
+      "types": "./aegis.d.ts",
+      "default": "./aegis.core.min.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "unpkg": "aegis.min.js",
+  "jsdelivr": "aegis.min.js"
 }
