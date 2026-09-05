@@ -66,7 +66,11 @@ export function batch<T>(fn: () => T): T;
 
 // ── Dev & testing ──────────────────────────────────────────────
 
-export interface WarningInfo { code: string; what: string; why: string; fix: string }
+export interface WarningInfo {
+    /** путь scope, где возникло предупреждение: component:div#app ‹ list:row (null вне scope) */
+    where?: string | null;
+    /** элемент, к которому относится предупреждение (печатается в консоль как %o) */
+    el?: Element | null; code: string; what: string; why: string; fix: string }
 /** Предупреждение движка как исключение (window.__AEGIS_DEV__ = 'strict') */
 export class AegisWarning extends Error { code: string; what: string; why: string; fix: string }
 /** Подписка на предупреждения (dev-режим): warnings-as-assertions в тестах. Возвращает unsubscribe */
@@ -86,6 +90,10 @@ export const dev: {
     inspect(root?: Document | Element | Scope): ScopeInspection[] | ScopeInspection;
     /** Граф зависимостей как Mermaid */
     graph(root?: Scope): string;
+    /** dev-overlay: предупреждения всплывают в углу страницы; false — только консоль (или localStorage aegis:overlay=0) */
+    overlay: boolean;
+    /** Объяснение кода предупреждения из ERRORS.md — печатает в консоль и возвращает текст */
+    explain(code: string): Promise<string>;
     /** Панель инспектора в странице (грузит aegis-devtools.js рядом с модулем); также ?aegis-devtools в URL */
     panel(): Promise<{ host: HTMLElement; shadow: ShadowRoot; close(): void; highlight(el: Element | null): void }>;
 };

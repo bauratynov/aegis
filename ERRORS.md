@@ -38,4 +38,11 @@ Every warning has a code, and each message is printed once per place. Dev mode i
 | **E028** | Zombie binding: the node left the document, but the binding keeps updating it — it leaks until the owner scope is disposed. | Render the branch through `show()`/`list()`, or dispose the binding (`const off = text(el, …); off()`) before dropping the node. |
 | **E029** | Two `resource()` instances fetched the same URL within a second. | Add `cache: { key }` so they share one request, or lift the resource into a parent and `provide()` it. |
 | **E030** | The same URL was fetched many times within a second (a fetch loop). | Do not create a `resource()` inside an effect; give it a stable key; check `refetchOn` dependencies. |
+| **E031** | A Promise or a plain object was rendered as text in `html``` (shows as `[object Promise]` / `[object Object]`). | Async work goes in `resource()` + `when(res, { data })`; pick a field or `JSON.stringify()` for objects. |
+| **E032** | `@event` name is not a DOM event on that element (typo like `@clik`). | Use the suggested name; custom events need a dash (`@item-select`). |
+| **E033** | Vue / Alpine / Angular / mustache syntax inside `html``` (`v-if`, `x-data`, `{{ }}`) — inert here. | `show()` / `list()` / `bind:value` / `@click` / `${}` — see llms.txt "Template syntax". |
+| **E034** | `@event` got a non-function: the handler was called (`@click=${save()}`) or is `undefined`. | Pass the function: `@click=${save}` or `@click=${() => save(id)}`; `null`/`false` skips a handler on purpose. |
+| **E035** | A resource URL contains `undefined`, `null`, `NaN` or `[object …]`. | Return `null` from the URL function until the value is ready — a null URL skips the request. |
+| **E036** | `html()` was called as a function instead of a template tag. | `html`<p>${name}</p>`` with backticks; `tpl()` / `swap()` for server HTML strings. |
+| **E037** | `router`: no route matches the URL and there is no `*` route. | Add `'*': () => render404()` or fix the pattern / `base`. |
 | **S001** | Attempt to set `__proto__` / `prototype` / `constructor` on a reactive object — blocked. | Use a regular property name. |

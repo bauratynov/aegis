@@ -49,6 +49,7 @@
     const REPORT = /[?&]report/.test(location.search);   // ?report=1 → POST /__report (браузеры без --dump-dom); флаг фиксируется до того, как тесты роутера перепишут URL
     if (REPORT) { const post = (o) => fetch('/__report?partial', { method: 'POST', body: JSON.stringify(o) }).catch(() => {}); addEventListener('error', (e) => post({ error: String(e.message), line: e.lineno, col: e.colno, stack: e.error && e.error.stack })); addEventListener('unhandledrejection', (e) => post({ rejection: String(e.reason && e.reason.message || e.reason), stack: e.reason && e.reason.stack })); }
     defaults.motion = true;   // prefers-reduced-motion ОС не должен влиять на сьют (motion: 'auto' проверяется отдельно)
+    dev.overlay = false;      // тосты dev-overlay не нужны в сьюте
     let passed = 0, failed = 0;
 
     function section(name) {
@@ -2603,6 +2604,62 @@
         assert('panel: close() убирает хост', !document.querySelector('aegis-devtools'));
         if (inst && inst.destroy) inst.destroy();
         sandbox.innerHTML = '';
+    })();
+
+    section('предупреждения 2.0 — E031–E037, where/el, dev.explain');
+
+    await (async () => {
+        const seen = [];
+        const off = onWarn(w => seen.push(w));
+        dev.resetWarnings();
+        const codes = () => seen.map(w => w.code);
+        const scope = createScope();
+        scope.run(() => {
+            html`<p>${Promise.resolve(1)}</p>`;                       // E031 Promise
+            html`<p>${{ a: 1 }}</p>`;                                  // E031 object (другой onceKey не нужен — тот же тег p → дедуп)
+            html`<button @clik=${() => {}}>x</button>`;               // E032
+            html`<li v-if="ok">x</li>`;                                // E033
+            html`<button @click=${undefined}>x</button>`;             // E034
+            html`<div x-data="{}">{{ name }}</div>`;                   // E033 (mustache / alpine) — второй onceKey
+        });
+        assert('E031: Promise в тексте', codes().includes('E031') && /Promise/.test(seen.find(w => w.code === 'E031').what));
+        const e32 = seen.find(w => w.code === 'E032');
+        assert('E032: неизвестное событие с did-you-mean', e32 && /clik/.test(e32.what) && /@click/.test(e32.fix) && e32.el && e32.el.tagName === 'BUTTON');
+        const e33 = seen.filter(w => w.code === 'E033');
+        assert('E033: v-if распознан как Vue, подсказка show()', e33.length >= 1 && /Vue/.test(e33[0].what) && /show\(/.test(e33[0].fix));
+        const e34 = seen.find(w => w.code === 'E034');
+        assert('E034: обработчик undefined', e34 && /undefined/.test(e34.what));
+        assert('warn: where — путь scope, el — элемент', seen.every(w => 'where' in w && 'el' in w));
+        scope.dispose();
+
+        html('<p>plain</p>');                                          // E036
+        assert('E036: html() без тега', codes().includes('E036'));
+
+        const sc2 = createScope();
+        const id = signal(undefined);
+        sc2.run(() => { resource(() => `/api/users/${id.value}`, { fetcher: async () => ({}) }); });
+        await settled();
+        assert('E035: undefined в URL ресурса', codes().includes('E035') && /undefined/.test(seen.find(w => w.code === 'E035').what));
+        sc2.dispose();
+
+        const savedHash = location.hash;
+        const host = document.createElement('div');
+        sandbox.appendChild(host);
+        const r = router({ '/': () => {}, '/only': () => {} }, { hash: true, root: host });
+        await r.ready;
+        await r.navigate('/nowhere').catch(() => {});
+        await settled();
+        assert('E037: маршрут без совпадения и без "*"', codes().includes('E037') && /nowhere/.test(seen.find(w => w.code === 'E037').what));
+        r.dispose();
+        sandbox.innerHTML = '';
+        history.replaceState(null, '', location.pathname + location.search + savedHash);
+
+        const text = await dev.explain('E019');
+        assert('dev.explain: объяснение кода из ERRORS.md', /E019/.test(text) && /Fix:/.test(text));
+        const unknown = await dev.explain('E999');
+        assert('dev.explain: неизвестный код — список известных', /unknown code/.test(unknown) && /E001/.test(unknown));
+        off();
+        dev.resetWarnings();
     })();
 
     section('component() & destroy()');

@@ -53,6 +53,14 @@ const dev = {
     inspect(root) { return typeof _devTools === 'function' ? _devTools().inspect(root) : []; },
     /** Граф зависимостей как Mermaid (graph LR) */
     graph(root) { return typeof _devTools === 'function' ? _devTools().graph(root) : 'graph LR'; },
+    /** dev-overlay: предупреждения всплывают в углу страницы (false — только консоль; localStorage aegis:overlay=0) */
+    overlay: true,
+    /** Объяснение кода предупреждения (ERRORS.md) в консоль: Aegis.dev.explain('E019') */
+    explain(code) { return import(/* @vite-ignore */ new URL('./aegis-devtools.js', import.meta.url).href).then(m => m.explain(code)); },
+    /** dev-overlay: предупреждения всплывают в углу страницы (false — только консоль; localStorage aegis:overlay=0) */
+    overlay: true,
+    /** Объяснение кода предупреждения (ERRORS.md) в консоль: Aegis.dev.explain('E019') */
+    explain(code) { return import(/* @vite-ignore */ new URL('./aegis-devtools.js', import.meta.url).href).then(m => m.explain(code)); },
     /** Панель инспектора в странице (aegis-devtools.js рядом с модулем): компоненты, сигналы, эффекты, stats, предупреждения */
     panel() { return import(/* @vite-ignore */ new URL('./aegis-devtools.js', import.meta.url).href).then(m => m.open()); },
 };
@@ -87,19 +95,28 @@ export function onWarn(fn) {
 }
 
 /** Elm-style three-part warning: what → why → fix. Каждое сообщение печатается один раз */
-function _warn(code, { what, why, fix }, onceKey) {
+function _warn(code, { what, why, fix, el }, onceKey) {
     if (!_dev()) return;
     const key = code + '|' + (onceKey ?? what);
     if (_seenWarnings.has(key)) return;
     _seenWarnings.add(key);
-    const info = { code, what, why, fix };
+    const where = typeof _scopePath === 'function' && _currentScope ? _scopePath(_currentScope) : '';
+    const info = { code, what, why, fix, where: where || null, el: el || null };
     for (const h of _warnHandlers) h(info);
     if (globalThis.__AEGIS_DEV__ === 'strict') throw new AegisWarning(code, info);
-    console.warn(
-        `⚠ [Aegis:${code}] ${what}\n` +
+    const msg = `⚠ [Aegis:${code}] ${what}\n` +
         `  Why: ${why}\n` +
-        `  Fix: ${fix}`
-    );
+        `  Fix: ${fix}` +
+        (where ? `\n  Where: ${where}` : '') +
+        `\n  Docs: Aegis.dev.explain('${code}')`;
+    if (el) console.warn(msg + '\n  Element:', el); else console.warn(msg);
+    if (dev.overlay !== false && typeof document !== 'undefined' && !_overlayOff()) _overlayNotify(info);
+}
+const _overlayOff = () => { try { return localStorage.getItem('aegis:overlay') === '0'; } catch (e) { return false; } };
+let _overlayMod = null;
+function _overlayNotify(info) {
+    (_overlayMod || (_overlayMod = import(/* @vite-ignore */ new URL('./aegis-devtools.js', import.meta.url).href).catch(() => null)))
+        .then(m => { if (m && typeof m.notify === 'function') m.notify(info); });
 }
 
 // Prototype pollution deny-list (используется proxy-обёртками store/reactive)
