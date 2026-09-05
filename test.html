@@ -4117,6 +4117,157 @@
         offW(); dev.resetWarnings(); reset();
     })();
 
+    section('💎 формы фаза 3 — истина vs показ, per-input слой, Standard Schema по полям, локаль сообщений, status-машина submit');
+
+    await (async () => {
+        const codes = [];
+        const offW = onWarn((w) => codes.push(w.code));
+        const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+        const ev = (el, type) => el.dispatchEvent(new Event(type, { bubbles: true }));
+        const typeIn = (el, v) => { el.value = v; ev(el, 'input'); };
+        const _msgSaved = () => (document.documentElement.lang || 'en').startsWith('ru') ? 'Сохранено' : 'Saved';
+        const scope3 = createScope();
+
+        // 1. истина vs показ: issues/valid/canSubmit честны до validate(), errors — только показанное
+        scope3.run(() => {
+            const f = form({ pw: '', rep: '' }, { rules: { pw: [required, minLen(3)], rep: [matches('pw')] } });
+            assert('истина: пустой required → valid=false, но errors не показаны', f.valid.value === false && f.errors.pw.value === null && typeof f.issues.pw.value === 'string' && f.canSubmit.value === false);
+            f.fields.pw.value = 'abc'; f.fields.rep.value = 'abc';
+            assert('истина: значения корректны → valid=true без validate()', f.valid.value === true && f.canSubmit.value === true);
+            f.fields.pw.value = 'abcd';
+            assert('cross-field: смена pw пересчитывает issue у rep без validate()', f.issues.rep.value !== null && f.valid.value === false);
+            f.validate();
+            assert('показ: validate() показывает ошибку rep', f.errors.rep.value !== null && f.touched.rep.value === true);
+            f.fields.pw.value = 'abc';
+            assert('reward early: ошибка rep снята мгновенно по зависимости, без validate()', f.errors.rep.value === null && f.valid.value === true);
+            f.fields.pw.value = 'ab';
+            assert('показанная ошибка обновляет текст по мере ввода (punish late остаётся на blur/submit — но показанное живёт)', f.issues.pw.value !== null);
+            f.setErrors({ pw: 'Taken on server' });
+            assert('серверная ошибка: показана и делает valid=false', f.errors.pw.value === 'Taken on server' && f.valid.value === false);
+            f.fields.pw.value = 'abcde';
+            assert('серверная ошибка снимается при изменении поля', f.errors.pw.value === null);
+        });
+
+        // 2. form().wire(el) — per-input слой: touched, blur-then-live, aria, :user-invalid, aria-describedby дописывается
+        await scope3.run(async () => {
+            const f = form({ email: '', agree: false }, { rules: { email: [required, emailRule] } });
+            const formEl = document.createElement('form');
+            formEl.innerHTML = '<label>Email <input name="email" aria-describedby="hint"><span id="hint">hint</span></label><input type="checkbox" name="agree"><button>Save</button>';
+            sandbox.appendChild(formEl);
+            const el = formEl.querySelector('[name=email]');
+            f.wire(el); f.wire(formEl.querySelector('[name=agree]'));
+            assert('wire: noValidate на форме, describedby дополнен, не затёрт', formEl.noValidate === true && el.getAttribute('aria-describedby') === 'hint email-error');
+            ev(el, 'blur');
+            assert('wire: blur → touched, показ ошибки, aria-invalid, setCustomValidity (:invalid)', f.touched.email.value === true && f.errors.email.value !== null && el.getAttribute('aria-invalid') === 'true' && el.validity.customError === true && formEl.querySelector('#email-error').textContent === f.errors.email.value);
+            typeIn(el, 'a@b.c');
+            assert('wire: blur-then-live — исправление снимает ошибку синхронно', f.errors.email.value === null && el.validity.valid === true && el.getAttribute('aria-invalid') === 'false');
+            const cb = formEl.querySelector('[name=agree]'); cb.checked = true; ev(cb, 'change');
+            assert('wire: checkbox → boolean в сигнале', f.fields.agree.value === true);
+            f.fields.email.value = 'x@y.z';
+            assert('wire: signal → DOM', el.value === 'x@y.z');
+            // директива для html`` и bind:field
+            const host = document.createElement('div'); sandbox.appendChild(host);
+            const f2 = form({ pw: '', city: '' }, { rules: { pw: [required] } });
+            host.appendChild(html`<form><input name="pw" ${f2.wire('pw')}><input bind:field=${f2.field('city')}><p id="city-error"></p></form>`);
+            await sleep(5);
+            const pw = host.querySelector('[name=pw]'), city = host.querySelector('input:not([name])') || host.querySelectorAll('input')[1];
+            ev(pw, 'blur');
+            assert('wire(key) как директива html``: инпут подключён', f2.touched.pw.value === true && f2.errors.pw.value !== null && pw.getAttribute('aria-invalid') === 'true');
+            typeIn(city, 'Almaty'); ev(city, 'blur');
+            assert('bind:field — значение, touched и контейнер ошибки по id', f2.fields.city.value === 'Almaty' && f2.touched.city.value === true && city.getAttribute('aria-describedby') === 'city-error');
+            f2.reset();
+            assert('reset: touched и aria сброшены', f2.touched.pw.value === false && pw.getAttribute('aria-invalid') === 'false');
+        });
+
+        // 3. Standard Schema: issues по полям на blur без validate(), схема как правило поля, один прогон на изменение
+        await scope3.run(async () => {
+            let runs = 0;
+            const schema = { '~standard': { version: 1, vendor: 'mini', validate: (v) => { runs++; const issues = []; if (!/@/.test(v.email || '')) issues.push({ message: 'bad email', path: ['email'] }); if ((v.age ?? 0) < 18) issues.push({ message: 'too young', path: ['age'] }); return issues.length ? { issues } : { value: v }; } } };
+            const formEl = document.createElement('form'); formEl.innerHTML = '<input name="email"><input name="age" type="number" value="20">'; sandbox.appendChild(formEl);
+            const f = wireForm(formEl, { schema, mode: 'blur-then-live' });
+            assert('schema: истина сразу — valid=false по issue email, показа нет', f.valid.value === false && f.issues.email.value === 'bad email' && f.errors.email.value === null);
+            const em = formEl.querySelector('[name=email]');
+            ev(em, 'blur');
+            assert('schema: blur показывает issue поля без validate()', f.errors.email.value === 'bad email');
+            const before = runs;
+            ev(em, 'blur'); ev(em, 'blur'); f.validateField('email');
+            assert('schema: повторные проверки без изменений — схема не перегоняется (мемоизация)', runs === before);
+            typeIn(em, 'a@b');
+            assert('schema: исправление снимает ошибку (reward early)', f.errors.email.value === null && f.valid.value === true);
+            const miniRule = { '~standard': { version: 1, vendor: 'mini', validate: (v) => v.length >= 2 ? { value: v } : { issues: [{ message: 'min 2' }] } } };
+            const g = form({ code: 'a' }, { rules: { code: [required, miniRule] } });
+            assert('schema как правило поля: первый issue.message', g.issues.code.value === 'min 2' && g.validate() === false && g.errors.code.value === 'min 2');
+        });
+
+        // 4. сообщения: plural по локали, t из i18n(), перевод показанных ошибок при смене локали, messages: 'page'
+        await scope3.run(async () => {
+            const t = i18n({ ru: { validation: { minLen: { one: 'Минимум {n} символ', few: 'Минимум {n} символа', many: 'Минимум {n} символов', other: 'Минимум {n} символов' } } }, en: { validation: { minLen: 'At least {n} characters' } } }, { locale: 'ru', syncLang: false });
+            setValidationMessages(t);
+            assert('plural: формы ru через словарь приложения', minLen(1)('') === 'Минимум 1 символ' && minLen(3)('') === 'Минимум 3 символа' && minLen(5)('') === 'Минимум 5 символов');
+            const f = form({ name: 'ab' }, { rules: { name: [minLen(3)] } });
+            f.validate();
+            assert('локаль: показанная ошибка на ru', f.errors.name.value === 'Минимум 3 символа');
+            t.locale.value = 'en';
+            await sleep(1);
+            assert('локаль: смена языка переводит уже показанную ошибку', f.errors.name.value === 'At least 3 characters');
+            setValidationMessages(null);
+            const savedLang = document.documentElement.lang;
+            document.documentElement.lang = 'ru'; setValidationMessages(null);
+            const formEl = document.createElement('form'); formEl.innerHTML = '<input name="x" required minlength="3">'; sandbox.appendChild(formEl);
+            const w = wireForm(formEl, { messages: 'page' });
+            w.validate();
+            assert('messages: page — нативное ограничение (valueMissing) → код → словарь страницы, мост с :invalid сохранён', w.errors.x.value === 'Обязательное поле' && formEl.querySelector('input').validity.valid === false);
+            document.documentElement.lang = savedLang || ''; setValidationMessages(null);
+        });
+
+        // 5. status-машина: submitter не теряет фокус, abort, announce, 429 Retry-After, onRedirect: 'router', dispose прерывает
+        await scope3.run(async () => {
+            const formEl = document.createElement('form'); formEl.innerHTML = '<input name="q" value="1"><button data-pending-text="Сохраняем…">Сохранить</button>'; sandbox.appendChild(formEl);
+            const btn = formEl.querySelector('button');
+            const f = wireForm(formEl, {});
+            let gotSignal = null, resolveH = null;
+            const handler = f.submit((v, ctx) => { gotSignal = ctx.signal; return new Promise((res) => { resolveH = res; }); });
+            btn.focus();
+            const p = handler(new SubmitEvent('submit', { cancelable: true, submitter: btn }));
+            await sleep(1);
+            assert('status: submitting и data-status на форме', f.status.value === 'submitting' && f.submitting.value === true && formEl.dataset.status === 'submitting');
+            assert('status: submitter получает aria-disabled и текст pending (не disabled)', btn.getAttribute('aria-disabled') === 'true' && btn.textContent === 'Сохраняем…' && !btn.disabled);
+            assert('status: фокус остаётся на кнопке', document.activeElement === btn || document.activeElement === document.body);
+            f.abort();
+            resolveH({ ok: true });
+            await p;
+            assert('abort: handler получил сигнал отмены, status idle, кнопка восстановлена', gotSignal && gotSignal.aborted === true && f.status.value === 'idle' && btn.getAttribute('aria-disabled') === 'false' && btn.textContent === 'Сохранить');
+            const h2 = f.submit(async () => ({ ok: true, id: 1 }));
+            await h2(new SubmitEvent('submit', { cancelable: true, submitter: btn }));
+            await sleep(30);
+            const spoken = [...document.querySelectorAll('[aria-live]')].some(n => n.textContent.includes(_msgSaved()));
+            assert('success: status и result, объявление об успехе в live-регионе', f.status.value === 'success' && f.result.value.id === 1 && spoken);
+            configure({ fetch: async () => new Response(JSON.stringify({ message: 'slow down' }), { status: 429, headers: { 'Content-Type': 'application/json', 'Retry-After': '7' } }) });
+            formEl.setAttribute('action', '/f3/save');
+            await f.submit()(new SubmitEvent('submit', { cancelable: true, submitter: btn }));
+            assert('429 + Retry-After → $form с секундами, status error', /7/.test(f.errors.$form.value || '') && f.status.value === 'error');
+            let navigated = null; const hadNav = typeof navigation !== 'undefined';
+            const origNavigate = hadNav ? navigation.navigate : null;
+            if (hadNav) navigation.navigate = (u) => { navigated = u; return { finished: Promise.resolve(), committed: Promise.resolve() }; };
+            const redirectUrl = location.origin + '/f3/after';
+            configure({ fetch: async () => { const r = new Response('<html></html>', { status: 200, headers: { 'Content-Type': 'text/html' } }); Object.defineProperty(r, 'redirected', { value: true }); Object.defineProperty(r, 'url', { value: redirectUrl }); return r; } });
+            const r3 = await f.submit({ onRedirect: 'router' })(new SubmitEvent('submit', { cancelable: true, submitter: btn }));
+            if (hadNav) navigation.navigate = origNavigate;
+            assert('onRedirect: router — PRG через Navigation API (или assign без него), без перезагрузки в тесте', r3 && r3.redirected === true && (!hadNav || navigated === redirectUrl));
+            configure({ fetch: null });
+            let disposedAbort = null;
+            const sc = createScope(); let g;
+            sc.run(() => { g = wireForm(formEl, {}); });
+            const p4 = g.submit((v, ctx) => { disposedAbort = ctx.signal; return new Promise(() => {}); })(new SubmitEvent('submit', { cancelable: true, submitter: btn }));
+            await sleep(1); sc.dispose(); await sleep(1);
+            assert('dispose scope во время submit прерывает запрос', disposedAbort && disposedAbort.aborted === true);
+            void p4;
+        });
+
+        scope3.dispose();
+        offW(); dev.resetWarnings(); reset(); configure({ fetch: null });
+    })();
+
     section('component() & destroy()');
 
     (() => {

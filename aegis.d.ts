@@ -228,7 +228,7 @@ export function onDispose(fn: () => void): () => void;
 // ── DOM Rendering ──────────────────────────────────────────────
 
 /** Что можно вставить в html``: текст, узел, сигнал, функция (реактивно), ref/attach, class/style-объект, массив. Promise/Date — нет (${String(date)}, when()/resource()) */
-export type HtmlValue = Displayable | Node | ReadonlySignal<any> | ((...args: any[]) => unknown) | Ref<any> | Attachment<any> | ClassValue | Record<string, Reactive<unknown>> | FunctionBinding | HtmlValue[];
+export type HtmlValue = Displayable | Node | ReadonlySignal<any> | ((...args: any[]) => unknown) | Ref<any> | Attachment<any> | ClassValue | Record<string, Reactive<unknown>> | FunctionBinding | FieldRef | HtmlValue[];
 export function html(strings: TemplateStringsArray, ...values: HtmlValue[]): DocumentFragment;
 export function render(target: Element, content: DocumentFragment | Element): void;
 
@@ -853,7 +853,23 @@ export function leader(name?: string, opts?: { fallback?: boolean }): ReadonlySi
 
 // ── Form ───────────────────────────────────────────────────────
 
-export type ValidationRule<V = unknown> = (value: V, key: string, fields: Record<string, Signal<unknown>>) => string | null;
+export type ValidationRule<V = unknown> = (value: V, key: string, fields: Record<string, Signal<unknown>>, ctx?: { signal: AbortSignal | null; /** true — внутри computed истины (issues): правило должно быть чистым */ live?: boolean }) => string | null;
+/** Правило может быть Standard Schema (zod/valibot/arktype): первый issue.message; async-схема — async-правило */
+export type RuleLike<V = any> = ValidationRule<V> | AsyncValidationRule<V> | StandardSchemaV1<V, any>;
+export type FormStatus = 'idle' | 'validating' | 'submitting' | 'success' | 'error';
+/** Ссылка на поле: bind:field=${f.field('email')} — bind + touched + aria-invalid + aria-describedby + контейнер ошибки одной строкой */
+export interface FieldRef<T = any> {
+    key: string;
+    value: Signal<T>;
+    /** показанная ошибка */
+    error: Signal<string | null>;
+    /** истина: результат правил от текущего значения, независимо от показа */
+    issue: ReadonlySignal<string | null>;
+    touched: Signal<boolean>;
+    validating: ReadonlySignal<boolean>;
+    id: string;
+    errorId: string;
+}
 /** Поле формы: { value, rules } — правила типизированы значением: minLen(3) на числовом поле — ошибка типов */
 export interface FieldDef<V = any> { value: V; rules?: Array<ValidationRule<V> | AsyncValidationRule<V>> }
 
@@ -890,6 +906,26 @@ export type AsyncValidationRule<V = any> = (value: V, key: string, fields: Recor
 export interface FormCore {
     /** вложенный объект значений: items[0][qty] → { items: [{ qty }] } */
     values: ReadonlySignal<any>;
+    /** истина по полям: результат sync-правил и Standard Schema от текущих значений, пересчитывается реактивно; $any — есть хоть одна */
+    issues: Record<string, ReadonlySignal<string | null>> & { $any: ReadonlySignal<boolean>; $form: ReadonlySignal<string | null> };
+    touched: Record<string, Signal<boolean>>;
+    /** valid и ничего не валидируется/не отправляется — для disabled кнопки */
+    canSubmit: ReadonlySignal<boolean>;
+    /** был хоть один submit */
+    submitted: ReadonlySignal<boolean>;
+    /** жизненный цикл отправки; submitting — computed от него */
+    status: Signal<FormStatus>;
+    /** прервать текущий submit (handler получает ctx.signal) */
+    abort(): void;
+    /** фокус на первую показанную ошибку */
+    focusFirstError(): boolean;
+    /** привязать инпут к полю (per-input слой: two-way, touched, режим показа, aria, :user-invalid); f.wire('email') — директива для html`` */
+    wire(el: HTMLElement, key?: string): () => void;
+    wire(key: string): Attachment<any>;
+    /** ссылка на поле для bind:field=${f.field('email')} */
+    field(key: string): FieldRef;
+    /** оживить <form> целиком — все [name], как wireForm */
+    attach(formEl: HTMLFormElement): HTMLFormElement;
     validating: Record<string, ReadonlySignal<boolean>> & { $any: ReadonlySignal<boolean> };
     dirtyFields: ReadonlySignal<Record<string, true>>;
     /** только изменённые поля (для PATCH) */
@@ -909,14 +945,18 @@ export interface FormCore {
     reset(): void;
 }
 export interface FormOptions {
-    rules?: Record<string, AsyncValidationRule[]>;
+    rules?: Record<string, RuleLike[]>;
     schema?: StandardSchemaV1<any, any>;
     asyncDebounce?: number;
+    /** когда ПОКАЗЫВАТЬ ошибки правил (истина всегда в issues): blur, затем live для полей с ошибкой (default) | live | только после submit */
+    mode?: 'blur-then-live' | 'live' | 'submit';
+    /** false — не трогать нативную валидацию (noValidate / setCustomValidity) */
+    native?: boolean;
 }
 /** form(defaults, { rules, schema }) — форма из значений по умолчанию: form({ name: '', age: 0 }) */
 export function form<T extends Record<string, any>>(defaults: T & { [K in keyof T]: T[K] extends { value: any } ? never : T[K] }, opts?: FormOptions): FormResult<{ [K in keyof T]: { value: T[K] } }> & FormSubmitState & FormCore & {
-    submit(handler: (values: T) => unknown | Promise<unknown>): Promise<unknown>;
-    submit(url: string, opts?: { headers?: HeadersInit; transform?: (v: T) => unknown; fetchOpts?: RequestOptions }): Promise<{ ok: boolean; status?: number; data?: any; error?: unknown }>;
+    submit(handler: (values: T, ctx: { signal: AbortSignal; submitter: HTMLElement | null; event: SubmitEvent | null }) => unknown | Promise<unknown>, opts?: { submitter?: HTMLElement; event?: SubmitEvent }): Promise<unknown>;
+    submit(url: string, opts?: { headers?: HeadersInit; transform?: (v: T) => unknown; fetchOpts?: RequestOptions; submitter?: HTMLElement; onRedirect?: 'assign' | 'router' | 'none' | ((r: Response) => void) }): Promise<{ ok: boolean; status?: number; data?: any; error?: unknown; aborted?: boolean; redirected?: boolean }>;
 };
 export const email: ValidationRule<string>;
 export function min(n: number, msg?: string): ValidationRule<number | string | null>;
@@ -934,13 +974,27 @@ export function matches(otherKey: string, msg?: string): ValidationRule<any>;
 export interface WireFormResult {
     fields: Record<string, Signal<unknown>>;
     errors: Record<string, Signal<string | null>>;
+    /** истина по полям (sync-правила + схема), независимо от показа */
+    issues: Record<string, ReadonlySignal<string | null>> & { $any: ReadonlySignal<boolean>; $form: ReadonlySignal<string | null> };
     touched: Record<string, Signal<boolean>>;
     dirty: ReadonlySignal<boolean>;
     valid: ReadonlySignal<boolean>;
+    canSubmit: ReadonlySignal<boolean>;
+    submitted: ReadonlySignal<boolean>;
+    status: Signal<FormStatus>;
+    submitting: ReadonlySignal<boolean>;
+    submitCount: ReadonlySignal<number>;
+    result: ReadonlySignal<unknown>;
+    abort(): void;
+    focusFirstError(): boolean;
+    validating: Record<string, ReadonlySignal<boolean>> & { $any: ReadonlySignal<boolean> };
+    validateField(key: string): boolean;
+    validateAsync(): Promise<boolean>;
     validate(): boolean;
     reset(): void;
-    setErrors(errors: Record<string, string | string[]>): void;
-    submit(handler: (values: Record<string, unknown>) => Promise<void> | void): (e?: Event) => Promise<void>;
+    setErrors(errors: Record<string, any> | Array<{ path?: string | string[]; pointer?: string; message: string }>): void;
+    /** handler(values, { signal, submitter, event }); без handler — серверный submit (FormData, 422 → ошибки полей, 303 → переход) */
+    submit(handler?: ((values: Record<string, unknown>, ctx: { signal: AbortSignal; submitter: HTMLElement | null; event: SubmitEvent | undefined }) => unknown | Promise<unknown>) | { as?: 'json'; headers?: HeadersInit; onSuccess?: (data: any, r: Response) => void; onRedirect?: 'assign' | 'router' | 'none' | ((r: Response) => void); announceSuccess?: boolean }): (e?: Event) => Promise<any>;
     step: Signal<number> | null;
     stepCount: number | null;
     next: (() => boolean) | null;
@@ -954,8 +1008,19 @@ export interface WireFormResult {
  *   on(el, 'submit', f.submit(values => api.post('/save', values)));
  */
 export function wireForm(formEl: HTMLFormElement, opts?: {
-    schema?: Record<string, ValidationRule[]>;
+    schema?: Record<string, RuleLike[]> | StandardSchemaV1<any, any>;
+    rules?: Record<string, RuleLike[]>;
+    /** когда показывать ошибки; истина всегда в issues */
     mode?: 'blur-then-live' | 'live' | 'submit';
+    native?: boolean;
+    asyncDebounce?: number;
+    /** 'browser' — input.validationMessage на языке браузера; 'page' — коды ValidityState → словарь на языке страницы */
+    messages?: 'browser' | 'page';
+    submit?: boolean | ((values: Record<string, unknown>, ctx: { signal: AbortSignal; submitter: HTMLElement | null; event: SubmitEvent | undefined }) => unknown);
+    onRedirect?: 'assign' | 'router' | 'none' | ((r: Response) => void);
+    announceSuccess?: boolean;
+    /** Escape во время отправки прерывает её */
+    escapeAborts?: boolean;
 }): WireFormResult;
 
 // ── Component ──────────────────────────────────────────────────
@@ -1459,7 +1524,8 @@ export interface TranslationFunction<K extends string = string> {
  * @param dict — flat key→translation map (single language)
  */
 /** Сообщения встроенных правил валидации: словарь по кодам или (code, params) => string; null — дефолт по <html lang> */
-export function setValidationMessages(dict: Record<string, string> | ((code: string, params?: Record<string, unknown>) => string) | null): void;
+/** Сообщения правил: словарь (строка или plural-формы { one, few, many, other }), функция (code, params) => string | null, или t из i18n() — ключи <prefix><code>, локаль следует за t.locale */
+export function setValidationMessages(dict: Record<string, string | Record<string, string>> | ((code: string, params?: Record<string, unknown>) => string | null) | TranslationFunction<any> | null, prefix?: string): void;
 export function maxSize(size: number | string, msg?: string): ValidationRule<any>;
 export function mime(types: string | string[], msg?: string): ValidationRule<any>;
 export function maxFiles(n: number, msg?: string): ValidationRule<any>;

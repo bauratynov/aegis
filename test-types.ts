@@ -150,9 +150,20 @@ const price = lens(() => cents.value / 100, (v) => { cents.value = Math.round(v 
 const addr = { city: '' }; const city = lens(addr, 'city'); city.value = 'Almaty';
 const fb: FunctionBinding<string> = [() => addr.city, (v) => { addr.city = v; }];
 bind(document.createElement('input'), fb); bind(document.createElement('input'), city);
-const { count: cnt, total: tot } = signals({ count: 1, get total() { return cnt.value * 2; } }); const tv: number = tot.value; void tv;
+const { count: cnt, total: tot } = signals({ count: 1, get total(): number { return (cnt as Signal<number>).value * 2; } }); const tv: number = tot.value; void tv;
 const lk = linked(() => cnt.value); lk.update(v => v + 1);
 const offErr = onError((e, info) => { void e; if (info) { const s: string = info.effect; void s; } }); offErr();
+
+import { form as form3, wireForm as wireForm3, setValidationMessages, i18n as i18n3, type FieldRef, type FormStatus } from './aegis.js';
+// ── forms phase 3 — issues / canSubmit / wire / field / status
+const f3 = form3({ email: '', age: 0 }, { rules: { email: [required, emailRule] }, mode: 'blur-then-live', native: true });
+const iss: string | null = f3.issues.email.value; void iss; const cs3: boolean = f3.canSubmit.value; void cs3; const st3: FormStatus = f3.status.value; void st3;
+const ref3: FieldRef<string> = f3.field('email'); html`<input bind:field=${ref3}> <input name="age" ${f3.wire('age')}>`;
+f3.wire(document.createElement('input'), 'email'); f3.attach(document.createElement('form')); f3.focusFirstError(); f3.abort();
+f3.submit(async (v, { signal, submitter }) => { void v.email; void signal.aborted; void submitter; }, { submitter: document.createElement('button') });
+const w3 = wireForm3(document.createElement('form'), { messages: 'page', mode: 'submit', escapeAborts: true, onRedirect: 'router', submit: (v, ctx) => { void v; void ctx.signal; } });
+w3.issues.$any.value; w3.canSubmit.value; w3.status.value; w3.submitted.value; w3.abort();
+const t3 = i18n3({ en: { validation: { minLen: 'At least {n}' } } }, { locale: 'en' }); setValidationMessages(t3); setValidationMessages({ minLen: { one: '{n} char', other: '{n} chars' } }); setValidationMessages(null);
 
 // ── aegis/test — render / fire / waitFor / mockFetch
 import { render, fire, waitFor, mockFetch, cleanup, withScope, fakeClock } from './aegis-test.js';
