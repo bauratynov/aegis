@@ -201,6 +201,19 @@ function _eqOf(o) {
 
 // ---- tracking ---------------------------------------------------------------
 
+/** Добавить подписчика; первый подписчик оживляет computed (подписка на его источники) и зовёт watched() сигнала */
+function _addSub(src, obs) {
+    const st = src.subs || (src.subs = new Set());
+    if (!st.size) { if (src._isComputed) { if (!src._live) src._activate(); } else if (src._w) src._w(); }
+    st.add(obs);
+}
+/** Убрать подписчика; последний ушёл — computed отписывается от источников, сигнал зовёт unwatched() */
+function _delSub(src, obs) {
+    const st = src.subs;
+    if (!st || !st.delete(obs) || st.size) return;
+    if (src._isComputed) { if (src._live) src._deactivate(); } else if (src._u) src._u();
+}
+
 /** Подписать текущий observer на источник; k-е чтение того же источника — без мутаций графа */
 function _track(src) {
     const obs = _tracking;
@@ -217,7 +230,7 @@ function _track(src) {
     if (i < deps.length) (obs._evict || (obs._evict = [])).push(deps[i]); // вытеснили другой источник
     deps[i] = src;
     vers[i] = src.version();
-    (src.subs || (src.subs = new Set())).add(obs);
+    if (!obs._isComputed || obs._live) _addSub(src, obs);   // неживой computed только запоминает dep — подпишется, когда на него подпишутся
     obs._n = i + 1;
 }
 
@@ -238,14 +251,14 @@ function _endTrack(obs) {
 
 function _unsubIfGone(obs, src, deps, n) {
     for (let i = 0; i < n; i++) if (deps[i] === src) return;
-    if (src.subs) src.subs.delete(obs);
+    _delSub(src, obs);
 }
 
 /** Отписать observer от всех источников */
 function _unsubscribe(obs) {
     const deps = obs._deps;
     if (deps) {
-        for (let i = 0; i < deps.length; i++) if (deps[i].subs) deps[i].subs.delete(obs);
+        for (let i = 0; i < deps.length; i++) _delSub(deps[i], obs);
         deps.length = 0;
         obs._vers.length = 0;
     }
@@ -279,12 +292,14 @@ function _depsChanged(obs) {
 // ---- Signal ------------------------------------------------------------------
 
 class Signal {
-    constructor(value, name, eq) {
+    constructor(value, name, eq, w, u) {
         this._value = value;
         this._version = ++_epoch;
         this._name = name;
         this._eq = eq;
         this.subs = null;
+        if (w) this._w = w;        // watched(): появился первый подписчик
+        if (u) this._u = u;        // unwatched(): ушёл последний
     }
     get value() {
         _track(this);
@@ -298,7 +313,14 @@ class Signal {
                 fix: 'Move the write into an effect() or a method/action.',
             });
         }
-        if (this._eq(this._value, v)) return;
+        if (this._eq(this._value, v)) {
+            if (_devCache === true && v !== null && typeof v === 'object' && v === this._value && !(this._name && this._name.includes(':'))) _warn('E047', {
+                what: `signal "${this._name || '?'}": the same object reference was written back — nothing happens.`,
+                why: 'Signals compare by identity (Object.is); mutations inside the object (push / splice / prop =) are invisible.',
+                fix: 'sig.update(a => [...a, x]) or sig.value = { ...o, k: v }; hold the object in reactive(), or use signal(v, { equals: false }).',
+            }, 'sameRef:' + (this._name || ''));
+            return;
+        }
         if (this._traceSet) { console.groupCollapsed(`▸ [Aegis] signal "${this._name || '?'}" set ${_short(this._value)} → ${_short(v)}`); console.trace(); console.groupEnd(); }
         this._value = v;
         this._version = ++_epoch;
@@ -325,7 +347,8 @@ Signal.prototype[SIGNAL] = true;
  * @returns {Signal<T>}
  */
 export function signal(initial, nameOrOpts) {
-    return new Signal(initial, _nm(nameOrOpts), _eqOf(nameOrOpts));
+    const o = nameOrOpts && typeof nameOrOpts === 'object' ? nameOrOpts : null;
+    return new Signal(initial, _nm(nameOrOpts), _eqOf(nameOrOpts), o && o.watched, o && o.unwatched);
 }
 
 /** Отладка: печатать стек каждой записи в сигнал (trace(sig)) или причину перезапуска эффекта (effect(fn, { trace: true })) */
@@ -358,22 +381,30 @@ class Computed {
         this._evict = null;
         this._unreg = null;
         this._err = null;          // { e } — кэшированное исключение: перебрасывается при чтении, пока не изменится зависимость
+        this._live = false;        // подписан на источники только пока есть свои подписчики (TC39 watched / Preact)
+        this._chk = -1;            // _epoch последней проверки: неживому push не приходит — сверяем версии при чтении
     }
+    /** Нужен пересчёт/проверка: помечен dirty, или неживой и с прошлой проверки в системе была запись */
+    _stale() { return this._dirty || (!this._live && this._chk !== _epoch); }
+    _activate() { this._live = true; const d = this._deps; if (d) for (let i = 0; i < d.length; i++) _addSub(d[i], this); }
+    _deactivate() { this._live = false; const d = this._deps; if (d) for (let i = 0; i < d.length; i++) _delSub(d[i], this); }
     get value() {
-        if (this._dirty) this._recompute();
+        if (this._stale()) this._recompute();
+        if (this._disposed && _devCache === true) _deadRead(this);
         _track(this);                              // подписка ДО броска: читатель узнает о выздоровлении
         if (this._err) throw this._err.e;
         return this._value;
     }
     /** Прочитать без подписки (зависимости самого computed переподписываются как обычно) */
     peek() {
-        if (this._dirty) this._recompute();
+        if (this._stale()) this._recompute();
+        if (this._disposed && _devCache === true) _deadRead(this);
         if (this._err) throw this._err.e;
         return this._value;
     }
     /** Версия значения; никогда не бросает (ошибка — тоже версия) */
     version() {
-        if (this._dirty) this._recompute();
+        if (this._stale()) this._recompute();
         return this._version;
     }
     subscribe(fn) { return _subscribe(this, fn); }
@@ -403,7 +434,7 @@ class Computed {
             // Bailout: помечен dirty, но ни одна зависимость не изменила версию
             // (например, upstream computed пересчитался в то же значение)
             if (this._deps && this._deps.length > 0 && !_depsChanged(this)) {
-                this._dirty = false;
+                this._dirty = false; this._chk = _epoch;
                 return;
             }
             this._n = 0;
@@ -422,7 +453,7 @@ class Computed {
                 this._value = v;
                 this._version = ++_epoch;
             }
-            this._dirty = false;
+            this._dirty = false; this._chk = _epoch;
         } finally {
             _tracking = prev;
             this._computing = false;
@@ -440,13 +471,29 @@ Computed.prototype._isComputed = true;
  * версия самого computed растёт только при изменении результата.
  */
 export function computed(fn, nameOrOpts) {
-    const c = new Computed(fn, _nm(nameOrOpts), _eqOf(nameOrOpts), _initialOf(nameOrOpts));
-    if (_currentScope) c._unreg = _currentScope.onDispose(() => c.dispose());
-    return c;
+    return new Computed(fn, _nm(nameOrOpts), _eqOf(nameOrOpts), _initialOf(nameOrOpts));   // scope не нужен: без подписчиков computed не подписан ни на что
+}
+/** dev: чтение уничтоженного computed — значение заморожено (E045) */
+function _deadRead(c) {
+    _warn('E045', {
+        what: `computed "${c._name || '?'}" read after dispose() — its value is frozen at ${_short(c._value)}${_tracking ? ` (read by "${_tracking._name}")` : ''}.`,
+        why: 'A disposed computed never recomputes; the reader keeps showing the last value while the sources change.',
+        fix: 'Do not dispose a computed that is still read; computed() needs no dispose at all — it is unsubscribed while nobody observes it.',
+    }, 'dead:' + (c._name || '?'));
 }
 
 // ---- Effect ------------------------------------------------------------------
 
+/** Усыновить disposer текущим запуском эффекта: effect/on/interval/subscribe/createScope в теле эффекта живут до его перезапуска (Solid/Svelte 5) */
+function _adopt(dispose) {
+    const t = _tracking;
+    if (t && !t._isComputed && t._own !== false) (t._kids || (t._kids = [])).push(dispose);
+}
+function _killKids(node) {
+    const k = node._kids; if (!k) return;
+    node._kids = null;
+    for (let i = k.length - 1; i >= 0; i--) { try { k[i](); } catch (e) { console.error('[Aegis] child dispose error:', e); } }
+}
 let _ordSeq = 0;                                   // порядок создания observers: родитель всегда раньше своих детей
 const _byOrd = (a, b) => a._ord - b._ord;
 /** O(n) проверка монотонности; сортировка только при нарушении (churn подписок переставил Set) */
@@ -473,6 +520,8 @@ class Effect {
         this._n = 0;
         this._evict = null;
         this._unreg = null;
+        this._kids = null;          // disposers детей текущего запуска (effect/on/interval/subscribe/createScope в теле)
+        this._own = true;           // effect(fn, { own: false }) — дети живут до dispose владельца (старое поведение)
     }
     _run() {
         if (this._disposed) return;
@@ -494,6 +543,7 @@ class Effect {
     }
     _execute() {
         this._runCleanup();
+        _killKids(this);                             // дети прошлого запуска — до нового
         if (!this._counted) { this._counted = true; _liveEffects++; }
         const prevT = _tracking, prevS = _currentScope;
         _tracking = this;
@@ -527,6 +577,7 @@ class Effect {
         if (this._counted) _liveEffects--;
         _unsubscribe(this);
         this._runCleanup();
+        _killKids(this);
         const u = this._unreg; this._unreg = null;
         if (u) u();
     }
@@ -546,15 +597,17 @@ export function effect(fn, nameOrOpts) {
             site,
             what: `Effect "${name || 'anonymous'}" created outside a component scope — it will never be cleaned up.`,
             why: 'Effects created outside a scope leak subscribers forever, causing memory growth.',
-            fix: `Wrap in component(el, ({ effect }) => { ... }) or scope.run(() => effect(...))`,
+            fix: `Wrap in component(el, ({ effect }) => { ... }) or scope.run(() => effect(...)).${typeof _components !== 'undefined' && _components.size ? ' After an await in setup the scope is lost — use the helpers from ctx (they stay bound) or runWithOwner(getOwner(), …).' : ''}`,
         });
     }
     const node = new Effect(fn, name, owner, trace, lane);
     node._site = site;
+    if (nameOrOpts && typeof nameOrOpts === 'object' && nameOrOpts.own === false) node._own = false;
     const dispose = () => node.dispose();
     dispose._node = node;
     // Регистрируем до первого запуска: в уже уничтоженном scope effect не стартует
     node._unreg = owner ? owner.onDispose(dispose) : null;
+    _adopt(dispose);                               // создан в теле другого эффекта — умрёт с его перезапуском
     if (!node._disposed) {
         try { node._execute(); } catch (e) { if (!_dispatchError(owner, e)) throw e; }   // первый запуск: onError как у повторных; без обработчика — синхронно в setup (component/errorBoundary ловят)
         // Детектор потерянной реактивности: эффект, не прочитавший ни одного сигнала, больше не запустится
@@ -597,7 +650,7 @@ class Subscriber {
     dispose() {
         if (this._disposed) return;
         this._disposed = true;
-        if (this._src.subs) this._src.subs.delete(this);
+        _delSub(this._src, this);
         const u = this._unreg; this._unreg = null;
         if (u) u();
     }
@@ -608,9 +661,10 @@ Subscriber.prototype._isComputed = false;
 function _subscribe(src, fn) {
     const owner = _currentScope;
     const node = new Subscriber(src, fn, owner);
-    (src.subs || (src.subs = new Set())).add(node);
+    _addSub(src, node);
     const dispose = () => node.dispose();
     node._unreg = owner ? owner.onDispose(dispose) : null;
+    _adopt(dispose);
     return dispose;
 }
 
@@ -911,7 +965,9 @@ const _noop = () => {};
 
 /** Создать scope (привязывается к родительскому автоматически). name — для диагностики */
 export function createScope(name) {
-    return new Scope(_currentScope, name);
+    const sc = new Scope(_currentScope, name);
+    _adopt(sc.dispose);
+    return sc;
 }
 
 /**
@@ -986,10 +1042,14 @@ export function inject(key, fallback) {
 /** Зарегистрировать disposer в текущем scope и вернуть функцию, которая делает cleanup и снимает регистрацию */
 function _scoped(cleanup) {
     let unreg = _currentScope ? _currentScope.onDispose(cleanup) : null;
-    return () => {
+    let done = false;
+    const off = () => {
+        if (done) return; done = true;
         cleanup();
         if (unreg) { unreg(); unreg = null; }
     };
+    _adopt(off);
+    return off;
 }
 
 

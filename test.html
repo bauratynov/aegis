@@ -3853,6 +3853,154 @@
         offW(); dev.resetWarnings(); reset();
     })();
 
+    section('💎 ядро фаза 2a — computed без владельца, дети эффекта, ctx после await, E045–E047');
+
+    await (async () => {
+        const codes = [];
+        const offW = onWarn((w) => codes.push(w.code));
+        const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+        const eff0 = stats().effects;
+
+        // 1. геттеры store()/reactive() переживают dispose scope первого читателя
+        {
+            const S = store({ n: 1, get twice() { return this.n * 2; } });
+            const sc = createScope(); sc.run(() => effect(() => { S.twice; }));
+            sc.dispose();
+            S.n = 7;
+            assert('unowned computed: геттер store после dispose первого читателя жив', S.twice === 14);
+            let runs = 0; const sc2 = createScope(); sc2.run(() => effect(() => { S.twice; runs++; }));
+            S.n = 8; S.n = 9;
+            assert('unowned computed: новый эффект на геттер перезапускается', runs === 3);
+            sc2.dispose();
+            const st = reactive({ a: 1, get double() { return this.a * 2; } });
+            const sc3 = createScope(); sc3.run(() => effect(() => { st.double; })); sc3.dispose();
+            st.a = 5;
+            assert('unowned computed: геттер reactive() после dispose читателя жив', st.double === 10);
+        }
+
+        // 2. computed без подписчиков не держит источник, но корректен по версиям; оживает и засыпает каскадом
+        {
+            const src = signal(0, 'src');
+            for (let i = 0; i < 100; i++) computed(() => src.value + 1).value;
+            assert('unowned computed: 100 прочитанных computed без подписчиков не сидят в subs источника', !src.subs || src.subs.size === 0);
+            const cs = [0, 1, 2].map(i => computed(() => src.value + i));
+            cs.forEach(c => c.peek());
+            src.value = 5;
+            assert('unowned computed: неживые computed корректны по версиям после записи', cs.map(c => c.value).join() === '5,6,7');
+            const b = computed(() => src.value + 1, 'b'), c2 = computed(() => b.value * 10, 'c2');
+            assert('unowned computed: цепочка без наблюдателей считается по требованию', c2.value === 60 && (!src.subs || src.subs.size === 0) && !b.subs);
+            const sc = createScope(); let v;
+            sc.run(() => effect(() => { v = c2.value; }));
+            assert('unowned computed: эффект оживил цепочку — подписки до источника', src.subs.size === 1 && b._live === true && c2._live === true && v === 60);
+            src.value = 6;
+            assert('unowned computed: push через живую цепочку', v === 70);
+            sc.dispose();
+            assert('unowned computed: последний подписчик ушёл — отписка каскадом', (!src.subs || src.subs.size === 0) && b._live === false && c2._live === false);
+            src.value = 7;
+            assert('unowned computed: после засыпания значение снова по версиям', c2.value === 80);
+        }
+
+        // 3. signal({ watched, unwatched }) и from(producer, initial, { lazy: true })
+        {
+            let started = 0, stopped = 0;
+            const sig = signal(0, { name: 'w', watched: () => started++, unwatched: () => stopped++ });
+            const sc = createScope(); sc.run(() => effect(() => { sig.value; }));
+            assert('watched: первый подписчик вызывает watched()', started === 1 && stopped === 0);
+            sc.dispose();
+            assert('unwatched: последний подписчик ушёл — unwatched()', stopped === 1);
+            let up = 0, down = 0, emit = null;
+            const fr = from((set) => { up++; emit = set; set(1); return () => { down++; emit = null; }; }, 0, { lazy: true });
+            assert('from lazy: producer не стартует без наблюдателей', up === 0 && fr.peek() === 0);
+            const sc2 = createScope(); let fv;
+            sc2.run(() => effect(() => { fv = fr.value; }));
+            assert('from lazy: первый наблюдатель запускает producer', up === 1 && fv === 1);
+            emit(2);
+            assert('from lazy: значения идут подписчику', fv === 2);
+            sc2.dispose();
+            assert('from lazy: последний наблюдатель ушёл — producer остановлен', down === 1);
+        }
+
+        // 4. дети эффекта умирают перед его перезапуском (Solid / Svelte 5)
+        {
+            const open = signal(true), n = signal(0); let inner = 0, clicks = 0, kidDisposed = 0; const order = [];
+            const btn = document.createElement('button'); sandbox.appendChild(btn);
+            const base = stats().effects;
+            const sc = createScope();
+            sc.run(() => effect(() => {
+                order.push('run');
+                if (open.value) {
+                    effect(() => { n.value; inner++; });
+                    on(btn, 'click', () => clicks++);
+                    const k = createScope(); k.onDispose(() => { kidDisposed++; order.push('kid'); });
+                }
+                return () => order.push('cleanup');
+            }));
+            open.value = false; open.value = true; open.value = false; open.value = true;
+            assert('дети эффекта: после 4 перезапусков живых эффектов ровно 2 (родитель + один ребёнок)', stats().effects === base + 2);
+            inner = 0; n.value++;
+            assert('дети эффекта: вложенный эффект запускается один раз, дубликатов нет', inner === 1);
+            btn.click();
+            assert('дети эффекта: on() внутри эффекта срабатывает один раз', clicks === 1);
+            assert('дети эффекта: дочерний scope уничтожается при каждом перезапуске', kidDisposed === 2);
+            assert('дети эффекта: порядок — cleanup родителя, затем дети, затем новый запуск', order.slice(0, 4).join() === 'run,cleanup,kid,run');
+            let acc = 0;
+            const sc2 = createScope();
+            sc2.run(() => effect(() => { open.value; effect(() => { n.value; acc++; }); }, { own: false }));
+            open.value = false; open.value = true;
+            acc = 0; n.value++;
+            assert('дети эффекта: { own: false } — старое поведение, дети живут до dispose владельца', acc === 3);
+            sc.dispose(); sc2.dispose();
+            assert('дети эффекта: dispose владельца убирает всё', stats().effects === base);
+        }
+
+        // 5. async setup: хелперы ctx привязаны к scope компонента и после await
+        {
+            const host = document.createElement('div'); sandbox.appendChild(host);
+            codes.length = 0;
+            const s = signal(1); let ran = 0, resized = 0;
+            const base = stats().effects;
+            const api = component(host, async ({ effect, on, html }) => {
+                await sleep(1);
+                effect(() => { s.value; ran++; });
+                on(window, 'resize', () => resized++);
+                return html`<b>${() => s.value}</b>`;
+            });
+            await api;
+            assert('async setup: после await ctx-хелперы не дают E001 и рендер работает', !codes.includes('E001') && host.textContent === '1');
+            s.value = 2;
+            assert('async setup: эффект и шаблон реактивны', host.textContent === '2' && ran === 2);
+            destroy(host);
+            s.value = 3; window.dispatchEvent(new Event('resize'));
+            assert('async setup: destroy снимает эффекты и слушатели, созданные после await', ran === 2 && resized === 0 && stats().effects === base);
+        }
+
+        // 6. тихие no-op → предупреждения: E046 watch(plain), E047 запись той же ссылки, E045 чтение уничтоженного computed
+        {
+            dev.resetWarnings(); codes.length = 0;
+            const st = reactive({ count: 0 });
+            const scW = createScope();
+            scW.run(() => { watch(st.count, () => {}); watch(st, () => {}); });
+            const e46 = codes.filter(c => c === 'E046').length;
+            scW.run(() => { watch(() => st.count, () => {}); watch(signal(1), () => {}); });
+            scW.dispose();
+            assert('E046: watch(plain) и watch(reactive) предупреждают, сигнал и геттер — нет', e46 === 2 && codes.filter(c => c === 'E046').length === 2);
+            const list = signal([1], 'list');
+            list.value.push(2); list.value = list.value; list.value = list.value;
+            const rd = signal({ a: 1 }, 'res:data'); rd.value = rd.value;
+            assert('E047: та же ссылка записана обратно — один раз (дедуп), служебные сигналы молчат', codes.filter(c => c === 'E047').length === 1);
+            const a = signal(1); const dead = computed(() => a.value * 2, 'dead');
+            const sc = createScope(); let last; sc.run(() => effect(() => { last = dead.value; }, 'reader'));
+            const before = codes.filter(c => c === 'E045').length;
+            dead.dispose(); a.value = 10;
+            const sc2 = createScope(); sc2.run(() => effect(() => { last = dead.value; }));
+            assert('E045: чтение уничтоженного computed предупреждает, значение заморожено', codes.filter(c => c === 'E045').length === before + 1 && last === 2);
+            sc.dispose(); sc2.dispose();
+        }
+
+        assert('ядро 2a: живых эффектов после секции столько же, сколько до', stats().effects === eff0);
+        offW(); dev.resetWarnings(); reset();
+    })();
+
     section('component() & destroy()');
 
     (() => {

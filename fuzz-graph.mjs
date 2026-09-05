@@ -71,8 +71,10 @@ export function genGraph(api, seed, { nSig = 4, nComp = 6, nEff = 4, poison = nu
             if (o._disposed) viol.push(`I5 ${n.id}.subs keeps disposed ${o._name}`);
             else if (!(o._deps || []).includes(n.node) && o._src !== n.node) viol.push(`I5 ${n.id}.subs has ${o._name} without back-edge`);
         }
-        const observers = [...comps.map(c => c.node), ...effs.filter(e => e.alive).map(e => e.dispose._node)];
+        const observers = [...comps.map(c => c.node).filter(c => c._live), ...effs.filter(e => e.alive).map(e => e.dispose._node)];
         for (const x of observers) for (const src of x._deps || []) if (!src.subs || !src.subs.has(x)) viol.push(`I5 ${x._name} → ${src._name} missing in subs`);
+        // I8: computed живой (подписан на источники) ⇔ у него есть подписчики; неживой не сидит ни в одном subs
+        for (const c of comps) { const observed = !!(c.node.subs && c.node.subs.size); if (observed !== !!c.node._live) viol.push(`I8 ${c.id} live=${c.node._live} observed=${observed}`); if (!c.node._live) for (const n of nodes) if (n.node.subs && n.node.subs.has(c.node)) viol.push(`I8 unobserved ${c.id} still in ${n.id}.subs`); }
     };
     const sigs = () => nodes.filter(n => n.kind === 'sig');
     const step = (log) => {

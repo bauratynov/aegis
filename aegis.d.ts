@@ -36,6 +36,10 @@ export interface Computed<T> extends ReadonlySignal<T> {
 }
 
 export interface SignalOptions<T> {
+    /** появился первый подписчик (эффект / computed / subscribe) — запустить producer, открыть соединение */
+    watched?(): void;
+    /** ушёл последний подписчик — остановить */
+    unwatched?(): void;
     name?: string;
     equals?: false | ((a: T, b: T) => boolean);
 }
@@ -53,6 +57,8 @@ export type ClassValue = string | null | undefined | false | ClassValue[] | Reco
 export function signal<T>(initial: T, nameOrOpts?: string | SignalOptions<T>): Signal<T>;
 export function computed<T>(fn: (prev: T) => T, nameOrOpts?: string | ComputedOptions<T>): Computed<T>;
 export interface EffectOptions {
+    /** false — дети эффекта (effect/on/interval/createScope/subscribe, созданные в теле) живут до dispose владельца, а не до следующего запуска */
+    own?: boolean;
     name?: string;
     /** печатать причину каждого перезапуска (dev) */
     trace?: boolean;
@@ -151,7 +157,7 @@ export function linked<T>(source: () => T, name?: string): Signal<T>;
 export function linked<S, T>(opts: { source: () => S; compute: (source: S, prev: { source: S; value: T } | undefined) => T }, name?: string): Signal<T>;
 /** Внешний источник как сигнал: (EventTarget, event, map) | (producer(set) => unsubscribe, initial) | { subscribe } */
 export function from<T, E extends EventTarget = EventTarget>(target: E, event: string, map?: (target: E) => T): ReadonlySignal<T>;
-export function from<T>(producer: (set: (v: T) => void) => (() => void) | void, initial?: T): ReadonlySignal<T>;
+export function from<T>(producer: (set: (v: T) => void) => (() => void) | void, initial?: T, opts?: { /** producer стартует с первым подписчиком и останавливается с последним */ lazy?: boolean }): ReadonlySignal<T>;
 export function from<T>(subscribable: { subscribe(fn: (v: T) => void): (() => void) | { unsubscribe(): void }; value?: T; peek?(): T }): ReadonlySignal<T>;
 /** Undo/redo для сигнала, reactive() или store() */
 export function history<T>(source: Signal<T> | object, opts?: { limit?: number; debounce?: number }): {

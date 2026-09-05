@@ -327,3 +327,50 @@ test('fault-фаззер: ядовитый computed — ни вылетов, н�
     assert.deepEqual(fails.slice(0, 3), [], JSON.stringify(fails.slice(0, 3)));
     assert.ok(fails.poisoned > 30, 'poison met on ' + fails.poisoned + ' seeds');
 });
+
+// ── ядро фаза 2a: computed без владельца, дети эффекта ──
+test('computed без владельца: подписан на источники только пока наблюдаем; корректен по версиям без наблюдателей', () => {
+    const src = signal(0);
+    const cs = [0, 1, 2].map(i => computed(() => src.value + i));
+    cs.forEach(c => c.peek());
+    assert.equal(src.subs ? src.subs.size : 0, 0);
+    src.value = 5;
+    assert.equal(cs.map(c => c.value).join(), '5,6,7');
+    const b = computed(() => src.value + 1), c2 = computed(() => b.value * 10);
+    const sc = createScope(); let v;
+    sc.run(() => effect(() => { v = c2.value; }));
+    assert.equal(src.subs.size, 1); assert.equal(b._live, true); assert.equal(v, 60);
+    src.value = 6; assert.equal(v, 70);
+    sc.dispose();
+    assert.equal(src.subs.size, 0); assert.equal(b._live, false); assert.equal(c2._live, false);
+    src.value = 7; assert.equal(c2.value, 80);
+});
+
+test('дети эффекта: созданное в теле умирает перед перезапуском; { own: false } — старое поведение', () => {
+    const open = signal(true), n = signal(0); let inner = 0, subs = 0;
+    const sc = createScope();
+    sc.run(() => effect(() => { if (open.value) { effect(() => { n.value; inner++; }); n.subscribe(() => subs++); } }));
+    open.value = false; open.value = true; open.value = false; open.value = true;
+    inner = 0; subs = 0; n.value++;
+    assert.equal(inner, 1); assert.equal(subs, 1);
+    let acc = 0;
+    const sc2 = createScope();
+    sc2.run(() => effect(() => { open.value; effect(() => { n.value; acc++; }); }, { own: false }));
+    open.value = false; open.value = true;
+    acc = 0; n.value++;
+    assert.equal(acc, 3);
+    sc.dispose(); sc2.dispose();
+});
+
+test('signal({ watched, unwatched }): хуки на первом и последнем подписчике', () => {
+    let up = 0, down = 0;
+    const s = signal(0, { watched: () => up++, unwatched: () => down++ });
+    const sc = createScope(); sc.run(() => effect(() => { s.value; }));
+    assert.equal(up, 1); assert.equal(down, 0);
+    const c = computed(() => s.value * 2);
+    const sc2 = createScope(); sc2.run(() => effect(() => { c.value; }));
+    sc.dispose();
+    assert.equal(down, 0);          // computed ещё держит
+    sc2.dispose();
+    assert.equal(down, 1);
+});

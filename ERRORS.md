@@ -52,4 +52,7 @@ Every warning has a code, and each message is printed once per place. Dev mode i
 | **E042** | 90 %+ of revalidations returned identical data — `staleTime` is far below the observed change rate. | Use the suggested `staleTime` from the warning / `cache.explain(key).suggestedStaleTime`, or `staleTime: 'auto'`. |
 | **E043** | Fewer than 20 % of prefetched responses were ever used (`cache.stats().prefetch`). | Prefetch on `tap` instead of hover, raise the hover delay, or use a predictor. |
 | **E044** | A cache entry violated an internal invariant (refCount, in-flight state, patches). | Engine bug — please report the steps; `cache.remove(key)` clears the entry meanwhile. |
+| **E045** | A disposed `computed()` was read — its value is frozen. | Do not dispose a computed that is still read; `computed()` needs no dispose (it is unsubscribed while nobody observes it). |
+| **E046** | `watch()` / `until()` got a plain value or a reactive object as source — it never fires. | `watch(() => state.count, cb)` or pass the signal. |
+| **E047** | The same object reference was written back into a signal — inner mutations are invisible. | `sig.update(a => [...a, x])`, hold it in `reactive()`, or `signal(v, { equals: false })`. |
 | **S001** | Attempt to set `__proto__` / `prototype` / `constructor` on a reactive object — blocked. | Use a regular property name. |
