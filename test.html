@@ -3299,18 +3299,18 @@
             let r;
             sc4.run(() => { r = resource('/t6/sync', { cache: true, staleTime: 60000, fetcher: async () => ({ n: 1 }) }); });
             await settled();
-            for (let i = 0; i < 50 && !got.some(m => m.t === 'set'); i++) await new Promise(res => setTimeout(res, 5));
+            for (let i = 0; i < 50 && !got.some(m => m.t === 'set'); i++) await Promise.all([new Promise(res => setTimeout(res, 5)), fetch(location.pathname + '?ping=' + Math.random(), { method: 'HEAD', cache: 'no-store' }).catch(() => {})]);   // IPC идёт в реальном времени: под виртуальным временем Chrome ждёт сеть
             assert('sync: ответ разослан другим вкладкам с Lamport-меткой', got.some(m => m.t === 'set' && m.key === '/t6/sync' && m.data.n === 1 && typeof m.v === 'number' && m.tab));
             const v0 = cache.explain('/t6/sync').v;
             other.postMessage({ t: 'set', key: '/t6/sync', data: { n: 2 }, v: v0 + 5, tab: 'zzzzzz', lastFetch: Date.now(), freshUntil: Date.now() + 60000 });
-            for (let i = 0; i < 50 && r.data.value.n !== 2; i++) await new Promise(res => setTimeout(res, 5));
+            for (let i = 0; i < 50 && r.data.value.n !== 2; i++) await Promise.all([new Promise(res => setTimeout(res, 5)), fetch(location.pathname + '?ping=' + Math.random(), { method: 'HEAD', cache: 'no-store' }).catch(() => {})]);   // IPC идёт в реальном времени: под виртуальным временем Chrome ждёт сеть
             assert('sync: более новая запись из другой вкладки применяется без запроса', r.data.value.n === 2 && cache.explain('/t6/sync').v === v0 + 5);
             other.postMessage({ t: 'set', key: '/t6/sync', data: { n: 0 }, v: 1, tab: 'aaaaaa', lastFetch: Date.now() });
-            for (let i = 0; i < 10; i++) await new Promise(res => setTimeout(res, 5));
+            for (let i = 0; i < 10; i++) await Promise.all([new Promise(res => setTimeout(res, 5)), fetch(location.pathname + '?ping=' + Math.random(), { method: 'HEAD', cache: 'no-store' }).catch(() => {})]);   // IPC идёт в реальном времени: под виртуальным временем Chrome ждёт сеть
             assert('sync: устаревшая запись (меньше v) игнорируется', r.data.value.n === 2);
             got.length = 0;
             await invalidate('/t6/sync');
-            for (let i = 0; i < 50 && !got.some(m => m.t === 'inv'); i++) await new Promise(res => setTimeout(res, 5));
+            for (let i = 0; i < 50 && !got.some(m => m.t === 'inv'); i++) await Promise.all([new Promise(res => setTimeout(res, 5)), fetch(location.pathname + '?ping=' + Math.random(), { method: 'HEAD', cache: 'no-store' }).catch(() => {})]);   // IPC идёт в реальном времени: под виртуальным временем Chrome ждёт сеть
             assert('sync: invalidate рассылает inv', got.some(m => m.t === 'inv' && m.key === '/t6/sync'));
             other.close();
             sc4.dispose();
@@ -3320,7 +3320,7 @@
         const sc5 = createScope();
         let L;
         sc5.run(() => { L = leader('t6'); });
-        for (let i = 0; i < 50 && !L.value; i++) await new Promise(res => setTimeout(res, 5));
+        for (let i = 0; i < 50 && !L.value; i++) await Promise.all([new Promise(res => setTimeout(res, 5)), fetch(location.pathname + '?ping=' + Math.random(), { method: 'HEAD', cache: 'no-store' }).catch(() => {})]);   // IPC идёт в реальном времени: под виртуальным временем Chrome ждёт сеть
         assert('leader: лок получен', L.value === true);
         L.release();
         assert('leader: release отдаёт лок', L.value === false);
@@ -3530,6 +3530,195 @@
 
         defaults.fetcher = savedFetcher;
         configure({ speculation: 'auto', cache: { maxEntries: 500 } });
+        off(); dev.resetWarnings(); reset();
+    })();
+
+    section('💎 кэш — сквозной сценарий пользователя, фаззеры очереди/persist/шины, стресс вытеснения');
+
+    await (async () => {
+        const seen = [];
+        const off = onWarn((w) => seen.push(w));
+        const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+        const st = await import('./aegis-test.js');
+        const hasIDB = typeof indexedDB !== 'undefined' && await Promise.race([new Promise((res) => {
+            try {
+                const r = indexedDB.open('aegis-probe', 1);
+                r.onupgradeneeded = () => r.result.createObjectStore('s');
+                r.onerror = () => res(false); r.onblocked = () => res(false);
+                r.onsuccess = () => { const db = r.result; const tx = db.transaction('s', 'readwrite'); tx.objectStore('s').put(1, 'k'); const g = tx.objectStore('s').get('k'); g.onsuccess = () => { db.close(); res(g.result === 1); }; g.onerror = () => res(false); };
+            } catch (e) { res(false); }
+        }), new Promise(res => setTimeout(() => res(false), 1500))]);
+
+        // ── 1. Сквозной сценарий: список → карточка → правка → назад → офлайн → онлайн; считаем запросы на каждом шаге ──
+        const users = [{ id: 1, name: 'Ada' }, { id: 2, name: 'Bob' }];
+        const log = [];
+        const json = (body, status = 200, headers = {}) => new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json', ...headers } });
+        const server = async (url, init = {}) => {
+            const u = new URL(url, location.href); const method = init.method || 'GET';
+            const h = new Headers(init.headers);
+            log.push(method + ' ' + u.pathname + (h.get('Idempotency-Key') ? ' ik' : ''));
+            let m;
+            if (method === 'GET' && u.pathname === '/s/users') return json(users, 200, { ETag: '"L' + users.map(x => x.name).join() + '"' });
+            if (method === 'GET' && (m = u.pathname.match(/^\/s\/users\/(\d+)$/))) return json(users.find(x => x.id === +m[1]));
+            if (method === 'PUT' && (m = u.pathname.match(/^\/s\/users\/(\d+)$/))) { const body = JSON.parse(init.body); const x = users.find(x => x.id === +m[1]); Object.assign(x, body); return json(x); }
+            if (method === 'POST' && u.pathname === '/s/notes') return json({ ok: true }, 201);
+            if (method === 'GET' && u.pathname === '/s/notes') return json([]);
+            return json({ message: 'nope' }, 404);
+        };
+        configure({ fetch: server });
+        const savedFetcher = defaults.fetcher;
+
+        // список
+        let pageL = createScope(), list, card;
+        pageL.run(() => { list = resource('/s/users', { cache: { seeds: (d) => d.map(u => ['/s/users/' + u.id, u]) }, staleTime: 60000 }); });
+        await settled();
+        assert('сценарий: список — 1 запрос, данные и seeds на месте', log.length === 1 && list.data.value.length === 2 && cache.has('/s/users/1'));
+        // переход на карточку: список уходит, карточка из seed
+        pageL.dispose();
+        let pageD = createScope();
+        pageD.run(() => { card = resource('/s/users/1', { cache: true, staleTime: 60000 }); });
+        const instant = card.data.peek() && card.data.peek().name === 'Ada';
+        await settled();
+        assert('сценарий: карточка открыта из seed мгновенно, 0 новых запросов', instant && log.length === 1);
+        // правка: PUT, commit без refetch, список обновлён updates
+        const rename = mutation(async (name) => api.put('/s/users/1', { name }), {
+            optimistic: (name) => card.mutate(u => ({ ...u, name })),
+            commit: (saved) => saved,
+            updates: { '/s/users': (l, saved) => l.map(u => u.id === saved.id ? saved : u) },
+        });
+        await rename('Ada Lovelace');
+        await settled();
+        assert('сценарий: правка — ровно 1 PUT, карточка и список обновлены без refetch', log.filter(l => l.startsWith('PUT')).length === 1 && log.length === 2 && card.data.value.name === 'Ada Lovelace' && cache.get('/s/users').find(u => u.id === 1).name === 'Ada Lovelace');
+        // назад: карточка уходит, список создаётся заново и берётся из кэша
+        pageD.dispose();
+        pageL = createScope();
+        pageL.run(() => { list = resource('/s/users', { cache: { seeds: (d) => d.map(u => ['/s/users/' + u.id, u]) }, staleTime: 60000 }); });
+        const backInstant = list.data.peek() && list.data.peek()[0].name === 'Ada Lovelace';
+        await settled();
+        assert('сценарий: «назад» — список мгновенно из кэша с правкой, 0 запросов', backInstant && log.length === 2);
+        assert('сценарий: explain объясняет отсутствие запроса свежестью', cache.explain('/s/users').state === 'fresh');
+        // серверная инвалидация: refetch ровно один, seeds пересеяны
+        await invalidate('/s/users', { refetch: true });
+        assert('сценарий: invalidate с refetch — ровно 1 GET списка', log.filter(l => l === 'GET /s/users').length === 2 && log.length === 3);
+        // офлайн: мутация в очередь с оптимистикой, онлайн — доставка с Idempotency-Key
+        if (hasIDB) {
+            let notes;
+            pageL.run(() => { notes = resource('/s/notes', { offline: true }); });
+            for (let i = 0; i < 300 && !notes.data.peek(); i++) await sleep(10);
+            const before = log.length, failedBefore = notes.failed.value.length;
+            configure({ fetch: async () => { throw new TypeError('Failed to fetch'); } });
+            await notes.send('POST', '/s/notes', { text: 'offline note' }, { optimistic: (l) => [...(l || []), { text: 'offline note' }] });
+            assert('сценарий: офлайн — мутация в очереди, оптимистика применена, запросов нет', notes.data.value.length === 1 && log.length === before);
+            configure({ fetch: server });
+            window.dispatchEvent(new Event('online'));
+            let delivered = false;
+            try { await st.waitFor(() => log.some(l => l === 'POST /s/notes ik'), { timeout: 6000 }); delivered = true; } catch (e) { /* */ }
+            assert('сценарий: онлайн — очередь доставлена с Idempotency-Key, dead-letter пуст', delivered && notes.failed.value.length === failedBefore);
+        }
+        pageL.dispose();
+
+        // ── 2. Фаззер офлайн-очереди: каждая мутация либо доставлена ровно раз, либо в dead-letter; FIFO внутри ключа ──
+        if (hasIDB) {
+            let seed = 11;
+            const rnd = () => (seed = (seed * 48271) % 2147483647) / 2147483647;
+            const N = 18;
+            const plan = [];                                    // { i, key, kind: 'ok' | 'flaky' | 'reject' }
+            for (let i = 0; i < N; i++) plan.push({ i, key: rnd() < 0.5 ? 'A' : 'B', kind: i === 4 ? 'flaky' : (rnd() < 0.2 ? 'reject' : 'ok') });
+            const delivered = [];                               // порядок первых успешных доставок
+            const attempts = new Map();
+            const fzServer = async (url, init = {}) => {
+                const u = new URL(url, location.href); const m = u.pathname.match(/^\/s\/fz\/(\d+)$/);
+                if (!m) return json({}, 404);
+                const i = +m[1], p = plan[i], ik = new Headers(init.headers).get('Idempotency-Key');
+                attempts.set(i, (attempts.get(i) || 0) + 1);
+                if (p.kind === 'reject') return json({ message: 'bad' }, 422);
+                if (p.kind === 'flaky' && attempts.get(i) === 1) return json({ message: 'boom' }, 500);
+                delivered.push({ i, key: p.key, ik });
+                return json({ ok: true });
+            };
+            const fzScope = createScope();
+            let qa, qb;
+            configure({ fetch: async (url) => json([]) });
+            fzScope.run(() => { qa = resource('/s/fz-list-A', { offline: true }); qb = resource('/s/fz-list-B', { offline: true }); });
+            for (let i = 0; i < 300 && !(qa.data.peek() && qb.data.peek()); i++) await sleep(10);
+            configure({ fetch: async () => { throw new TypeError('Failed to fetch'); } });
+            for (const p of plan) await (p.key === 'A' ? qa : qb).send('POST', '/s/fz/' + p.i, { i: p.i });
+            configure({ fetch: fzServer });
+            const deadBefore = qa.failed.value.length;
+            window.dispatchEvent(new Event('online'));
+            const expectOk = plan.filter(p => p.kind !== 'reject').length, expectDead = N - expectOk;
+            let done = false;
+            try { await st.waitFor(() => delivered.length === expectOk && qa.failed.value.length === deadBefore + expectDead, { timeout: 12000 }); done = true; } catch (e) { /* */ }
+            const ids = delivered.map(d => d.i);
+            const uniq = new Set(ids).size === ids.length;
+            const fifo = ['A', 'B'].every(k => { const got = delivered.filter(d => d.key === k).map(d => d.i); return got.join() === got.slice().sort((a, b) => a - b).join(); });
+            const ikOk = delivered.every(d => d.ik && /^mut_/.test(d.ik));
+            assert('фаззер очереди: все не-4xx доставлены ровно раз, 4xx в dead-letter', done && uniq && qa.failed.value.length === deadBefore + expectDead && qa.failed.value.slice(deadBefore).every(f => f.error && f.error.status === 422));
+            assert('фаззер очереди: FIFO внутри каждого ключа, Idempotency-Key на каждой доставке', fifo && ikOk);
+            assert('фаззер очереди: flaky (500 → 200) доставлена повтором с тем же Idempotency-Key', attempts.get(4) === 2 && delivered.filter(d => d.i === 4).length === 1);
+            fzScope.dispose();
+        }
+
+        // ── 3. Стресс вытеснения: 1500 записей при лимите 200 — размер держится, инварианты целы ──
+        configure({ fetch: null }); defaults.fetcher = savedFetcher;
+        dev.resetWarnings(); seen.length = 0;
+        const heldBefore = cache.stats().entries.filter(e => e.subscribers > 0).length;
+        configure({ cache: { maxEntries: 200 } });
+        for (let i = 0; i < 1500; i++) cache.set('/s/st/' + i, { i, pad: 'x'.repeat(i % 50) });
+        const sz = stats().resourceCache;
+        assert('стресс: 1500 записей при лимите 200 — в кэше не больше лимита плюс занятые', sz <= 200 + heldBefore && cache.stats().evictions >= 1300);
+        const fetcher0 = defaults.fetcher;
+        defaults.fetcher = async (u) => ({ u });
+        for (let i = 0; i < 600; i++) prefetch('/s/pf/' + i, { kind: 'hover', force: true });
+        await settled();
+        assert('стресс: 600 прогревов без потребителей — ghost-список ограничен лимитом записей', cache.stats().ghost <= 200 && stats().resourceCache <= 200 + heldBefore);
+        defaults.fetcher = fetcher0;
+        configure({ cache: { maxEntries: 500 } });
+        assert('стресс: ни одного E044 после вытеснений и прогревов', !seen.some(w => w.code === 'E044'));
+
+        // ── 4. Шина между вкладками: 50 случайных set с разными v сходятся к максимальной версии ──
+        if (typeof BroadcastChannel === 'function') {
+            const other = new BroadcastChannel('aegis:cache');
+            const sc = createScope();
+            let r;
+            sc.run(() => { r = resource('/s/tab', { cache: true, staleTime: 60000, fetcher: async () => ({ n: 0 }) }); });
+            await settled();
+            const base = cache.explain('/s/tab').v;
+            let seed = 3;
+            const rnd = () => (seed = (seed * 48271) % 2147483647) / 2147483647;
+            const vs = [...Array(50).keys()].map(i => i + 1);
+            for (let i = vs.length - 1; i > 0; i--) { const j = Math.floor(rnd() * (i + 1)); [vs[i], vs[j]] = [vs[j], vs[i]]; }
+            for (const v of vs) other.postMessage({ t: 'set', key: '/s/tab', data: { n: v }, v: base + v, tab: rnd() < 0.5 ? 'aaaaaa' : 'zzzzzz', lastFetch: Date.now(), freshUntil: Date.now() + 60000 });
+            for (let i = 0; i < 200 && cache.explain('/s/tab').v !== base + 50; i++) await Promise.all([new Promise(res => setTimeout(res, 5)), fetch(location.pathname + '?ping=' + Math.random(), { method: 'HEAD', cache: 'no-store' }).catch(() => {})]);   // IPC идёт в реальном времени: под виртуальным временем Chrome ждёт сеть
+            assert('шина: 50 перемешанных версий сходятся к максимальной, данные соответствуют ей', cache.explain('/s/tab').v === base + 50 && r.data.value.n === 50);
+            other.close();
+            sc.dispose();
+        }
+
+        // ── 5. persist: 12 записей, данные на диске совпадают с памятью; remove чистит диск ──
+        if (hasIDB) {
+            const ps = createScope();
+            const rs = [];
+            ps.run(() => { for (let i = 0; i < 12; i++) rs.push(resource('/s/pz/' + i, { cache: { persist: true }, staleTime: 60000, fetcher: async () => ({ i, t: Date.now() }) })); });
+            await settled();
+            let allOk = true;
+            for (let i = 0; i < 12; i++) {
+                let rec = null;
+                for (let k = 0; k < 200 && !(rec = await cache.persisted('/s/pz/' + i)); k++) await sleep(5);
+                if (!rec || rec.data.i !== i) allOk = false;
+            }
+            assert('persist: 12 записей на диске совпадают с памятью', allOk);
+            ps.dispose();
+            for (let i = 0; i < 6; i++) cache.remove('/s/pz/' + i);
+            let gone = true, kept = true;
+            for (let i = 0; i < 6; i++) if (await cache.persisted('/s/pz/' + i)) gone = false;
+            for (let i = 6; i < 12; i++) if (!(await cache.persisted('/s/pz/' + i))) kept = false;
+            assert('persist: remove половины чистит только её на диске', gone && kept);
+            for (let i = 6; i < 12; i++) cache.remove('/s/pz/' + i);
+        }
+
+        configure({ fetch: null, identify: null, cache: { maxEntries: 500 } });
+        defaults.fetcher = savedFetcher;
         off(); dev.resetWarnings(); reset();
     })();
 
