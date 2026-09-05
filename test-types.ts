@@ -182,6 +182,16 @@ const w5: Wizard = wizard(f5, { steps: [['name'], ['city']], history: true }); w
 const d5 = draft(f5, 'k', { debounce: 100, exclude: (k) => k === 'city' }); d5.restored; d5.clear(); d5.stop();
 const w6 = wireForm3(document.createElement('form'), { a11y: { field: 'off' }, summary: true, guard: true, draft: 'x' }); w6.guard(); w6.summary('#s'); w6.errorList.value;
 
+import { announce, live, busy, trap, when as when5, mutation as mutation5, boost as boost5 } from './aegis.js';
+// ── a11y phase 5a — announce 2.0 / live / busy / when announce / mutation announce / router focus
+const clr = announce('x', { politeness: 'assertive', clearAfter: false, dedupe: 0 }); clr(); announce.init(); announce.clear('polite');
+const n5 = signal(0); const stopLive = live(n5, { debounce: 100, format: (v) => v + ' items' }); stopLive(); announce(() => String(n5.value), { immediate: true })();
+const b5 = document.createElement('button'); busy(b5, () => n5.value > 0)();
+trap(document.createElement('div'), { returnFocus: () => b5, autoFocus: false })();
+when5(resource<{ n: number }>('/x'), { data: (d) => String(d.n) }, { busy: true, announce: { error: (e) => String(e), data: (d) => d.n + ' rows', loading: false } });
+mutation5<[number], number>(async (x) => x, { announce: true }); mutation5<[], number>(async () => 1, { announce: { success: 'Saved', error: (e) => String(e), undone: false } });
+router({ '/': () => {} }, { focus: 'auto', announce: (to) => 'Page ' + to.path }); boost5({ focus: false, announce: false });
+
 // ── aegis/test — render / fire / waitFor / mockFetch
 import { render, fire, waitFor, mockFetch, cleanup, withScope, fakeClock } from './aegis-test.js';
 const clock = fakeClock(1000); await clock.advance(30_000); clock.restore();

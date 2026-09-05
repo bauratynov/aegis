@@ -56,4 +56,6 @@ Every warning has a code, and each message is printed once per place. Dev mode i
 | **E046** | `watch()` / `until()` got a plain value or a reactive object as source — it never fires. | `watch(() => state.count, cb)` or pass the signal. |
 | **E047** | The same object reference was written back into a signal — inner mutations are invisible. | `sig.update(a => [...a, x])`, hold it in `reactive()`, or `signal(v, { equals: false })`. |
 | **E048** | `${count.value}` (or `title=${count.value}`) inside html`` is a snapshot — inserted once, never updates. | Pass the signal `${count}` or a getter `${() => …}`; a deliberate snapshot is `${count.peek()}`. |
+| **E049** | A dialog / `<dialog>` opened by `trap()` / `modal()` has no accessible name. | Put a heading inside (it becomes `aria-labelledby`) or set `aria-label`. |
+| **E050** | The focused element was removed by `list()` / `show()` and no neighbour or container could take focus — focus fell to `<body>`. | Move focus before removing; for rows re-rendered on object replacement pass `{ item: 'signal' }`. |
 | **S001** | Attempt to set `__proto__` / `prototype` / `constructor` on a reactive object — blocked. | Use a regular property name. |

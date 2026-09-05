@@ -42,7 +42,7 @@
         defineElement, anchor, router, command, virtualScroll,
         offlineResource,
         lazy, nextTick, i18n, uncloak, injectStyles,
-        VERSION, mount, cache, withRetry, leader, predictor, speculate, prefetchOn, onError, lens, signals, fieldArray, min, wizard, draft } from './aegis.js';
+        VERSION, mount, cache, withRetry, leader, predictor, speculate, prefetchOn, onError, lens, signals, fieldArray, min, wizard, draft, live, busy } from './aegis.js';
 
     const results = document.getElementById('results');
     const sandbox = document.getElementById('sandbox');
@@ -4239,8 +4239,7 @@
             assert('abort: handler получил сигнал отмены, status idle, кнопка восстановлена', gotSignal && gotSignal.aborted === true && f.status.value === 'idle' && btn.getAttribute('aria-disabled') === 'false' && btn.textContent === 'Сохранить');
             const h2 = f.submit(async () => ({ ok: true, id: 1 }));
             await h2(new SubmitEvent('submit', { cancelable: true, submitter: btn }));
-            await sleep(30);
-            const spoken = [...document.querySelectorAll('[aria-live]')].some(n => n.textContent.includes(_msgSaved()));
+            let spoken = false; for (let i = 0; i < 60 && !spoken; i++) { await sleep(20); spoken = [...document.querySelectorAll('[aria-live]')].some(n => n.textContent.includes(_msgSaved())); }   // polite-очередь разносит сообщения на 150 мс
             assert('success: status и result, объявление об успехе в live-регионе', f.status.value === 'success' && f.result.value.id === 1 && spoken);
             configure({ fetch: async () => new Response(JSON.stringify({ message: 'slow down' }), { status: 429, headers: { 'Content-Type': 'application/json', 'Retry-After': '7' } }) });
             formEl.setAttribute('action', '/f3/save');
@@ -4432,7 +4431,7 @@
             const live1 = liveText();
             f.validate();
             await sleep(30);
-            assert('summary: провал validate — фокус на сводке и одно assertive-объявление', document.activeElement === box && liveText() !== live1);
+            assert('summary: провал validate — фокус на сводке, assertive-объявление о числе ошибок (дедуп повторов)', document.activeElement === box && /2/.test([...document.querySelectorAll('[aria-live="assertive"]')].map(n => n.textContent).join(' ')));
             box.querySelectorAll('a')[1].click();
             assert('summary: клик по ссылке фокусирует поле', document.activeElement === formEl.querySelector('[name=name]'));
             radios[0].checked = true; ev(radios[0], 'change'); typeIn(formEl.querySelector('[name=name]'), 'x');
@@ -4532,6 +4531,194 @@
             assert('beforeEach: true пропускает', r.route.value === '/b' && host.querySelector('#be-out').textContent === 'b');
             r.dispose();
             history.replaceState(null, '', location.pathname + location.search + savedHash);
+        });
+
+        sc.dispose();
+        offW(); dev.resetWarnings(); reset();
+    })();
+
+    section('💎 доступность фаза 5a — announce 2.0 и live(), фокус после навигации, непрерывность фокуса, состояния сети, авто-ARIA');
+
+    await (async () => {
+        const codes = [];
+        const offW = onWarn((w) => codes.push(w.code));
+        const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+        const politeNodes = () => [...document.querySelectorAll('[data-aegis-live="polite"] [aria-live]')];
+        const alertNodes = () => [...document.querySelectorAll('[data-aegis-live="assertive"] [aria-live]')];
+        const sc = createScope();
+
+        // 1. announce 2.0
+        await sc.run(async () => {
+            announce.init();
+            assert('announce 2.0: два постоянных региона (status/alert) существуют до сообщения', politeNodes().length === 2 && alertNodes().length === 2 && politeNodes()[0].getAttribute('role') === 'status' && alertNodes()[0].getAttribute('role') === 'alert');
+            await sleep(400); announce.clear();   // дождаться отложенных объявлений предыдущих секций (route announcer после кадра)
+            const wrap = document.querySelector('[data-aegis-live="polite"]');
+            const recs = []; const mo = new MutationObserver((rs) => recs.push(...rs)); mo.observe(wrap, { childList: true, subtree: true, characterData: true });
+            announce('alpha'); announce('beta');
+            await sleep(60);
+            const sawAlpha = politeNodes().some(n => n.textContent === 'alpha');
+            await sleep(250);
+            mo.disconnect();
+            assert('announce 2.0: два сообщения в одном тике — оба произнесены по очереди, ни одно не потеряно', sawAlpha && politeNodes().some(n => n.textContent === 'beta') && recs.length >= 2);
+            announce.clear();
+            announce('same'); announce('same');
+            await sleep(200);
+            assert('announce 2.0: одинаковый текст в течение 500 мс — один раз (дедуп)', politeNodes().filter(n => n.textContent === 'same').length === 1);
+            const before = politeNodes().map(n => n.textContent).join('|');
+            announce('urgent', 'assertive');
+            assert('announce 2.0: assertive — сразу и в отдельный alert-регион, polite не тронут', alertNodes().some(n => n.textContent === 'urgent') && politeNodes().map(n => n.textContent).join('|') === before);
+            const clear = announce('temp', { politeness: 'assertive', dedupe: 0 });
+            clear();
+            assert('announce 2.0: возвращённый clear() убирает текст', !alertNodes().some(n => n.textContent === 'temp'));
+            announce.clear();
+            const count = signal(0);
+            const stop = live(count, { debounce: 20, format: (v) => v + ' результатов' });
+            await sleep(40);
+            assert('live(): начальное значение не объявляется', !politeNodes().some(n => /результатов/.test(n.textContent)));
+            for (let i = 1; i <= 5; i++) count.value = i;
+            for (let i = 0; i < 40 && !politeNodes().some(n => n.textContent === '5 результатов'); i++) await sleep(20);
+            assert('live(): поток записей склеен debounce в одно объявление с последним значением', politeNodes().filter(n => /результатов/.test(n.textContent)).length === 1 && politeNodes().some(n => n.textContent === '5 результатов'));
+            stop();
+        });
+
+        // 2. непрерывность фокуса при удалении (в видимом контейнере)
+        await sc.run(async () => {
+            const host = document.createElement('div'); document.body.appendChild(host);
+            const items = signal([1, 2, 3]);
+            host.appendChild(list(items, (n) => html`<div class="row"><button>${n}</button></div>`, (n) => n));
+            await sleep(1);
+            const btn = (n) => [...host.querySelectorAll('button')].find(b => b.textContent === String(n));
+            btn(2).focus();
+            items.value = [1, 3];
+            assert('фокус при удалении: удалённая строка → фокус на следующего соседа', document.activeElement === btn(3));
+            btn(3).focus(); items.value = [1];
+            assert('фокус при удалении: последняя строка → предыдущий сосед', document.activeElement === btn(1));
+            btn(1).focus(); items.value = [];
+            assert('фокус при удалении: единственная строка → контейнер списка с tabindex=-1', document.activeElement === host && host.getAttribute('tabindex') === '-1');
+            const open = signal(true); const host2 = document.createElement('div'); document.body.appendChild(host2);
+            host2.appendChild(show(open, () => html`<button class="inner">x</button>`));
+            await sleep(1);
+            host2.querySelector('button.inner').focus();
+            open.value = false;
+            assert('фокус при удалении: show() — фокус не падает в body', document.activeElement !== document.body && host2.contains(document.activeElement));
+            // trap: триггер удалён list() — release возвращает фокус соседу
+            const rows = signal([1, 2]); const host3 = document.createElement('div'); document.body.appendChild(host3);
+            host3.appendChild(list(rows, (n) => html`<div><button class="t${n}">${n}</button></div>`, (n) => n));
+            const modal = document.createElement('div'); modal.innerHTML = '<h2>Dlg</h2><button>ok</button>'; document.body.appendChild(modal);
+            await sleep(1);
+            host3.querySelector('.t1').focus();
+            const release = trap(modal);
+            rows.value = [2];
+            release();
+            assert('trap: триггер удалён — фокус уходит ближайшему соседу, не в body', document.activeElement === host3.querySelector('.t2'));
+            host.remove(); host2.remove(); host3.remove(); modal.remove();
+        });
+
+        // 3. навигация слышна: фокус на outlet/h1, объявление заголовка, aria-busy во время loader
+        await sc.run(async () => {
+            const host = document.createElement('div'); host.innerHTML = '<div id="nav5-out"></div>'; document.body.appendChild(host);
+            const out = host.querySelector('#nav5-out');
+            const savedHash = location.hash, savedTitle = document.title;
+            history.replaceState(null, '', location.pathname + location.search + '#/n5a');
+            let gate = null;
+            const r = router({
+                '/n5a': () => { out.textContent = 'A'; document.title = 'Page A'; },
+                '/n5b': { loader: async () => { if (gate) await gate; return 1; }, handler: () => { out.innerHTML = '<h1>Page B</h1>'; document.title = 'Page B'; } },
+            }, { root: host, outlet: out, hash: true });
+            await r.ready;
+            const activeAfterInitial = document.activeElement;
+            announce.clear();
+            let openGate; gate = new Promise(res => { openGate = res; });
+            const nav = r.navigate('/n5b');
+            await sleep(5);
+            assert('навигация: outlet aria-busy пока loader в полёте', out.getAttribute('aria-busy') === 'true');
+            openGate(); gate = null;
+            await nav; await sleep(60);
+            assert('навигация: фокус на outlet (tabindex=-1) после перехода, aria-busy снят', (document.activeElement === out || out.contains(document.activeElement)) && out.getAttribute('tabindex') === '-1' && !out.hasAttribute('aria-busy'));
+            for (let i = 0; i < 40 && !politeNodes().some(n => n.textContent === 'Page B'); i++) await sleep(20);
+            assert('навигация: заголовок страницы объявлен', politeNodes().some(n => n.textContent === 'Page B'));
+            r.dispose();
+            const r2 = router({ '/n5a': () => {}, '/n5b': () => {} }, { root: host, outlet: out, hash: true, focus: false, announce: false });
+            await r2.ready; announce.clear(); if (document.activeElement && document.activeElement !== document.body) document.activeElement.blur();
+            await r2.navigate('/n5a'); await sleep(60);
+            assert('навигация: focus:false / announce:false — фокус не трогается, регион пуст', document.activeElement === document.body && !politeNodes().some(n => n.textContent));
+            r2.dispose();
+            history.replaceState(null, '', location.pathname + location.search + savedHash); document.title = savedTitle;
+            host.remove(); void activeAfterInitial;
+        });
+
+        // 4. состояния сети: when() aria-busy и объявления, mutation({ announce }), busy()
+        await sc.run(async () => {
+            const host = document.createElement('div'); sandbox.appendChild(host);
+            let resolve; const res = resource('/a11y/slow', { fetcher: () => new Promise((r) => { resolve = r; }) });
+            host.appendChild(when(res, { data: (d) => html`<b>${d.n}</b>`, loading: () => html`<i>…</i>` }, { announce: { data: (d) => d.n + ' items' } }));
+            await sleep(1);
+            assert('when: aria-busy на контейнере пока загрузка', host.getAttribute('aria-busy') === 'true');
+            announce.clear();
+            resolve({ n: 3 }); await settled(); await sleep(20);
+            assert('when: после данных aria-busy снят, data-объявление после реального ожидания', !host.hasAttribute('aria-busy') && politeNodes().some(n => n.textContent === '3 items'));
+            const host2 = document.createElement('div'); sandbox.appendChild(host2);
+            const bad = resource('/a11y/bad', { fetcher: async () => { throw new Error('boom'); } });
+            host2.appendChild(when(bad, { error: (e) => html`<p>${e.message}</p>` }));
+            await settled(); await sleep(5);
+            assert('when: ошибка объявляется assertive с текстом ошибки', alertNodes().some(n => n.textContent === 'boom'));
+            const host3 = document.createElement('div'); sandbox.appendChild(host3);
+            const bad2 = resource('/a11y/bad2', { fetcher: async () => { throw new Error('silent'); } });
+            host3.appendChild(when(bad2, { error: () => html`<p>e</p>` }, { announce: false }));
+            await settled(); await sleep(5);
+            assert('when: announce:false — молчит', !alertNodes().some(n => n.textContent === 'silent'));
+            announce.clear();
+            const list5 = resource('/a11y/list', { cache: true, fetcher: async () => [1] });
+            await settled();
+            const add = mutation(async (n) => { if (n < 0) throw new Error('nope'); return n; }, { optimistic: (n) => list5.mutate(l => [...l, n]), announce: true });
+            await add(2);
+            for (let i = 0; i < 40 && !politeNodes().some(n => /Saved|Сохранено/.test(n.textContent)); i++) await sleep(20);
+            assert('mutation announce: успех объявлен polite', politeNodes().some(n => /Saved|Сохранено/.test(n.textContent)));
+            announce.clear();
+            try { await add(-1); } catch (e) { /* */ }
+            for (let i = 0; i < 40 && !politeNodes().some(n => /reverted|отменено/.test(n.textContent)); i++) await sleep(20);
+            assert('mutation announce: ошибка assertive + откат оптимистики объявлен polite', alertNodes().some(n => n.textContent === 'nope') && politeNodes().some(n => /reverted|отменено/.test(n.textContent)));
+            const btn = document.createElement('button'); btn.textContent = 'Save'; sandbox.appendChild(btn);
+            const pending = signal(false); let clicks = 0; btn.addEventListener('click', () => clicks++);
+            busy(btn, pending);
+            btn.click();
+            pending.value = true;
+            btn.click();
+            assert('busy(): aria-busy/aria-disabled/data-busy без disabled, клик проглочен', btn.getAttribute('aria-busy') === 'true' && btn.getAttribute('aria-disabled') === 'true' && btn.hasAttribute('data-busy') && !btn.disabled && clicks === 1);
+            pending.value = false;
+            assert('busy(): снятие', btn.getAttribute('aria-busy') === 'false' && !btn.hasAttribute('aria-disabled'));
+        });
+
+        // 5. авто-ARIA: имя диалога (E049), aria-orientation, aria-controls/expanded, aria-busy острова
+        await sc.run(async () => {
+            const dlg = document.createElement('div'); dlg.innerHTML = '<h2>Title</h2><button>ok</button>'; document.body.appendChild(dlg);
+            const rel = trap(dlg, { autoFocus: false });
+            const h2 = dlg.querySelector('h2');
+            assert('auto-ARIA: trap() даёт диалогу имя через заголовок (aria-labelledby, id сгенерирован)', h2.id && dlg.getAttribute('aria-labelledby') === h2.id);
+            rel(); dlg.remove();
+            dev.resetWarnings(); codes.length = 0;
+            const noName = document.createElement('div'); noName.innerHTML = '<button>x</button>'; document.body.appendChild(noName);
+            trap(noName, { autoFocus: false })(); trap(noName, { autoFocus: false })();
+            assert('auto-ARIA: диалог без имени → E049 один раз', codes.filter(c => c === 'E049').length === 1);
+            noName.remove();
+            const tabs = document.createElement('div'); tabs.setAttribute('role', 'tablist'); tabs.innerHTML = '<button role="tab">1</button><button role="tab" aria-disabled="true">2</button><button role="tab">3</button>'; sandbox.appendChild(tabs);
+            roving(tabs, { orientation: 'vertical', selector: '[role=tab]' });
+            const plain = document.createElement('div'); plain.innerHTML = '<button>a</button>'; sandbox.appendChild(plain); roving(plain, { orientation: 'vertical' });
+            assert('auto-ARIA: aria-orientation на композите с ролью, не на обычном div; aria-disabled исключён из tab-стопов', tabs.getAttribute('aria-orientation') === 'vertical' && !plain.hasAttribute('aria-orientation') && tabs.querySelectorAll('[role=tab]')[1].getAttribute('tabindex') === null);
+            const root = document.createElement('div'); root.innerHTML = '<button data-command="toggle" data-target="#menu5">Menu</button><div id="menu5" hidden>m</div>'; sandbox.appendChild(root);
+            command(root, { toggle: (t, target) => { target.hidden = !target.hidden; } });
+            const trig = root.querySelector('button');
+            trig.click(); await sleep(1);
+            assert('auto-ARIA: command() ставит aria-controls и aria-expanded по состоянию цели', trig.getAttribute('aria-controls') === 'menu5' && trig.getAttribute('aria-expanded') === 'true');
+            trig.click(); await sleep(1);
+            assert('auto-ARIA: aria-expanded обновляется при закрытии', trig.getAttribute('aria-expanded') === 'false');
+            const island = document.createElement('div'); island.innerHTML = '<div data-aegis="a11y-isl"></div>'; sandbox.appendChild(island);
+            let busyDuringSetup = null;
+            register('a11y-isl', (el) => { busyDuringSetup = el.getAttribute('aria-busy'); });
+            hydrate(island);
+            await sleep(20);
+            const el = island.firstElementChild;
+            assert('auto-ARIA: остров aria-busy во время монтирования, снят после', busyDuringSetup === 'true' && !el.hasAttribute('aria-busy') && el.dataset.aegisState === 'hydrated');
         });
 
         sc.dispose();
@@ -5344,15 +5531,14 @@
     section('💎 #13 — announce()');
     {
         announce('Тест объявления');
-        // Use setTimeout fallback — rAF is throttled in background tabs
-        await new Promise(r => setTimeout(r, 100));
+        let said = false; for (let i = 0; i < 50 && !said; i++) { await new Promise(r => setTimeout(r, 20)); said = [...document.querySelectorAll('[aria-live="polite"]')].some(n => n.textContent === 'Тест объявления'); }   // очередь polite: ≥ 150 мс между сообщениями
         const liveRegion = document.querySelector('[aria-live]');
         assert('announce: creates live region', liveRegion != null);
-        assert('announce: message set', liveRegion?.textContent === 'Тест объявления');
+        assert('announce: message set', said);
 
         announce('Ошибка!', 'assertive');
         await new Promise(r => setTimeout(r, 100));
-        assert('announce: assertive mode', liveRegion?.getAttribute('aria-live') === 'assertive');
+        assert('announce: assertive mode — отдельный регион role=alert, polite не тронут', [...document.querySelectorAll('[aria-live="assertive"]')].some(n => n.textContent === 'Ошибка!' && n.getAttribute('role') === 'alert') && liveRegion.getAttribute('aria-live') === 'polite');
     }
 
     // ======= 💎 #12 — css() =======

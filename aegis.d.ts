@@ -287,13 +287,15 @@ export function bind(el: HTMLInputElement | HTMLSelectElement | HTMLTextAreaElem
  * @returns Comment anchor node (insert this into your DOM)
  */
 /** Три состояния ресурса в html``: ${when(users, { loading, error, data })} */
+/** Сообщение a11y: строка | функция от значения | false (молчать) */
+export type A11yMsg<X = unknown> = string | ((x: X) => string | null | false) | false;
 export function when<T>(res: { data: { value: T | null; peek(): T | null }; loading?: { value: boolean }; error?: { value: unknown; peek(): unknown }; refresh?: () => unknown }, branches: {
     loading?: () => Node | Node[] | string;
     error?: (error: any, retry: () => void) => Node | Node[] | string;
     /** data(value, signal) — второй аргумент для реактивных list()/text() внутри ветки */
     data?: (data: T, signal: ReadonlySignal<T | null>) => Node | Node[] | string;
     empty?: () => Node | Node[] | string;
-}): Comment;
+}, opts?: { /** aria-busy на контейнере пока loading/validating (default true) */ busy?: boolean; /** объявления: error assertive (default текст ошибки), data — только после реального ожидания, loading */ announce?: false | { loading?: A11yMsg<void>; error?: A11yMsg<unknown>; data?: A11yMsg<T> } }): Comment;
 
 /** Обёртки событий в стиле Svelte 5: @submit=${prevent(save)} (в html`` также @submit.prevent, .stop, .self, .once, .passive, .capture, .outside, .window, .document, .enter/.esc/…, .ctrl/.meta/.shift/.alt, .debounce.N, .throttle.N) */
 export function prevent<E extends Event>(fn: (e: E) => void): (e: E) => void;
@@ -673,6 +675,8 @@ export interface MutationOptions<A extends unknown[]> {
     patch?: (result: any, ...args: A) => Array<[string, (node: any) => any]>;
     /** 412/409 от сервера: base — до правки, local — с optimistic, server — актуальное; вернуть 'server' | 'client' | объект для повтора мутации с ним */
     onConflict?: (c: { base: any; local: any; server: any; merge(): { value: any; conflicts: string[] }; error: HttpError }) => 'server' | 'client' | object | Promise<'server' | 'client' | object>;
+    /** объявления для скринридера: true — дефолты (Saved / текст ошибки / Change reverted / conflict), или свои */
+    announce?: true | { pending?: A11yMsg; success?: A11yMsg<any>; error?: A11yMsg<unknown>; undone?: A11yMsg<unknown>; conflict?: A11yMsg<unknown> };
     /** 'ignore' (default, double-submit guard) | 'queue' | 'latest' | 'parallel' */
     concurrent?: 'ignore' | 'queue' | 'latest' | 'parallel';
     onSuccess?: (result: any, ...args: A) => void;
@@ -1337,14 +1341,39 @@ export function scaffold(el: HTMLElement): string;
 /**
  * Focus trap: Tab-цикл, autoFocus, возврат фокуса; escape / outside (release или свой обработчик); inert для фона (кроме allow)
  */
-export function trap(container: Element, opts?: { autoFocus?: boolean }): () => void;
+export interface TrapOptions {
+    /** [data-autofocus] → первый focusable → сам контейнер */
+    autoFocus?: boolean;
+    /** Escape: true — release(), функция — свой обработчик */
+    escape?: boolean | ((e: KeyboardEvent) => void);
+    /** клик вне контейнера (и вне allow) */
+    outside?: boolean | ((e: PointerEvent) => void);
+    /** inert для фона */
+    inert?: boolean;
+    allow?: string;
+    /** true — на элемент, активный до trap(); Element | () => Element — свой; если триггер удалён (строка list()) — ближайший живой сосед */
+    returnFocus?: boolean | Element | (() => Element | null);
+}
+export function trap(container: Element, opts?: TrapOptions): (() => void) & { dispose(): void };
 export function roving(container: Element, opts?: {
     selector?: string;
     orientation?: 'horizontal' | 'vertical' | 'both';
     wrap?: boolean;
     onActivate?: (el: Element, index: number) => void;
 }): { dispose(): void; moveFocus(delta: number): void; refresh(): void };
-export function announce(message: string, politeness?: 'polite' | 'assertive'): void;
+/**
+ * Объявление для скринридера: два постоянных региона (polite → role=status, assertive → role=alert), очередь без потерь,
+ * дедуп одинакового текста 500 мс, авто-очистка 7 с. Возвращает clear(). announce.init() создаёт регионы заранее.
+ */
+export function announce(message: string, politeness?: 'polite' | 'assertive'): () => void;
+export function announce(message: string, opts: { politeness?: 'polite' | 'assertive'; clearAfter?: number | false; dedupe?: number; native?: boolean }): () => void;
+/** реактивная форма: сигнал/функция → регион (в текущем scope); начальное значение не объявляется */
+export function announce<T>(source: ReadonlySignal<T> | (() => T), opts?: { politeness?: 'polite' | 'assertive'; debounce?: number; format?: (v: T) => string | null | false; immediate?: boolean }): () => void;
+export namespace announce { function init(): void; function clear(politeness?: 'polite' | 'assertive'): void; }
+/** Реактивное объявление сигнала/функции с debounce: live(() => `${n.value} результатов`) */
+export function live<T>(source: ReadonlySignal<T> | (() => T), opts?: { politeness?: 'polite' | 'assertive'; debounce?: number; format?: (v: T) => string | null | false; immediate?: boolean; clearAfter?: number | false }): () => void;
+/** Занятость без disabled: aria-busy + aria-disabled + data-busy, клики/Enter глушатся, фокус остаётся на элементе */
+export function busy(el: Element, pending: ReadonlySignal<boolean> | (() => boolean)): () => void;
 
 // ── CSS ────────────────────────────────────────────────────────
 
@@ -1461,6 +1490,10 @@ export interface RouterOptions {
     hash?: boolean;
     /** куда монтировать маршруты { component } верхнего уровня */
     outlet?: string | Element;
+    /** фокус после перехода: 'auto' — #fragment | [autofocus] | outlet/main/h1 с временным tabindex=-1; селектор | Element | функция | false */
+    focus?: 'auto' | string | Element | ((root: Element | null) => Element | null) | false;
+    /** объявление заголовка страницы после перехода (дедуп); функция — свой текст */
+    announce?: boolean | ((to: RouteInfo, from: RouteInfo | null) => string | null);
 }
 export interface SearchOptions<T> {
     parse?: (raw: string) => T;
@@ -1562,6 +1595,8 @@ export function boost(opts?: {
     scroll?: 'restore' | 'preserve';
     head?: 'title' | 'title+styles' | false;
     routers?: Router[];
+    focus?: 'auto' | string | Element | false;
+    announce?: boolean | ((to: { path: string }, from: null) => string | null);
 }): { pending: ReadonlySignal<boolean>; visit(url: string): Promise<boolean>; /** прогреть HTML страницы в рамках бюджета сети */ prefetch(url: string, p?: number): Promise<void>; dispose(): void };
 
 export type SlotSpec = Reactive<Displayable> | {
