@@ -110,7 +110,7 @@ const herr = new HttpError(503, new Response(), null); herr.circuit; herr.retryA
 configure({ identify: (o) => (o && o.id != null ? 'user:' + o.id : null) });
 const m3 = cache.merge3({ a: 1 }, { a: 2 }, { a: 1 }); m3.conflicts.length; cache.patchEntity('user:1', (u) => ({ ...u, name: 'x' }));
 resource<User[]>('/api/users', { cache: { seeds: (d: User[]) => d.map(u => ['/api/users/' + u.id, u]), entity: false } });
-mutation(async (v: User, { etag }) => api.put('/api/users/' + v.id, v, { ifMatch: etag || undefined }), {
+mutation<[User], User>(async (v, { etag }) => api.put('/api/users/' + v.id, v, { ifMatch: etag || undefined }) as Promise<User>, {
     commit: (saved: User, base) => saved, updates: { '/api/users*': (list: User[], saved: User) => list.map(u => u.id === saved.id ? saved : u) },
     patch: (saved: User) => [['user:' + saved.id, () => saved]],
     onConflict: ({ base, local, server, merge }) => { const r = merge(); return r.conflicts.length ? 'server' : r.value; },
