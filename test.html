@@ -2443,6 +2443,44 @@
         history.replaceState(null, '', location.pathname + location.search + savedHash);
     })();
 
+    section('router: { component } + outlet, show() с опциями третьим аргументом');
+
+    await (async () => {
+        const savedHash = location.hash;
+        const host = document.createElement('div');
+        host.innerHTML = '<div id="rc-out"></div>';
+        sandbox.appendChild(host);
+        let disposed = 0;
+        const Page = ({ props, html, onDispose }) => { onDispose(() => disposed++); return html`<p class="rc">${() => props.id}:${() => props.data.name}:${() => props.query.tab || '-'}</p>`; };
+        const r = router({
+            '/': () => {},
+            '/c/:id': { loader: async (p) => ({ name: 'user' + p.id }), component: Page },
+        }, { hash: true, root: host, outlet: host.querySelector('#rc-out') });
+        await r.ready;
+        await r.navigate('/c/5?tab=x');
+        await settled();
+        assert('router component: смонтирован в outlet, props = params + data + query', host.querySelector('.rc')?.textContent === '5:user5:x');
+        await r.navigate('/c/6');
+        await settled();
+        assert('router component: смена params — старый уничтожен, новый смонтирован', disposed === 1 && host.querySelector('.rc')?.textContent === '6:user6:-');
+        await r.navigate('/');
+        await settled();
+        assert('router component: уход с маршрута уничтожает компонент', disposed === 2 && !host.querySelector('.rc'));
+        r.dispose();
+        sandbox.innerHTML = '';
+        history.replaceState(null, '', location.pathname + location.search + savedHash);
+
+        const open = signal(true);
+        const scope = createScope();
+        let frag;
+        scope.run(() => { frag = html`<div>${show(open, () => html`<i>on</i>`, { keep: true })}</div>`; });
+        const div = frag.firstElementChild;
+        assert('show(cond, branch, opts): опции третьим аргументом', div.querySelector('i')?.textContent === 'on');
+        open.value = false;
+        assert('show(cond, branch, { keep }): ветка спрятана, не удалена', div.querySelector('i') && div.querySelector('i').style.display === 'none');
+        scope.dispose();
+    })();
+
     section('component() & destroy()');
 
     (() => {

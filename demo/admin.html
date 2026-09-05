@@ -48,7 +48,8 @@ const db = {
     settings: { title: 'Aegis Admin', perPage: 20, notify: true },
 };
 const flaky = persisted('demo:flaky', false);          // toggle in the sidebar: 50% of writes fail with 500
-const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+// latency only while the tab is visible: hidden tabs throttle timers to 1/s (1/min after 5 min), which would freeze the mock
+const sleep = (ms) => document.hidden ? new Promise(r => queueMicrotask(r)) : new Promise(r => setTimeout(r, ms));
 const json = (data, status = 200) => new Response(JSON.stringify(data), { status, headers: { 'Content-Type': 'application/json' } });
 const mockFetch = async (input, init = {}) => {
     const url = new URL(typeof input === 'string' ? input : input.url, location.href);
@@ -70,7 +71,7 @@ const mockFetch = async (input, init = {}) => {
         const u = db.users.find(x => x.id === +m[1]);
         if (!u) return json({ message: 'No such user' }, 404);
         if (method === 'GET') return json(u);
-        if (method === 'PUT') { if (!body.email.includes('@')) return json({ message: 'Validation failed', errors: { email: ['Must be an email'] } }, 422); Object.assign(u, body); return json(u); }
+        if (method === 'PUT') { if (/@taken\.com$/i.test(body.email)) return json({ message: 'Validation failed', errors: { email: ['This email is already taken'] } }, 422); Object.assign(u, body); return json(u); }
         if (method === 'DELETE') { db.users = db.users.filter(x => x !== u); return json({ ok: true }); }
     }
     if (p === '/api/settings') { if (method === 'PUT') Object.assign(db.settings, body); return json(db.settings); }
@@ -150,7 +151,7 @@ const Users = ({ html, when, list, signal, computed }) => {
 };
 
 const UserEdit = ({ html, props }) => {
-    const u = props.user;
+    const u = props.data;
     const f = form({ name: u.name, email: u.email, role: u.role, active: u.active }, { rules: { name: [required, minLen(2)], email: [required, emailRule] } });
     const save = mutation((values) => api.put(`/api/users/${u.id}`, values), {
         invalidates: (k) => k.startsWith('/api/users') || k === '/api/stats',
@@ -161,8 +162,8 @@ const UserEdit = ({ html, props }) => {
     return html`
         <h1>${() => t('edit')}: ${u.name}</h1>
         <form @submit.prevent=${() => f.submit(save)} novalidate>
-            ${field('name', 'name', html`<input bind:value=${f.fields.name} ?aria-invalid=${() => !!f.errors.name.value}>`)}
-            ${field('email', 'email', html`<input bind:value=${f.fields.email} type="email" ?aria-invalid=${() => !!f.errors.email.value}>`)}
+            ${field('name', 'name', html`<input bind:value=${f.fields.name} :aria-invalid=${() => f.errors.name.value ? 'true' : null}>`)}
+            ${field('email', 'email', html`<input bind:value=${f.fields.email} type="email" :aria-invalid=${() => f.errors.email.value ? 'true' : null}>`)}
             ${field('role', 'role', html`<select bind:value=${f.fields.role}><option>admin</option><option>editor</option><option>viewer</option></select>`)}
             <label><span><input type="checkbox" bind:checked=${f.fields.active}> ${() => t('active')}</span></label>
             <div class="bar">
@@ -189,7 +190,8 @@ const Settings = ({ html, when }) => {
             loading: () => html`<p>${() => t('loading')}</p>`,
             data: (v) => {
                 const f = form({ title: v.title, perPage: v.perPage, notify: v.notify }, { rules: { title: [required] } });
-                return html`<form @submit.prevent=${() => f.submit(save)}>
+                const submit = async () => { await f.submit(save); if (!save.error.value) f.commit(); };   // сохранено → текущие значения становятся начальными
+                return html`<form @submit.prevent=${submit}>
                     <label>${() => t('title')} <input bind:value=${f.fields.title}></label>
                     <label>${() => t('perPage')} <input type="number" bind:value=${f.fields.perPage} min="5" max="50"></label>
                     <label><span><input type="checkbox" bind:checked=${f.fields.notify}> ${() => t('notify')}</span></label>
@@ -201,18 +203,14 @@ const Settings = ({ html, when }) => {
 };
 
 // ───────────────────────────── shell + router (hash mode: works on any static host) ─────────────────────────────
-const page = (Component, props = {}) => {
-    const h = mount(outlet, (ctx) => Component({ ...ctx, props }));
-    onDispose(() => { if (h && h.destroy) h.destroy(); });
-};
 const r = router({
-    '/': () => page(Dashboard),
-    '/users': () => page(Users),
-    '/users/:id': { loader: (p, { signal }) => api.get(`/api/users/${p.id}`, { signal }), handler: (p, { data }) => page(UserEdit, { user: data }) },
-    '/logs': () => page(Logs),
-    '/settings': () => page(Settings),
+    '/': { component: Dashboard },
+    '/users': { component: Users },
+    '/users/:id': { loader: (p, { signal }) => api.get(`/api/users/${p.id}`, { signal }), component: UserEdit },   // props = { id, data, query }
+    '/logs': { component: Logs },
+    '/settings': { component: Settings },
     '*': () => { outlet.replaceChildren(html`<h1>404</h1>`); },
-}, { hash: true, activeClass: 'active' });
+}, { hash: true, activeClass: 'active', outlet });
 
 mount('#side', ({ html }) => {
     const collapsed = persisted('demo:side', false);
@@ -228,7 +226,8 @@ mount('#side', ({ html }) => {
             <label class="label"><select .value=${locale} @change=${(e) => { locale.value = e.target.value; t.locale.value = e.target.value; }}><option>en</option><option>ru</option></select></label>
         </div>
         ${show(r.pending, () => html`<div class="pending"></div>`)}
-        ${show(() => !!toast.value, () => html`<div class="toast">${toast}</div>`, null, { transition: 'fade' })}`;
+        ${show(() => !!r.error.value, () => html`<div class="toast">${() => r.error.value instanceof HttpError ? `HTTP ${r.error.value.status}: ${r.error.value.data?.message || 'route failed'}` : String(r.error.value?.message || r.error.value)}</div>`)}
+        ${show(() => !!toast.value, () => html`<div class="toast">${toast}</div>`, { transition: 'fade' })}`;
 });
 mount('#foot', ({ html, interval }) => {
     const s = signal(stats());

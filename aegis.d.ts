@@ -269,6 +269,12 @@ export interface ShowOptions {
     /** CSS-контракт `${name}-enter-from|active|to` / `${name}-leave-*` (true → 'aegis'); leave доигрывается до удаления */
     transition?: boolean | string;
 }
+/** show(open, () => html`…`, { transition: 'fade' }) — опции третьим аргументом, если ветки else нет */
+export function show(
+    condition: Signal<boolean> | (() => boolean) | boolean,
+    trueBranch: (() => DocumentFragment | Element) | DocumentFragment | Element,
+    opts: ShowOptions,
+): Comment;
 export function show(
     condition: Signal<boolean> | (() => boolean) | boolean,
     trueBranch: (() => DocumentFragment | Element) | DocumentFragment | Element,
@@ -1072,8 +1078,12 @@ export type RouteParams<P extends string> = P extends `${string}:${infer Name}/$
     ? { [K in Name | keyof RouteParams<`/${Rest}`>]: string }
     : P extends `${string}:${infer Name}` ? { [K in Name]: string } : Record<string, string>;
 export type RouteHandler<D = unknown, P extends string = string> = (params: RouteParams<P>, ctx: RouteContext<D>) => void | Promise<void>;
+/** props маршрута-компонента: params + { data: результат loader, query } */
+export type RouteComponentProps<P extends string = string, D = unknown> = RouteParams<P> & { data: D; query: Record<string, string> };
 export interface RouteDef<D = unknown> {
     handler?: RouteHandler<D>;
+    /** компонент-страница (контракт island()/mount()); монтируется в router({ outlet }) или в outlet родительского layout */
+    component?: Component<RouteComponentProps<string, D>>;
     /** данные до dispose старой страницы; отменяется через signal при новой навигации */
     loader?: (params: Record<string, string>, ctx: { signal: AbortSignal | undefined; query: Record<string, string>; params: Record<string, string> }) => D | Promise<D>;
     /** true — идём; false — отменить (sync); строка — redirect; Promise — ждём */
@@ -1102,6 +1112,8 @@ export interface RouterOptions {
     searchReload?: boolean;
     /** маршруты в location.hash ('#/users/42', ссылки <a href="#/users/42">) — статический хостинг без rewrite-правил */
     hash?: boolean;
+    /** куда монтировать маршруты { component } верхнего уровня */
+    outlet?: string | Element;
 }
 export interface SearchOptions<T> {
     parse?: (raw: string) => T;
@@ -1140,7 +1152,7 @@ export interface Router {
  * guard/redirect как данные, search-параметры как сигналы, ленивые маршруты через import().
  * Не перехватывает: hash-ссылки, формы, download, data-aegis-reload, несовпавшие пути (уходят на сервер).
  */
-export function router<R extends Record<string, unknown>>(routes: { [K in keyof R]: K extends string ? RouteHandler<any, K> | (RouteDef & { handler?: RouteHandler<any, K> }) : never }, opts?: RouterOptions): Router;
+export function router<R extends Record<string, unknown>>(routes: { [K in keyof R]: K extends string ? RouteHandler<any, K> | (RouteDef & { handler?: RouteHandler<any, K>; component?: Component<RouteComponentProps<K, any>> }) : never }, opts?: RouterOptions): Router;
 /** Идёт View Transition роутера */
 export const transitioning: ReadonlySignal<boolean>;
 
