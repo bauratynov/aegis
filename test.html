@@ -2696,6 +2696,43 @@
         dev.resetWarnings();
     })();
 
+    section('сниппет исходника — каретка под конкретным ${}');
+
+    await (async () => {
+        const seen = [];
+        const off = onWarn(w => seen.push(w));
+        dev.resetWarnings();
+        const scope = createScope();
+        scope.run(() => {
+            html`<div class="snip">
+                <span>${'ok'}</span>
+                <button @click=${undefined}>x</button>
+            </div>`;
+            html`<li v-if="ok">snip</li>`;
+        });
+        const e34 = seen.find(w => w.code === 'E034');
+        const sn = e34 && await e34.snippet;
+        assert('snippet: строка исходника с кареткой под виновным ${} (value #2)', typeof sn === 'string' && /@click=\$\{undefined\}/.test(sn) && /\^+ value #2/.test(sn) && /^\s+\d+ \| /.test(sn));
+        assert('snippet: каретка стоит под ${, а не в начале строки', (() => { const [code, caret] = sn.split('\n'); return caret.indexOf('^') === code.indexOf('${undefined}'); })());
+        const e33 = seen.find(w => w.code === 'E033');
+        const sn33 = e33 && await e33.snippet;
+        assert('snippet: токен чужого синтаксиса найден в исходнике', typeof sn33 === 'string' && /v-if="ok"/.test(sn33) && /\^/.test(sn33));
+        assert('snippet: snippetText заполняется после разрешения', e34.snippetText === sn);
+        scope.dispose();
+
+        // исключение в эффекте несёт позицию эффекта
+        const sc2 = createScope();
+        const boom = signal(0);
+        let caught = null;
+        sc2.onError((e) => { caught = e; });
+        sc2.run(() => { effect(() => { if (boom.value) throw new Error('kaboom'); }, 'boom-effect'); });
+        boom.value = 1;
+        assert('error: сообщение эффекта содержит позицию в исходнике', caught && /at \/test\.html:\d+:\d+/.test(caught.message) && caught.aegis && /test\.html/.test(caught.aegis.site));
+        sc2.dispose();
+        off();
+        dev.resetWarnings();
+    })();
+
     section('component() & destroy()');
 
     (() => {

@@ -150,7 +150,9 @@ export function notify(info) {
     while (sh.querySelectorAll('.t').length >= 3) sh.querySelector('.t').remove();
     const t = document.createElement('div');
     t.className = 't' + (info.code[0] === 'S' ? ' s' : '');
-    t.innerHTML = '<span class="x">×</span><b></b> <span class="w"></span><small></small>';
+    t.innerHTML = '<span class="x">×</span><b></b> <span class="w"></span><pre></pre><small></small>';
+    const pre = t.querySelector('pre');
+    if (info.snippetText) { pre.textContent = info.snippetText; pre.style.cssText = 'margin:6px 0 0;padding:6px 8px;background:#161b22;border-radius:6px;white-space:pre;overflow:auto;font:11px/1.4 inherit;color:#e6edf3'; } else pre.remove();
     t.querySelector('b').textContent = info.code;
     t.querySelector('.w').textContent = info.what;
     t.querySelector('small').textContent = (info.site ? info.site + ' · ' : '') + (info.where ? info.where + ' · ' : '') + 'Fix: ' + info.fix + ' · click for the inspector';

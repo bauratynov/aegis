@@ -74,7 +74,11 @@ export interface WarningInfo {
     /** позиция в исходнике (dev): '/js/app.js:42:15' — html``-шаблон, effect() или resource(), где возникло предупреждение */
     site?: string | null;
     /** полный URL файла для site */
-    url?: string | null; code: string; what: string; why: string; fix: string }
+    url?: string | null;
+    /** строка исходника с кареткой под виновным ${} (dev; файл подтягивается fetch-ем один раз) */
+    snippet?: Promise<string | null>;
+    /** то же после разрешения */
+    snippetText?: string | null; code: string; what: string; why: string; fix: string }
 /** Предупреждение движка как исключение (window.__AEGIS_DEV__ = 'strict') */
 export class AegisWarning extends Error { code: string; what: string; why: string; fix: string }
 /** Подписка на предупреждения (dev-режим): warnings-as-assertions в тестах. Возвращает unsubscribe */
