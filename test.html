@@ -2332,6 +2332,76 @@
         sc4.dispose();
     })();
 
+    section('💎 #109 — скомпилированные parts: чистые клоны, текст без вставок');
+
+    await (async () => {
+        const scope = createScope();
+        const n = signal(1);
+        const cls = signal('x');
+        let frag;
+        scope.run(() => { frag = html`<div class="a ${cls}" title=${'t'}><span>${n}</span>${'static'}<b>${() => n.value * 2}</b><!-- user --></div>`; });
+        const div = frag.firstElementChild;
+        assert('parts: в клоне нет data-aegis-el и маркеров aegis', !div.hasAttribute('data-aegis-el') && ![...div.childNodes].some(c => c.nodeType === 8 && /aegis/.test(c.data)));
+        assert('parts: пользовательский комментарий сохранён', [...div.childNodes].some(c => c.nodeType === 8 && c.data === ' user '));
+        assert('parts: статика и сигналы', div.className === 'a x' && div.title === 't' && div.querySelector('span').textContent === '1' && div.querySelector('b').textContent === '2');
+        const span = div.querySelector('span');
+        const textNode = span.firstChild;
+        n.value = 5; cls.value = 'y';
+        assert('parts: сигнал пишет в тот же Text-узел (без insert/remove)', span.firstChild === textNode && textNode.data === '5' && div.querySelector('b').textContent === '10' && div.className === 'a y');
+        assert('parts: статический текст ${"static"} — Text-узел', [...div.childNodes].some(c => c.nodeType === 3 && c.data === 'static'));
+        scope.dispose();
+
+        // реактивная дырка: текст → узлы → текст, маркер остаётся якорем
+        const mode = signal('t');
+        const sc2 = createScope();
+        let f2;
+        sc2.run(() => { f2 = html`<p>${() => mode.value === 't' ? 'text' : mode.value === 'n' ? html`<i>a</i><i>b</i>` : null}</p>`; });
+        const p = f2.firstElementChild;
+        assert('parts: дырка — текст', p.textContent === 'text' && p.childNodes.length === 1);
+        mode.value = 'n';
+        assert('parts: дырка — узлы', p.querySelectorAll('i').length === 2 && p.textContent === 'ab');
+        mode.value = 't';
+        assert('parts: дырка — снова текст, узлы убраны', p.querySelectorAll('i').length === 0 && p.textContent === 'text');
+        mode.value = 'x';
+        assert('parts: дырка — null → пусто', p.textContent === '');
+        sc2.dispose();
+
+        // маркеры внутри таблицы: текст не foster-parent-ится, потому что маркер — comment на этапе парсинга
+        const cell = signal('c1');
+        const sc3 = createScope();
+        let f3;
+        sc3.run(() => { f3 = html`<table><tr><td>${cell}</td>${html`<td>c2</td>`}</tr></table>`; });
+        const tr = f3.querySelector('tr');
+        assert('parts: маркеры в <tr> остаются на месте', tr.children.length === 2 && tr.children[0].textContent === 'c1' && tr.children[1].textContent === 'c2' && f3.firstElementChild.tagName === 'TABLE');
+        sc3.dispose();
+
+        // тот же шаблон дважды — parts кэшированы, экземпляры независимы
+        const a = signal('A'), b = signal('B');
+        const sc4 = createScope();
+        let fa, fb;
+        const T = (v) => html`<em>${v}</em>`;
+        sc4.run(() => { fa = T(a); fb = T(b); });
+        a.value = 'A2';
+        assert('parts: два экземпляра одного шаблона независимы', fa.firstElementChild.textContent === 'A2' && fb.firstElementChild.textContent === 'B');
+        sc4.dispose();
+
+        // adopt(): два текстовых маркера в разных элементах + атрибут
+        const host = document.createElement('div');
+        host.innerHTML = '<span class="v">0</span><button class="btn" disabled>+</button><em>old</em>';
+        sandbox.appendChild(host);
+        const count = signal(3);
+        const on2 = signal(false);
+        let clicks = 0;
+        const sc5 = createScope();
+        sc5.run(() => adopt(host)`<span class="v">${count}</span><button class="btn" ?disabled=${on2} @click=${() => clicks++}>+</button><em>${'new'}</em>`);
+        host.querySelector('button').click();
+        assert('parts: adopt() — текст, булев атрибут, событие по elPath', host.querySelector('.v').textContent === '3' && !host.querySelector('button').disabled && clicks === 1 && host.querySelector('em').textContent === 'new');
+        count.value = 4;
+        assert('parts: adopt() — реактивный текст', host.querySelector('.v').textContent === '4');
+        sc5.dispose();
+        sandbox.innerHTML = '';
+    })();
+
     section('component() & destroy()');
 
     (() => {
