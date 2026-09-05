@@ -3139,6 +3139,110 @@
         defaults.motion = true;
     })();
 
+    section('💎 кэш фаза 5 — patch-log optimistic, updates/seeds/entity, конфликты 412, инварианты');
+
+    await (async () => {
+        reset();
+        const seen = [];
+        const off = onWarn(w => seen.push(w));
+        dev.resetWarnings();
+
+        // patch-log: две параллельные мутации, одна падает — откатывается только её патч
+        const gate = [];
+        const sc = createScope();
+        let todos;
+        sc.run(() => { todos = resource('/t5/todos', { cache: true, fetcher: async () => [{ id: 1, text: 'a' }] }); });
+        await settled();
+        const add = mutation((text) => new Promise((res, rej) => gate.push({ res, rej, text })), {
+            optimistic: (text) => todos.mutate(l => [...l, { id: 'tmp-' + text, text }]),
+            concurrent: 'parallel',
+        });
+        const p1 = add('b'), p2 = add('c');
+        await Promise.resolve();
+        assert('patch-log: два оптимистичных патча видны сразу', todos.data.value.map(t => t.text).join() === 'a,b,c');
+        gate[0].rej(new Error('nope')); await p1.catch(() => {});
+        await Promise.resolve();
+        assert('patch-log: откат первой мутации не трогает патч второй', todos.data.value.map(t => t.text).join() === 'a,c');
+        gate[1].res({ id: 3, text: 'c' }); await p2;
+        await settled();
+        assert('patch-log: успех сворачивает патч в base', todos.data.value.map(t => t.text).join() === 'a,c' && cache.explain('/t5/todos').state !== 'absent');
+
+        // commit: серверный ответ заменяет временный элемент без refetch; updates: другие записи без refetch
+        let listFetches = 0;
+        let stats5;
+        sc.run(() => { stats5 = resource('/t5/stats', { cache: true, fetcher: async () => { listFetches++; return { count: 2 }; } }); });
+        await settled();
+        const add2 = mutation(async (text) => ({ id: 9, text }), {
+            optimistic: (text) => todos.mutate(l => [...l, { id: 'tmp', text }]),
+            commit: (created, list) => list.map(t => t.id === 'tmp' ? created : t),
+            updates: { '/t5/stats': (st, created) => ({ ...st, count: st.count + 1 }) },
+        });
+        await add2('d');
+        await settled();
+        assert('commit + updates: временный id заменён серверным, счётчик обновлён без refetch', todos.data.value.some(t => t.id === 9) && !todos.data.value.some(t => t.id === 'tmp') && stats5.data.value.count === 3 && listFetches === 1);
+
+        // seeds: ответ списка засевает карточки — детальная страница без запроса
+        let detailFetches = 0;
+        let list, card;
+        sc.run(() => { list = resource('/t5/users', { cache: { seeds: (d) => d.map(u => ['/t5/users/' + u.id, u]) }, staleTime: 60000, fetcher: async () => [{ id: 1, name: 'Ada' }, { id: 2, name: 'Bob' }] }); });
+        await settled();
+        sc.run(() => { card = resource('/t5/users/2', { cache: true, staleTime: 60000, fetcher: async () => { detailFetches++; return { id: 2, name: 'Bob' }; } }); });
+        await settled();
+        assert('seeds: карточка из ответа списка, 0 запросов', card.data.value.name === 'Bob' && detailFetches === 0);
+
+        // entity fan-out: patchEntity обновляет список и карточку
+        configure({ identify: (o) => o && o.id != null && 'name' in o ? 'user:' + o.id : null });
+        const n = cache.patchEntity('user:2', u => ({ ...u, name: 'Bobby' }));
+        assert('patchEntity: сущность обновлена во всех записях', n >= 2 && list.data.value[1].name === 'Bobby' && card.data.value.name === 'Bobby' && list.data.value[0].name === 'Ada');
+        const saveE = mutation(async (u) => u, { patch: (saved) => [['user:' + saved.id, () => saved]] });
+        await saveE({ id: 1, name: 'Ada L.' });
+        assert('mutation.patch: серверный ответ разошёлся по спискам', list.data.value[0].name === 'Ada L.');
+        configure({ identify: null });
+
+        // конфликт 412 → onConflict → merge3 → повтор с объединённым значением
+        let puts = [];
+        const srv = { doc: { id: 7, title: 'T', body: 'B', v: 1 } };
+        let doc;
+        sc.run(() => { doc = resource('/t5/doc', { cache: true, fetcher: async () => srv.doc }); });
+        await settled();
+        srv.doc = { ...srv.doc, body: 'B-server', v: 2 };            // кто-то поменял body на сервере
+        const save = mutation(async (value, { etag }) => { puts.push(value); if (value.v !== srv.doc.v) { throw new HttpError(412, null, srv.doc); } srv.doc = { ...value, v: value.v + 1 }; return srv.doc; }, {
+            optimistic: (value) => doc.mutate(() => value),
+            onConflict: ({ base, local, server, merge }) => { const r = merge(); return r.conflicts.length ? 'server' : { ...r.value, v: server.v }; },
+            commit: (saved) => saved,
+        });
+        await save({ ...doc.data.value, title: 'T-client' });      // клиент менял только title
+        assert('onConflict: 412 → 3-way merge (title клиента + body сервера) → повтор → успех', puts.length === 2 && doc.data.value.title === 'T-client' && doc.data.value.body === 'B-server' && doc.data.value.v === 3);
+        const m3 = cache.merge3({ a: 1, b: 1, c: 1 }, { a: 2, b: 1, c: 3 }, { a: 1, b: 5, c: 4 });
+        assert('merge3: клиентское поле, серверное поле, конфликт помечен', m3.value.a === 2 && m3.value.b === 5 && m3.conflicts.join() === 'c');
+
+        // инварианты под нагрузкой: случайные операции не дают E044
+        dev.resetWarnings();
+        const pend = [];
+        const fz = createScope();
+        const rs = [];
+        fz.run(() => { for (let i = 0; i < 4; i++) rs.push(resource('/t5/fz/' + i, { cache: true, staleTime: 50, fetcher: (u) => new Promise((res, rej) => pend.push({ res, rej, u })) })); });
+        let seed5 = 7;
+        const rnd = () => (seed5 = (seed5 * 48271) % 2147483647) / 2147483647;
+        for (let i = 0; i < 300; i++) {
+            const r = rs[Math.floor(rnd() * rs.length)];
+            const op = rnd();
+            if (op < 0.3 && pend.length) { const p = pend.splice(Math.floor(rnd() * pend.length), 1)[0]; rnd() < 0.8 ? p.res({ n: i }) : p.rej(new Error('x')); }
+            else if (op < 0.5) r.refresh();
+            else if (op < 0.65) invalidate(r.key.value);
+            else if (op < 0.8) r.mutate(d => ({ ...(d || {}), m: i }));
+            else if (op < 0.9) r.abort();
+            else await Promise.resolve();
+        }
+        for (const p of pend.splice(0)) p.res({ n: 0 });
+        await settled();
+        assert('инварианты: 300 случайных операций без E044', !seen.some(w => w.code === 'E044'));
+        fz.dispose();
+        sc.dispose();
+        off(); dev.resetWarnings(); reset();
+        defaults.motion = true;
+    })();
+
     section('component() & destroy()');
 
     (() => {

@@ -93,7 +93,7 @@ router({
 });
 
 // ── cache API, useClock, invalidate grammar
-import { cache, useClock, invalidate, mutation, configure } from './aegis.js';
+import { cache, useClock, invalidate, mutation, configure, api } from './aegis.js';
 const cached: User[] | undefined = cache.get<User[]>(['users', 1]);
 cache.set({ b: 1, a: 2 }, { x: 1 }, { staleTime: 30_000 });
 const ex = cache.explain('/api/users'); const st: 'fresh' | 'stale' | 'inflight' | 'error' | 'empty' | 'absent' = ex.state; void st; void cached;
@@ -107,6 +107,14 @@ configure({ cache: { maxEntries: 200, maxBytes: 4 << 20 }, revalidate: { focus: 
 configure({ invalidateHeader: 'HX-Trigger', breaker: { threshold: 3, cooldown: 2000, key: (u) => new URL(u, 'http://x').pathname }, retryBudget: { ratio: 0.1, min: 3 } });
 resource('/api/a', { cache: { staleTime: 'http', cacheTime: 'http' } }); resource('/api/b', { cache: { staleTime: ['http', 5000] } }); resource('/api/c', { cache: { staleTime: { auto: true, k: 50, min: 2000 } } });
 const herr = new HttpError(503, new Response(), null); herr.circuit; herr.retryAt; herr.budget; herr.retryAfter; cache.explain('/api/a').etag;
+configure({ identify: (o) => (o && o.id != null ? 'user:' + o.id : null) });
+const m3 = cache.merge3({ a: 1 }, { a: 2 }, { a: 1 }); m3.conflicts.length; cache.patchEntity('user:1', (u) => ({ ...u, name: 'x' }));
+resource<User[]>('/api/users', { cache: { seeds: (d: User[]) => d.map(u => ['/api/users/' + u.id, u]), entity: false } });
+mutation(async (v: User, { etag }) => api.put('/api/users/' + v.id, v, { ifMatch: etag || undefined }), {
+    commit: (saved: User, base) => saved, updates: { '/api/users*': (list: User[], saved: User) => list.map(u => u.id === saved.id ? saved : u) },
+    patch: (saved: User) => [['user:' + saved.id, () => saved]],
+    onConflict: ({ base, local, server, merge }) => { const r = merge(); return r.conflicts.length ? 'server' : r.value; },
+});
 const sz: number = cache.size().bytes; void sz; cache.stats().limits.maxEntries;
 
 // ── aegis/test — render / fire / waitFor / mockFetch

@@ -444,6 +444,8 @@ export interface AegisConfig {
     invalidateHeader?: string | false;
     /** circuit breaker per origin: после threshold retryable-ошибок подряд запросы падают сразу (e.circuit, e.retryAt) на cooldown, затем один probe */
     breaker?: boolean | { threshold?: number; cooldown?: number; key?: (url: string) => string };
+    /** идентификация сущностей для cache.patchEntity() и cache: { entity }: (obj) => 'user:42' | null */
+    identify?: ((obj: any) => string | null) | null;
     /** лимит повторов на клиент в скользящем окне: retries ≤ ratio × requests + min; отказ — e.budget === true */
     retryBudget?: boolean | { ratio?: number; min?: number; window?: number };
     /** планировщик ревалидации: refill token bucket на причину (мс), параллелизм, стаггер между стартами, джиттер reconnect */
@@ -465,6 +467,8 @@ export interface AegisConfig {
 export function configure(opts: AegisConfig): AegisConfig;
 
 export interface RequestOptions extends Omit<RequestInit, 'body' | 'method' | 'headers'> {
+    /** If-Match для оптимистичной блокировки (ETag из cache.explain(key).etag или ctx.etag мутации) */
+    ifMatch?: string;
     method?: string;
     /** объект → JSON + Content-Type; FormData/Blob/string — как есть */
     body?: unknown;
@@ -563,6 +567,10 @@ export interface CacheOptions {
     key?: string | CacheKeyPart[] | (() => string | CacheKeyPart[]);
     /** теги для invalidate({ tags }) */
     tags?: string | string[];
+    /** после каждого ответа списка засеять дочерние записи: (data) => [[key, item], …] — карточка открывается без запроса */
+    seeds?: (data: any) => Array<[string | CacheKeyPart[], unknown]>;
+    /** ответ — сущность (configure({ identify })): обновить её во всех списках */
+    entity?: boolean;
     /** мс | 'http' (Cache-Control max-age / Age / Expires ответа; ['http', fallbackMs]) | 'auto' | { auto: true, k?, min?, max? } — T* = sqrt(2k/(λ̂μ̂)) − 1/λ̂ по наблюдаемым частотам */
     staleTime?: number | 'http' | ['http', number] | 'auto' | { auto: true; k?: number; min?: number; max?: number };
     /** мс до сборки незанятой записи; Infinity — держать до вытеснения по лимитам; 'http' — max-age + stale-while-revalidate из ответа */
@@ -621,6 +629,14 @@ export interface MutationOptions<A extends unknown[]> {
     invalidates?: InvalidatePattern | InvalidatePattern[];
     /** ждать перезапросы invalidates перед снятием pending (default true) */
     awaitInvalidates?: boolean;
+    /** серверный ответ → новый base затронутых ресурсов без refetch: (result, base, ...args) => data */
+    commit?: (result: any, base: any, ...args: A) => any;
+    /** обновить записи кэша по шаблонам без refetch: { '/api/users*': (data, result, ...args) => data } */
+    updates?: Record<string, (data: any, result: any, ...args: A) => any>;
+    /** обновить сущности во всех записях (configure({ identify })): (result, ...args) => [[entityKey, (node) => node], …] */
+    patch?: (result: any, ...args: A) => Array<[string, (node: any) => any]>;
+    /** 412/409 от сервера: base — до правки, local — с optimistic, server — актуальное; вернуть 'server' | 'client' | объект для повтора мутации с ним */
+    onConflict?: (c: { base: any; local: any; server: any; merge(): { value: any; conflicts: string[] }; error: HttpError }) => 'server' | 'client' | object | Promise<'server' | 'client' | object>;
     /** 'ignore' (default, double-submit guard) | 'queue' | 'latest' | 'parallel' */
     concurrent?: 'ignore' | 'queue' | 'latest' | 'parallel';
     onSuccess?: (result: any, ...args: A) => void;
@@ -639,7 +655,7 @@ export interface Mutation<A extends unknown[], R> {
  * Мутация с pending, double-submit guard, optimistic + rollback, invalidate.
  *   const addTodo = mutation((text, { signal }) => api.post('/api/todos', { text }, { signal }), { resources: [todos], optimistic: … });
  */
-export function mutation<A extends unknown[], R>(fn: (...args: [...A, { signal: AbortSignal }]) => Promise<R> | R, opts?: MutationOptions<A>): Mutation<A, R>;
+export function mutation<A extends unknown[], R>(fn: (...args: [...A, { signal: AbortSignal; /** ETag затронутого ресурса для If-Match */ etag: string | null }]) => Promise<R> | R, opts?: MutationOptions<A>): Mutation<A, R>;
 
 export interface StreamOptions<T> {
     method?: string;
@@ -753,6 +769,10 @@ export const cache: {
     on(fn: (key: string, ev: CacheEvent) => void): () => void;
     /** явная сборка мусора по часам (тесты с fakeClock, low-memory); возвращает число удалённых */
     gc(now?: number): number;
+    /** обновить сущность во всех записях кэша (configure({ identify })); возвращает число изменённых записей */
+    patchEntity(entityKey: string, fn: (node: any) => any): number;
+    /** трёхстороннее слияние объектов */
+    merge3<T = any>(base: T, local: T, server: T): { value: T; conflicts: string[] };
     /** записи, байты (при maxBytes), вытеснения и лимиты */
     size(): { entries: number; bytes: number; evictions: number; maxEntries: number; maxBytes: number };
     /** почему запись свежая/устаревшая, кто её запрашивал, что рекомендовать */
