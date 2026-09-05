@@ -36,5 +36,8 @@
   "engines": {
     "node": ">=14"
   },
-  "sideEffects": false
+  "sideEffects": false,
+  "scripts": {
+    "test": "node --test test-core.mjs"
+  }
 }

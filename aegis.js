@@ -1,4 +1,4 @@
-﻿/**
+/**
  * AEGIS — Frontend Engine
  * Zero-build, zero-footgun, signal-based reactive UI.
  * Categories of bugs impossible by design.
@@ -12,11 +12,18 @@
 // 0. DEV MODE & DIAGNOSTICS
 // ============================================================================
 
-const _DEV = typeof window !== 'undefined' && window.__AEGIS_DEV__;
+/**
+ * Dev-режим читается лениво при каждом предупреждении, а не один раз при
+ * загрузке модуля: import'ы поднимаются наверх, поэтому
+ * `window.__AEGIS_DEV__ = true` в том же модуле иначе не успевал бы сработать.
+ */
+function _dev() {
+    return typeof globalThis !== 'undefined' && !!globalThis.__AEGIS_DEV__;
+}
 
 /** Elm-style three-part warning: what → why → fix */
 function _warn(code, { what, why, fix }) {
-    if (!_DEV) return;
+    if (!_dev()) return;
     console.warn(
         `⚠ [Aegis:${code}] ${what}\n` +
         `  Why: ${why}\n` +
@@ -24,21 +31,93 @@ function _warn(code, { what, why, fix }) {
     );
 }
 
-// Prototype pollution deny-list
+// Prototype pollution deny-list (используется proxy-обёртками store/reactive)
 const _DENIED_KEYS = new Set(['__proto__', 'prototype', 'constructor']);
 
 // ============================================================================
 // 1. REACTIVE CORE — Signals, Computed, Effect, Batch
-//    Version-based glitch-free propagation (TC39/Solid/Preact converged)
-//    Custom equals option (TC39 Signals spec-aligned)
+//
+//    Модель:
+//      Source   — signal или computed: { subs: Set<Observer>, version() }
+//      Observer — effect, computed или subscriber:
+//                 { _isComputed, _disposed, _deps: Map<Source, version>, _run() }
+//
+//    Распространение в две фазы:
+//      push — запись сигнала синхронно помечает computed'ы dirty по цепочке
+//             и кладёт effects в очередь;
+//      pull — при flush каждый effect сравнивает версии своих зависимостей
+//             (computed при этом лениво пересчитываются) и запускается только
+//             если хотя бы одна реально изменилась. Это даёт glitch-free
+//             семантику: effect никогда не видит промежуточных состояний и не
+//             запускается, если computed пересчитался в то же значение.
 // ============================================================================
 
-let _tracking = null;       // текущий effect для auto-track
-let _batchDepth = 0;        // глубина batch()
-const _batchQueue = new Set(); // очередь effects для flush
-let _epoch = 0;             // глобальный epoch-counter для version tracking
+let _tracking = null;        // текущий observer для auto-track
+let _batchDepth = 0;         // глубина batch() (тело effect — тоже неявный batch)
+let _notifyDepth = 0;        // вложенность _notify — flush только на выходе из внешнего
+let _flushing = false;       // идёт flush — вложенные записи только пополняют очередь
+const _queue = new Set();    // отложенные observers (effects, subscribers)
+let _epoch = 0;              // глобальный счётчик версий
+const _MAX_ROUNDS = 100;     // раундов flush до признания цикла бесконечным
 
 const SIGNAL = Symbol('aegis.signal');
+
+function _opts(nameOrOpts) {
+    const o = typeof nameOrOpts === 'string' ? { name: nameOrOpts } : (nameOrOpts || {});
+    const eq = o.equals;
+    return {
+        name: o.name || null,
+        // equals:false означает «уведомлять всегда»
+        equals: eq == null ? Object.is : (eq === false ? () => false : eq),
+    };
+}
+
+/** Подписать текущий observer на источник и запомнить его версию */
+function _track(src) {
+    const obs = _tracking;
+    if (!obs) return;
+    src.subs.add(obs);
+    obs._deps.set(src, src.version());
+}
+
+/** Отписать observer от всех источников */
+function _unsubscribe(obs) {
+    for (const src of obs._deps.keys()) src.subs.delete(obs);
+    obs._deps.clear();
+}
+
+/** Изменилась ли хоть одна зависимость с момента последнего запуска */
+function _depsChanged(obs) {
+    for (const [src, ver] of obs._deps) {
+        if (src.version() !== ver) return true;
+    }
+    return false;
+}
+
+/** Ручная подписка: fn(value) при каждом реальном изменении, отложенно (после batch) */
+function _subscribe(src, read, fn) {
+    let last = src.version();
+    const node = {
+        _isComputed: false,
+        _disposed: false,
+        _name: 'subscriber',
+        _run() {
+            if (node._disposed) return;
+            const v = src.version();
+            if (v === last) return;
+            last = v;
+            fn(read());
+        },
+    };
+    src.subs.add(node);
+    const unsubscribe = () => {
+        node._disposed = true;
+        src.subs.delete(node);
+        _queue.delete(node);
+    };
+    if (_currentScope) _currentScope.onDispose(unsubscribe);
+    return unsubscribe;
+}
 
 /**
  * Создать реактивный сигнал
@@ -48,61 +127,46 @@ const SIGNAL = Symbol('aegis.signal');
  * @returns {{ value: T, peek: () => T, subscribe: (fn) => () => void }}
  */
 export function signal(initial, nameOrOpts) {
-    const opts = typeof nameOrOpts === 'string' ? { name: nameOrOpts } : (nameOrOpts || {});
-    const name = opts.name || null;
-    // custom equality — equals:false means "always notify"
-    const _equals = opts.equals !== undefined && opts.equals !== null
-        ? (opts.equals === false ? () => false : opts.equals)
-        : Object.is;
+    const { name, equals } = _opts(nameOrOpts);
 
     let _value = initial;
-    let _version = ++_epoch;  // version counter
-    const _subs = new Set();
+    let _version = ++_epoch;
+    const src = { subs: new Set(), version: () => _version };
 
     const sig = {
         [SIGNAL]: true,
         _name: name,
 
         get value() {
-            if (_tracking) {
-                _subs.add(_tracking);
-                // track reverse dep for cleanup
-                if (_tracking._deps) _tracking._deps.add(_subs);
-            }
+            _track(src);
             return _value;
         },
 
         set value(v) {
-            // Dev warning: writing signal inside computed
-            if (_DEV && _tracking && _tracking._isComputed) {
+            if (_tracking && _tracking._isComputed) {
                 _warn('E002', {
                     what: `Signal "${name || '?'}" written inside computed "${_tracking._name || '?'}".`,
                     why: 'Computeds must be pure — writing signals causes infinite loops or glitches.',
                     fix: 'Move the write into an effect() or a method/action.',
                 });
             }
-            if (_equals(_value, v)) return;
+            if (equals(_value, v)) return;
             _value = v;
-            _version = ++_epoch; // bump version
-            _notify(_subs);
+            _version = ++_epoch;
+            _notify(src.subs);
         },
 
         /** Прочитать без подписки */
         peek() { return _value; },
 
-        /** Текущая версия (для computed bailout) */
+        /** Текущая версия (для bailout зависимых) */
         get _v() { return _version; },
 
         /** Ручная подписка (возвращает unsubscribe) */
-        subscribe(fn) {
-            _subs.add(fn);
-            return () => _subs.delete(fn);
-        },
+        subscribe(fn) { return _subscribe(src, () => _value, fn); },
 
         /** Обновить через функцию: sig.update(v => v + 1) */
-        update(fn) {
-            sig.value = fn(_value);
-        },
+        update(fn) { sig.value = fn(_value); },
 
         toString() { return `Signal(${name || '?'}: ${_value})`; }
     };
@@ -117,124 +181,116 @@ export function isSignal(v) {
 
 /**
  * Вычисляемое значение (ленивое, кэшированное)
- * Version-based: пересчитывается только когда зависимости реально изменились
+ * Пересчитывается только когда зависимости реально изменились (по версиям);
+ * версия самого computed растёт только при изменении результата.
  */
 export function computed(fn, nameOrOpts) {
-    const opts = typeof nameOrOpts === 'string' ? { name: nameOrOpts } : (nameOrOpts || {});
-    const name = opts.name || null;
-    // custom equality — equals:false means "always notify"
-    const _equals = opts.equals !== undefined && opts.equals !== null
-        ? (opts.equals === false ? () => false : opts.equals)
-        : Object.is;
+    const { name, equals } = _opts(nameOrOpts);
 
-    let _value, _dirty = true;
+    let _value;
     let _version = 0;
+    let _dirty = true;
     let _computing = false;     // circular dependency guard
-    const _subs = new Set();
 
-    // Two-phase: push только помечает dirty, pull пересчитывает при read
-    const _markDirty = () => {
-        if (!_dirty) {
-            _dirty = true;
-            // Propagate dirty mark to subscribers (computeds downstream)
-            _notify(_subs);
-        }
+    const src = {
+        subs: new Set(),
+        version() {
+            if (_dirty) _recompute();
+            return _version;
+        },
     };
-    _markDirty._disposed = false;
-    _markDirty._isComputed = true; // пометка что это computed, не effect
-    _markDirty._name = `computed:${name || '?'}`;
-    _markDirty._deps = null;       // deps tracked during computation
 
-    const _recompute = () => {
+    const node = {
+        _isComputed: true,
+        _disposed: false,
+        _name: `computed:${name || '?'}`,
+        _deps: new Map(),
+        /** push-фаза: пометить dirty и передать дальше */
+        _run() {
+            if (_dirty || node._disposed) return;
+            _dirty = true;
+            _notify(src.subs);
+        },
+    };
+
+    function _recompute() {
         if (_computing) {
             throw new Error(`[Aegis] Circular dependency in computed "${name || '?'}"`);
         }
         _computing = true;
-        // unsubscribe from old deps, setup new collection
-        if (_markDirty._deps) {
-            for (const subs of _markDirty._deps) subs.delete(_markDirty);
-        }
-        _markDirty._deps = new Set();
         const prev = _tracking;
-        _tracking = _markDirty;
         try {
-            const newValue = fn();
-            if (!_equals(_value, newValue)) {
+            // Bailout: помечен dirty, но ни одна зависимость не изменила версию
+            // (например, upstream computed пересчитался в то же значение)
+            if (node._deps.size > 0 && !_depsChanged(node)) {
+                _dirty = false;
+                return;
+            }
+            _unsubscribe(node);
+            _tracking = node;
+            let newValue;
+            try {
+                newValue = fn();
+            } catch (e) {
+                // неполный набор deps — при следующем чтении пересчитать полностью
+                _unsubscribe(node);
+                throw e;
+            }
+            if (_version === 0 || !equals(_value, newValue)) {
                 _value = newValue;
                 _version = ++_epoch;
             }
+            _dirty = false;
         } finally {
             _tracking = prev;
             _computing = false;
         }
-        _dirty = false;
-    };
+    }
 
     const comp = {
         [SIGNAL]: true,
         _name: name,
 
         get value() {
-            if (_tracking) {
-                _subs.add(_tracking);
-                if (_tracking._deps) _tracking._deps.add(_subs);
-            }
+            if (_dirty) _recompute();
+            _track(src);
+            return _value;
+        },
+
+        /** Прочитать без подписки (зависимости самого computed переподписываются как обычно) */
+        peek() {
             if (_dirty) _recompute();
             return _value;
         },
 
-        peek() {
-            if (_dirty) {
-                const prevTracking = _tracking;
-                _tracking = null;
-                _computing = true;
-                try {
-                    const newValue = fn();
-                    if (!_equals(_value, newValue)) {
-                        _value = newValue;
-                        _version = ++_epoch;
-                    }
-                } finally {
-                    _tracking = prevTracking;
-                    _computing = false;
-                }
-                _dirty = false;
-            }
-            return _value;
-        },
+        /** Текущая версия (для bailout зависимых) */
+        get _v() { return src.version(); },
 
-        /** Текущая версия (для downstream bailout) */
-        get _v() {
-            // Ensure freshness before reporting version
-            if (_dirty) comp.peek();
-            return _version;
-        },
-
-        subscribe(fn) {
-            _subs.add(fn);
-            return () => _subs.delete(fn);
-        },
+        subscribe(fn) { return _subscribe(src, () => _value, fn); },
 
         dispose() {
-            _markDirty._disposed = true;
-            _subs.clear();
+            node._disposed = true;
+            _unsubscribe(node);
+            src.subs.clear();
         },
 
-        toString() { return `Computed(${name || '?'}: ${_value})`; }
+        toString() { return `Computed(${name || '?'}: ${_dirty ? '<stale>' : _value})`; }
     };
+
+    if (_currentScope) _currentScope.onDispose(comp.dispose);
 
     return comp;
 }
 
 /**
  * Побочный эффект — авто-трекинг зависимостей
+ * fn может вернуть cleanup-функцию: она вызывается перед следующим запуском и при dispose.
  * Возвращает dispose-функцию
  *
  * Dev warning если вызван вне scope
  */
 export function effect(fn, name) {
-    // Ownership warning
-    if (_DEV && !_currentScope) {
+    if (!_currentScope) {
         _warn('E001', {
             what: `Effect "${name || 'anonymous'}" created outside a component scope — it will never be cleaned up.`,
             why: 'Effects created outside a scope leak subscribers forever, causing memory growth.',
@@ -242,96 +298,127 @@ export function effect(fn, name) {
         });
     }
 
-    const _effect = () => {
-        if (_effect._disposed || _effect._running) return;
-        _effect._running = true;
-        // cleanup old subscriptions before re-tracking
-        if (_effect._deps) {
-            for (const subs of _effect._deps) subs.delete(_effect);
-        }
-        _effect._deps = new Set();
-        const prev = _tracking;
-        _tracking = _effect;
-        try { fn(); }
-        finally { _tracking = prev; _effect._running = false; }
+    let _cleanup = null;
+
+    const node = {
+        _isComputed: false,
+        _disposed: false,
+        _name: name || 'effect',
+        _deps: new Map(),
+        _run() {
+            if (node._disposed) return;
+            // pull-фаза: запускаться только если зависимости реально изменились
+            if (node._deps.size > 0 && !_depsChanged(node)) return;
+            _execute();
+        },
     };
-    _effect._disposed = false;
-    _effect._running = false;
-    _effect._deps = null;      // tracked dependency sets
-    _effect._name = name || 'effect';
-    _effect._isComputed = false;
 
-    // Запуск: первый вызов сразу
-    _effect();
+    function _runCleanup() {
+        if (!_cleanup) return;
+        const c = _cleanup;
+        _cleanup = null;
+        try { c(); } catch (e) { console.error(`[Aegis] cleanup error in effect "${node._name}":`, e); }
+    }
 
-    // Возвращаем dispose
-    const dispose = () => { _effect._disposed = true; };
+    function _execute() {
+        _runCleanup();
+        _unsubscribe(node);
+        const prev = _tracking;
+        _tracking = node;
+        _batchDepth++;  // записи внутри effect откладываются до его завершения
+        try {
+            const r = fn();
+            if (typeof r === 'function') _cleanup = r;
+        } finally {
+            _tracking = prev;
+            _batchDepth--;
+            if (_batchDepth === 0) _flush();
+        }
+    }
 
-    // Регистрируем в текущем scope для auto-cleanup
-    if (_currentScope) _currentScope._disposers.push(dispose);
+    const dispose = () => {
+        if (node._disposed) return;
+        node._disposed = true;
+        _queue.delete(node);
+        _unsubscribe(node);
+        _runCleanup();
+    };
+
+    // Регистрируем до первого запуска: в уже уничтоженном scope effect не стартует
+    if (_currentScope) _currentScope.onDispose(dispose);
+
+    if (!node._disposed) _execute();
 
     return dispose;
 }
 
 /**
  * Группировка обновлений — все изменения внутри batch
- * вызовут effects только один раз после завершения
+ * вызовут effects только один раз после завершения. Возвращает результат fn.
  */
 export function batch(fn) {
     _batchDepth++;
     try {
-        fn();
+        return fn();
     } finally {
         _batchDepth--;
         if (_batchDepth === 0) _flush();
     }
 }
 
-let _notifyDepth = 0;
-let _notifyBatchDepth = 0;  // track nested _notify calls
-const _MAX_DEPTH = 100;
+/** Выполнить fn без подписки на прочитанные сигналы */
+export function untrack(fn) {
+    const prev = _tracking;
+    _tracking = null;
+    try { return fn(); }
+    finally { _tracking = prev; }
+}
 
 function _notify(subs) {
-    if (++_notifyDepth > _MAX_DEPTH) {
-        _notifyDepth--;
-        throw new Error('[Aegis] Maximum reactive depth exceeded — possible infinite loop');
-    }
-    _notifyBatchDepth++;
+    _notifyDepth++;
     try {
-        const list = [...subs];
-        for (const fn of list) {
-            if (fn._disposed) { subs.delete(fn); continue; }
-            if (fn._isComputed) {
-                // propagate dirty marks immediately (push phase)
-                fn();
-            } else {
-                // defer ALL effects — never run inline
-                _batchQueue.add(fn);
-            }
+        for (const obs of [...subs]) {
+            if (obs._disposed) { subs.delete(obs); continue; }
+            if (obs._isComputed) obs._run();   // push: dirty по цепочке
+            else _queue.add(obs);              // effects никогда не запускаются inline
         }
     } finally {
         _notifyDepth--;
-        _notifyBatchDepth--;
-        // flush only when ALL nested _notify calls complete and not in batch
-        if (_notifyBatchDepth === 0 && _batchDepth === 0) {
-            _flush();
-        }
     }
+    // flush только когда все вложенные _notify завершены и мы не в batch
+    if (_notifyDepth === 0 && _batchDepth === 0) _flush();
 }
 
 function _flush() {
-    const queue = [..._batchQueue];
-    _batchQueue.clear();
-    // same two-phase in batch flush
-    const effects = [];
-    for (const fn of queue) {
-        if (fn._disposed) continue;
-        if (fn._isComputed) fn();
-        else effects.push(fn);
+    if (_flushing || _batchDepth > 0 || _queue.size === 0) return;
+    _flushing = true;
+    let rounds = 0;
+    let error = null;
+    try {
+        // Записи из effects попадают в очередь и обрабатываются следующим раундом
+        while (_queue.size > 0) {
+            if (++rounds > _MAX_ROUNDS) {
+                const names = [..._queue].map(o => o._name).join(', ');
+                _queue.clear();
+                throw new Error(`[Aegis] Infinite reactive loop — effect writes a signal it depends on (${names})`);
+            }
+            const round = [..._queue];
+            _queue.clear();
+            for (const obs of round) {
+                if (obs._disposed) continue;
+                try {
+                    obs._run();
+                } catch (e) {
+                    // не бросать остальные effects раунда; первую ошибку пробросить после
+                    if (error) console.error(`[Aegis] error in "${obs._name}":`, e);
+                    else error = e;
+                }
+            }
+        }
+    } finally {
+        _flushing = false;
     }
-    for (const fn of effects) {
-        if (!fn._disposed) fn();
-    }
+    if (error) throw error;
 }
 
 
@@ -347,19 +434,38 @@ class Scope {
         this.children = [];
         this._disposers = [];
         this._disposed = false;
-        if (parent) parent.children.push(this);
+        if (parent) {
+            if (parent._disposed) {
+                _warn('E005', {
+                    what: 'Scope created inside an already disposed scope.',
+                    why: 'The parent will never dispose it — its effects and listeners leak.',
+                    fix: 'Create scopes only while the parent is alive, or dispose this one manually.',
+                });
+                this.parent = null;
+            } else {
+                parent.children.push(this);
+            }
+        }
     }
 
     /** Выполнить функцию в контексте этого scope */
     run(fn) {
+        if (this._disposed) {
+            _warn('E005', {
+                what: 'scope.run() called on a disposed scope.',
+                why: 'Effects created here are disposed immediately and never run again.',
+                fix: 'Do not reuse a disposed scope — create a new one.',
+            });
+        }
         const prev = _currentScope;
         _currentScope = this;
         try { return fn(); }
         finally { _currentScope = prev; }
     }
 
-    /** Зарегистрировать cleanup-функцию */
+    /** Зарегистрировать cleanup-функцию (на уничтоженном scope — вызывается сразу) */
     onDispose(fn) {
+        if (this._disposed) { fn(); return; }
         this._disposers.push(fn);
     }
 

@@ -37,7 +37,9 @@ export interface SignalOptions<T> {
 export function signal<T>(initial: T, nameOrOpts?: string | SignalOptions<T>): Signal<T>;
 export function computed<T>(fn: () => T, nameOrOpts?: string | SignalOptions<T>): ReadonlySignal<T>;
 export function effect(fn: () => void | (() => void), name?: string): () => void;
-export function batch(fn: () => void): void;
+export function batch<T>(fn: () => T): T;
+/** Выполнить fn без подписки на прочитанные сигналы */
+export function untrack<T>(fn: () => T): T;
 export function isSignal(v: unknown): v is Signal<unknown>;
 
 // ── Reactive Object ────────────────────────────────────────────
@@ -109,10 +111,15 @@ export function bind(el: HTMLInputElement | HTMLSelectElement | HTMLTextAreaElem
  * @param falseBranch — content factory or element for falsy condition (optional)
  * @returns Comment anchor node (insert this into your DOM)
  */
+export interface ShowOptions {
+    /** Ветки создаются один раз и прячутся через display:none (аналог v-show): DOM и состояние сохраняются */
+    keep?: boolean;
+}
 export function show(
     condition: Signal<boolean> | (() => boolean) | boolean,
     trueBranch: (() => DocumentFragment | Element) | DocumentFragment | Element,
-    falseBranch?: (() => DocumentFragment | Element) | DocumentFragment | Element
+    falseBranch?: (() => DocumentFragment | Element) | DocumentFragment | Element | null,
+    opts?: ShowOptions
 ): Comment;
 
 export interface ListOptions {
@@ -120,8 +127,9 @@ export interface ListOptions {
     exit?: (el: Element) => Promise<void> | void;
 }
 export function list<T>(
-    items: Signal<T[]> | ReadonlySignal<T[]>,
-    renderFn: (item: T, index: number) => Element | DocumentFragment,
+    items: Signal<T[]> | ReadonlySignal<T[]> | (() => T[]) | T[],
+    /** index — сигнал: актуален после сортировки/удаления. Строка перерисовывается, если объект под ключом заменён */
+    renderFn: (item: T, index: ReadonlySignal<number>) => Element | DocumentFragment,
     key?: string | ((item: T) => string | number),
     opts?: ListOptions
 ): Comment;
@@ -564,6 +572,7 @@ declare const Aegis: {
     computed: typeof computed;
     effect: typeof effect;
     batch: typeof batch;
+    untrack: typeof untrack;
     isSignal: typeof isSignal;
     reactive: typeof reactive;
     isReactive: typeof isReactive;

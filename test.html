@@ -404,6 +404,230 @@
         sandbox.innerHTML = '';
     })();
 
+    section('list() — замена объекта, index-сигнал, дубликаты ключей');
+
+    await (async () => {
+        const container = document.createElement('div');
+        sandbox.appendChild(container);
+        const items = signal([
+            { id: 1, name: 'Alpha' },
+            { id: 2, name: 'Beta' },
+            { id: 3, name: 'Gamma' },
+        ]);
+        const scope = createScope();
+        scope.run(() => {
+            const anchor = list(items, (item, index) => {
+                const li = document.createElement('div');
+                li.dataset.id = item.id;
+                text(li, () => index.value + ':' + item.name);
+                return li;
+            }, 'id');
+            container.appendChild(anchor);
+        });
+        await wait(10);
+        assert('list() index-сигнал: нумерация при создании', container.textContent === '0:Alpha1:Beta2:Gamma');
+
+        // Иммутабельная замена объекта с тем же ключом
+        const firstNode = container.querySelector('[data-id="1"]');
+        items.value = items.value.map(x => x.id === 2 ? { ...x, name: 'Beta2' } : x);
+        await wait(10);
+        assert('list() замена объекта под ключом перерисовывает строку', container.textContent.includes('1:Beta2'));
+        assert('list() нетронутые строки сохраняют DOM-узел', container.querySelector('[data-id="1"]') === firstNode);
+
+        // Удаление сверху → индексы сдвигаются
+        items.value = items.value.filter(x => x.id !== 1);
+        await wait(10);
+        assert('list() index-сигнал после удаления', container.textContent === '0:Beta21:Gamma');
+
+        // Reverse
+        items.value = [...items.value].reverse();
+        await wait(10);
+        assert('list() index-сигнал после сортировки', container.textContent === '0:Gamma1:Beta2');
+
+        // Дубликаты и отсутствующие ключи не теряют строки
+        items.value = [{ id: 7, name: 'x' }, { id: 7, name: 'y' }, { name: 'nokey' }];
+        await wait(10);
+        assert('list() дубликаты ключей рендерят все строки', container.querySelectorAll('div').length === 3);
+
+        scope.dispose();
+        assert('list() dispose scope убирает строки', container.querySelectorAll('div').length === 0);
+        sandbox.innerHTML = '';
+    })();
+
+    section('list() внутри html``');
+
+    await (async () => {
+        const items = signal([{ id: 1, name: 'A' }, { id: 2, name: 'B' }]);
+        const scope = createScope();
+        const frag = scope.run(() => html`<ul>${list(items, item => html`<li>${item.name}</li>`)}</ul>`);
+        sandbox.appendChild(frag);
+        await wait(10);
+        assert('html: list()-якорь монтируется, а не превращается в текст', sandbox.querySelectorAll('li').length === 2 && !sandbox.textContent.includes('object Comment'));
+        items.value = [...items.value, { id: 3, name: 'C' }];
+        await wait(10);
+        assert('html: list() реактивен внутри шаблона', sandbox.querySelectorAll('li').length === 3);
+        scope.dispose();
+        sandbox.innerHTML = '';
+    })();
+
+    section('show() — keep: true (аналог v-show)');
+
+    await (async () => {
+        const container = document.createElement('div');
+        sandbox.appendChild(container);
+        const visible = signal(true);
+        let builds = 0;
+        const scope = createScope();
+        scope.run(() => {
+            const anchor = show(visible, () => {
+                builds++;
+                const input = document.createElement('input');
+                input.className = 'kept';
+                return input;
+            }, () => { const s = document.createElement('span'); s.textContent = 'NO'; return s; }, { keep: true });
+            container.appendChild(anchor);
+        });
+        await wait(10);
+        const input = container.querySelector('input.kept');
+        input.value = 'typed';
+        visible.value = false;
+        await wait(10);
+        assert('show keep: ветка скрыта, но остаётся в DOM', container.querySelector('input.kept') === input && input.offsetParent === null);
+        assert('show keep: false-ветка показана', container.textContent.includes('NO'));
+        visible.value = true;
+        await wait(10);
+        assert('show keep: тот же узел, состояние сохранено', container.querySelector('input.kept') === input && input.value === 'typed' && builds === 1);
+        scope.dispose();
+        assert('show keep: dispose убирает обе ветки', container.querySelector('input.kept') === null && !container.textContent.includes('NO'));
+        sandbox.innerHTML = '';
+    })();
+
+    section('reactive() — массивы и ключи');
+
+    (() => {
+        const state = reactive({ items: [{ id: 1, done: false }], meta: {} });
+        let len = 0, lenRuns = 0;
+        effect(() => { len = state.items.length; lenRuns++; });
+        state.items.push({ id: 2, done: false });
+        assert('reactive: push уведомляет', len === 2 && lenRuns === 2);
+
+        let doneSeen = null;
+        effect(() => { doneSeen = state.items[0].done; });
+        state.items[0].done = true;
+        assert('reactive: мутация элемента массива уведомляет', doneSeen === true);
+        assert('reactive: элемент массива — стабильный proxy', state.items[0] === state.items[0]);
+
+        let count = 0;
+        effect(() => { count = state.items.filter(i => i.done).length; });
+        state.items[1].done = true;
+        assert('reactive: filter реактивен', count === 2);
+        state.items.splice(0, 1);
+        assert('reactive: splice уведомляет', len === 1 && count === 1);
+        state.items[0] = { id: 3, done: false };
+        assert('reactive: запись по индексу уведомляет', count === 0);
+
+        let keys = [];
+        effect(() => { keys = Object.keys(state.meta); });
+        state.meta.a = 1;
+        assert('reactive: добавление ключа уведомляет ownKeys', keys.join() === 'a');
+        delete state.meta.a;
+        assert('reactive: удаление ключа уведомляет', keys.length === 0);
+        let hasX = null;
+        effect(() => { hasX = 'x' in state.meta; });
+        state.meta.x = 1;
+        assert('reactive: `in` реактивен', hasX === true);
+
+        assert('reactive: toJSON', JSON.stringify(state) === '{"items":[{"id":3,"done":false}],"meta":{"x":1}}');
+        assert('reactive: String(proxy) не падает', typeof String(state) === 'string');
+        assert('reactive: один объект — один proxy', reactive(state.items.$raw) === state.items);
+        assert('reactive: массив — isReactive', isReactive(state.items) && Array.isArray(state.items));
+    })();
+
+    section('reactive() + list()');
+
+    await (async () => {
+        const container = document.createElement('div');
+        sandbox.appendChild(container);
+        const state = reactive({ rows: [{ id: 1, name: 'a' }, { id: 2, name: 'b' }] });
+        const scope = createScope();
+        scope.run(() => {
+            container.appendChild(list(() => state.rows, (row) => {
+                const d = document.createElement('div');
+                text(d, () => row.name);
+                return d;
+            }));
+        });
+        await wait(10);
+        assert('reactive+list: рендер', container.textContent === 'ab');
+        state.rows.push({ id: 3, name: 'c' });
+        await wait(10);
+        assert('reactive+list: push добавляет строку', container.textContent === 'abc');
+        state.rows[0].name = 'A';
+        await wait(10);
+        assert('reactive+list: мутация элемента обновляет ячейку', container.textContent === 'Abc');
+        state.rows.reverse();
+        await wait(10);
+        assert('reactive+list: reverse переставляет', container.textContent === 'cbA');
+        scope.dispose();
+        sandbox.innerHTML = '';
+    })();
+
+    section('store() — batched actions');
+
+    (() => {
+        const s = store({
+            a: 1, b: 2,
+            get sum() { return this.a + this.b; },
+            bump() { this.a++; this.b++; },
+        });
+        let runs = 0, sum = 0;
+        effect(() => { sum = s.sum; runs++; });
+        s.bump();
+        assert('store: action — один запуск effect', runs === 2 && sum === 5);
+        assert('store: стабильная ссылка на метод', s.bump === s.bump);
+        assert('store: String(store) не падает', typeof String(s) === 'string');
+    })();
+
+    section('html`` — onclick=${fn}');
+
+    (() => {
+        let clicks = 0;
+        const frag = html`<button class="ev" onclick=${() => clicks++}>go</button>`;
+        sandbox.appendChild(frag);
+        const btn = sandbox.querySelector('button.ev');
+        assert('html: onclick не вызывается при рендере', clicks === 0);
+        assert('html: onclick не становится атрибутом', !btn.hasAttribute('onclick'));
+        btn.click();
+        assert('html: onclick вешает обработчик', clicks === 1);
+        sandbox.innerHTML = '';
+    })();
+
+    section('router() — scope на маршрут');
+
+    await (async () => {
+        const scope = createScope();
+        let disposedA = 0, effectRunsA = 0;
+        const tick = signal(0);
+        let r;
+        scope.run(() => {
+            r = router({
+                '/a': () => { onDispose(() => disposedA++); effect(() => { tick.value; effectRunsA++; }); },
+                '/b': () => {},
+                '*': () => {},
+            });
+        });
+        r.navigate('/a', { replace: true });
+        await wait(30);
+        tick.value++;
+        assert('router: effect маршрута работает', effectRunsA === 2);
+        r.navigate('/b', { replace: true });
+        await wait(30);
+        tick.value++;
+        assert('router: scope предыдущего маршрута уничтожен', disposedA === 1 && effectRunsA === 2);
+        scope.dispose();
+        history.replaceState(null, '', '/test.html');
+    })();
+
     section('component() & destroy()');
 
     (() => {
