@@ -628,6 +628,222 @@
         history.replaceState(null, '', '/test.html');
     })();
 
+    section('html`` — парсер (конечный автомат)');
+
+    (() => {
+        const url = signal('/a');
+        const f1 = html`<a title="x > y" href=${url}>${'t'}</a>`;
+        const a = f1.querySelector('a');
+        assert('html: > внутри значения атрибута не ломает привязки', a.getAttribute('href') === '/a' && a.textContent === 't' && a.title === 'x > y');
+        url.value = '/b';
+        assert('html: реактивный href', a.getAttribute('href') === '/b');
+
+        const cls = signal('on');
+        const f2 = html`<div class="base ${cls} ${() => 'x'}"></div>`;
+        const d = f2.querySelector('div');
+        assert('html: несколько значений в одном атрибуте', d.className === 'base on x');
+        cls.value = 'off';
+        assert('html: составной атрибут реактивен', d.className === 'base off x');
+
+        const r = ref();
+        const f3 = html`<input ${r} type="text">`;
+        assert('html: ref внутри тега', r.el === f3.querySelector('input'));
+        let cbEl = null;
+        html`<span ${el => { cbEl = el; }}></span>`;
+        assert('html: callback-ref', cbEl instanceof HTMLSpanElement);
+
+        const f4 = html`<p>a < b and ${'x'}</p><p>${5}</p>`;
+        assert('html: < в тексте', f4.textContent === 'a < b and x5');
+
+        const f5 = html`<!-- ${'ignored'} --><b>${'ok'}</b>`;
+        assert('html: интерполяция в комментарии пропускается, остальные на месте', f5.querySelector('b').textContent === 'ok');
+
+        const f6 = html`<input disabled=${false} hidden=${true} value=${null}>`;
+        const i6 = f6.querySelector('input');
+        assert('html: булевы атрибуты', !i6.hasAttribute('disabled') && i6.hasAttribute('hidden') && !i6.hasAttribute('value'));
+
+        const f7 = html`<div data-x=${'unq'} class=${'c'}></div>`;
+        assert('html: значения без кавычек', f7.querySelector('div').dataset.x === 'unq' && f7.querySelector('div').className === 'c');
+
+        const f8 = html`<style>p { color: red }</style><p class=${'q'}>${'z'}</p>`;
+        assert('html: после <style> разбор продолжается', f8.querySelector('p.q')?.textContent === 'z');
+
+        let clicks = 0;
+        const f9 = html`<button @click=${() => clicks++} :title=${() => 'T'}>b</button>`;
+        const b9 = f9.querySelector('button');
+        b9.click();
+        assert('html: @event и :bind работают', clicks === 1 && b9.title === 'T');
+    })();
+
+    section('cachedResource() — реактивный URL');
+
+    await (async () => {
+        const page = signal(1);
+        const calls = [];
+        const scope = createScope();
+        let r;
+        scope.run(() => {
+            r = cachedResource(() => `/test/page/${page.value}`, {
+                staleTime: 60000,
+                fetcher: async (url) => { calls.push(url); return { url }; },
+            });
+        });
+        await wait(10);
+        assert('cachedResource: первая страница', r.data.value?.url === '/test/page/1');
+        page.value = 2;
+        await wait(10);
+        assert('cachedResource: смена URL → свежие данные, а не кэш первой', r.data.value?.url === '/test/page/2' && calls.length === 2);
+        page.value = 1;
+        await wait(10);
+        assert('cachedResource: возврат к странице 1 из кэша без запроса', r.data.value?.url === '/test/page/1' && calls.length === 2);
+        invalidate('/test/page/1');
+        await wait(10);
+        assert('cachedResource: invalidate перезапрашивает активный ресурс', calls.length === 3);
+        scope.dispose();
+    })();
+
+    section('roving() — Home/End');
+
+    (() => {
+        const box = document.createElement('div');
+        box.innerHTML = '<button>1</button><button>2</button><button>3</button>';
+        document.body.appendChild(box);
+        const rv = roving(box, { selector: 'button' });
+        box.children[0].focus();
+        let threw = false;
+        try { box.dispatchEvent(new KeyboardEvent('keydown', { key: 'End', bubbles: true })); } catch (e) { threw = true; }
+        assert('roving: End не падает и фокусирует последний', !threw && document.activeElement === box.children[2]);
+        box.dispatchEvent(new KeyboardEvent('keydown', { key: 'Home', bubbles: true }));
+        assert('roving: Home → первый', document.activeElement === box.children[0]);
+        rv.dispose();
+        box.remove();
+    })();
+
+    section('command() — Enter на кнопке');
+
+    (() => {
+        const root = document.createElement('div');
+        root.innerHTML = '<button data-command="hit">x</button><div tabindex="0" data-command="hit2">y</div>';
+        sandbox.appendChild(root);
+        let hits = 0, hits2 = 0;
+        const c = command(root, { hit: () => hits++, hit2: () => hits2++ });
+        const btn = root.querySelector('button');
+        btn.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+        btn.click(); // браузер сам генерирует click на Enter
+        assert('command: Enter на <button> не дублирует click', hits === 1);
+        root.querySelector('div').dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+        assert('command: Enter на не-кнопке выполняет команду', hits2 === 1);
+        c.dispose();
+        sandbox.innerHTML = '';
+    })();
+
+    section('defineElement() — перемещение, Boolean, pre-upgrade');
+
+    await (async () => {
+        let setups = 0;
+        defineElement('x-move-test', {
+            props: { n: { type: Number, default: 0 }, on: { type: Boolean } },
+            setup(el, props) { setups++; return () => html`<i>${() => props.n.value}</i>`; },
+        });
+        const host = document.createElement('div');
+        host.innerHTML = '<div id="p1"></div><div id="p2"></div>';
+        sandbox.appendChild(host);
+        const el = document.createElement('x-move-test');
+        host.querySelector('#p1').appendChild(el);
+        await wait(0);
+        assert('defineElement: setup выполнен', setups === 1);
+        host.querySelector('#p2').appendChild(el);
+        await wait(10);
+        assert('defineElement: перемещение не перезапускает setup', setups === 1 && !!el.querySelector('i'));
+        el.setAttribute('n', '7');
+        assert('defineElement: атрибут → prop', el.n === 7 && el.querySelector('i').textContent === '7');
+        assert('defineElement: Boolean без атрибута = false', el.on === false);
+        el.setAttribute('on', '');
+        assert('defineElement: Boolean с атрибутом = true', el.on === true);
+        el.remove();
+        await wait(10);
+        host.querySelector('#p1').appendChild(el);
+        await wait(0);
+        assert('defineElement: повторное подключение после удаления заново делает setup', setups === 2 && el.querySelectorAll('i').length === 1);
+
+        const raw = document.createElement('x-pre-test');
+        raw.count = 5;
+        sandbox.appendChild(raw);
+        defineElement('x-pre-test', { props: { count: { type: Number, default: 0 } }, setup() {} });
+        await wait(0);
+        assert('defineElement: свойство до upgrade сохраняется', raw.count === 5);
+        sandbox.innerHTML = '';
+    })();
+
+    section('virtualScroll() — keyed reuse');
+
+    await (async () => {
+        const items = signal([{ id: 1, n: 'a' }, { id: 2, n: 'b' }, { id: 3, n: 'c' }]);
+        let renders = 0, disposed = 0;
+        const scope = createScope();
+        let vs;
+        scope.run(() => {
+            vs = virtualScroll(sandbox, items, {
+                chunkSize: 2,
+                renderItem: (it) => {
+                    renders++;
+                    onDispose(() => disposed++);
+                    const d = document.createElement('div');
+                    d.textContent = it.n;
+                    return d;
+                },
+            });
+        });
+        await wait(0);
+        const first = vs.container.querySelector('div div');
+        assert('virtualScroll: рендер по чанкам', vs.container.textContent === 'abc' && renders === 3 && vs.container.children.length === 2);
+        items.value = [...items.value, { id: 4, n: 'd' }];
+        await wait(0);
+        assert('virtualScroll: добавление рендерит только новую строку', renders === 4 && vs.container.textContent === 'abcd');
+        assert('virtualScroll: существующие узлы переиспользуются', vs.container.querySelector('div div') === first);
+        items.value = items.value.filter(i => i.id !== 1);
+        await wait(0);
+        assert('virtualScroll: удаление уничтожает scope строки', disposed === 1 && vs.container.textContent === 'bcd' && renders === 4);
+        scope.dispose();
+        assert('virtualScroll: dispose убирает контейнер и строки', !sandbox.contains(vs.container) && disposed === 4);
+    })();
+
+    section('anchor() — cleanup в scope');
+
+    (() => {
+        const btn = document.createElement('button');
+        const tip = document.createElement('div');
+        sandbox.appendChild(btn);
+        sandbox.appendChild(tip);
+        const scope = createScope();
+        scope.run(() => anchor(tip, btn, { placement: 'top' }));
+        assert('anchor: позиционирует', tip.style.position === 'fixed');
+        scope.dispose();
+        assert('anchor: dispose scope снимает позиционирование', tip.style.position === '');
+        sandbox.innerHTML = '';
+    })();
+
+    section('wireForm() — слушатели снимаются со scope');
+
+    (() => {
+        const form = document.createElement('form');
+        form.innerHTML = '<input name="q" value="a">';
+        sandbox.appendChild(form);
+        const scope = createScope();
+        let f;
+        scope.run(() => { f = wireForm(form); });
+        const input = form.querySelector('input');
+        input.value = 'b';
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+        assert('wireForm: input → signal', f.fields.q.value === 'b');
+        scope.dispose();
+        input.value = 'c';
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+        assert('wireForm: после dispose слушатели сняты', f.fields.q.value === 'b');
+        assert('wireForm: созданный error-элемент удалён', !form.querySelector('.aegis-field-error'));
+        sandbox.innerHTML = '';
+    })();
+
     section('component() & destroy()');
 
     (() => {

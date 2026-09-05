@@ -258,7 +258,6 @@ export function cachedResource<T = unknown>(source: string | (() => string), opt
     immediate?: boolean;
     staleTime?: number;
     cacheTime?: number;
-    dedupeWindow?: number;
 }): CachedResourceResult<T>;
 
 export function invalidate(keyOrPredicate: string | ((key: string) => boolean)): void;
@@ -500,10 +499,12 @@ export function command(root: Element, commands?: Record<string, (trigger: Eleme
 
 // ── Virtual Scroll ─────────────────────────────────────────────
 
-export function virtualScroll<T>(parent: Element, items: T[] | Signal<T[]>, opts: {
+export function virtualScroll<T>(parent: Element, items: T[] | Signal<T[]> | ReadonlySignal<T[]> | (() => T[]), opts: {
     itemHeight?: number;
     chunkSize?: number;
-    renderItem: (item: T) => Element | DocumentFragment;
+    /** ключ строки (по умолчанию "id"); строки keyed, со своим scope */
+    key?: string | ((item: T, index: number) => string | number);
+    renderItem: (item: T, index: number) => Element | DocumentFragment;
 }): { container: HTMLElement; refresh(): void; dispose(): void };
 
 // ── Offline Resource ───────────────────────────────────────────
@@ -525,7 +526,6 @@ export function offlineResource<T = unknown>(source: string | (() => string), op
     staleTime?: number;
     transform?: (data: unknown) => T;
     fetcher?: (url: string, opts?: any) => Promise<unknown>;
-    onConflict?: 'lww' | 'merge' | ((local: T, remote: T) => T);
     syncTag?: string;
 }): OfflineResourceResult<T>;
 
