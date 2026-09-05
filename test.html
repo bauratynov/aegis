@@ -2262,6 +2262,76 @@
         vhost.remove();
     })();
 
+    section('💎 #110 — reactive(): ленивые сигналы, живой $raw, инструментированные массивы');
+
+    await (async () => {
+        const raw = { rows: [{ id: 1, done: false }, { id: 2, done: true }, { id: 3, done: false }], n: 1 };
+        const st = reactive(raw);
+        st.n = 2;
+        assert('reactive: $raw живой — запись через proxy видна в исходном объекте', raw.n === 2 && st.$raw === raw);
+        st.rows[0].done = true;
+        assert('reactive: запись во вложенный элемент массива идёт в сырой объект', raw.rows[0].done === true);
+
+        const scope = createScope();
+        let doneCount = 0, runs = 0;
+        scope.run(() => effect(() => { runs++; doneCount = st.rows.filter(r => r.done).length; }));
+        assert('reactive: filter под effect', doneCount === 2 && runs === 1);
+        st.rows[2].done = true;
+        assert('reactive: мутация элемента через proxy перезапускает filter-эффект', doneCount === 3 && runs === 2);
+        st.rows.push({ id: 4, done: false });
+        assert('reactive: push перезапускает', runs === 3 && doneCount === 3);
+
+        const found = st.rows.find(r => r.id === 4);
+        assert('reactive: find() возвращает реактивный элемент', isReactive(found));
+        found.done = true;
+        assert('reactive: мутация найденного элемента реактивна', doneCount === 4);
+        assert('reactive: includes() принимает proxy элемента', st.rows.includes(found) && st.rows.indexOf(found) === 3);
+        const sorted = st.rows.toSorted((a, b) => b.id - a.id);
+        assert('reactive: toSorted() — реактивный массив над сырыми элементами', isReactive(sorted) && sorted[0].id === 4 && !raw.rows.includes(sorted) );
+        let seen = 0;
+        for (const r of st.rows) if (isReactive(r)) seen++;
+        assert('reactive: for..of отдаёт реактивные элементы', seen === 4);
+        assert('reactive: map() — значения пользователя как есть', st.rows.map(r => r.id).join(',') === '1,2,3,4');
+        assert('reactive: toJSON снимает proxy', JSON.stringify(st.rows[0]) === '{"id":1,"done":true}');
+        scope.dispose();
+
+        // вложенный объект: initial для $reset захватывается перед первой записью
+        const cfg = reactive({ ui: { theme: 'light', size: 12 } });
+        cfg.ui.theme = 'dark'; cfg.ui.size = 14;
+        cfg.ui.$reset();
+        assert('reactive: $reset вложенного объекта — к состоянию до первой записи', cfg.ui.theme === 'light' && cfg.ui.size === 12);
+
+        // геттеры и методы в строках массива
+        const model = reactive({ items: [{ price: 2, qty: 3, get total() { return this.price * this.qty; }, inc() { this.qty++; } }] });
+        const sc2 = createScope();
+        let total = 0;
+        sc2.run(() => effect(() => { total = model.items[0].total; }));
+        model.items[0].inc();
+        assert('reactive: getter → computed, метод → action на элементе массива', total === 8);
+        sc2.dispose();
+
+        // ключи: добавление/удаление, Object.keys без методов
+        const o = reactive({ a: 1, fn() {} });
+        const sc3 = createScope();
+        let keys = '';
+        sc3.run(() => effect(() => { keys = Object.keys(o).join(','); }));
+        o.b = 2;
+        assert('reactive: новый ключ реактивен, методы не в Object.keys', keys === 'a,b');
+        delete o.a;
+        assert('reactive: delete реактивен', keys === 'b' && !('a' in o.$raw));
+        sc3.dispose();
+
+        // масштаб: 100k строк, filter в effect — быстро
+        const big = reactive({ rows: Array.from({ length: 100000 }, (_, i) => ({ id: i, done: i % 3 === 0 })) });
+        const sc4 = createScope();
+        let cnt = 0;
+        const t0 = performance.now();
+        sc4.run(() => effect(() => { cnt = big.rows.filter(r => r.done).length; }));
+        const dt = performance.now() - t0;
+        assert('reactive: filter 100k строк под effect < 300 мс', cnt === 33334 && dt < 300);
+        sc4.dispose();
+    })();
+
     section('component() & destroy()');
 
     (() => {

@@ -7,7 +7,7 @@
 <script type="module">
 // Бенчмарк в духе js-framework-benchmark: create/update/swap/select/remove/clear + ядро.
 // Запуск: статический сервер + Chrome (headless без --virtual-time-budget), результат — в <pre id="out"> и window.__bench.
-import { signal, list, html, createScope, batch, effect, computed, selector, defaults, flushSync } from './aegis.js';
+import { signal, list, html, createScope, batch, effect, computed, selector, defaults, flushSync, reactive } from './aegis.js';
 defaults.motion = false;
 const out = {};
 const N = 1000, ROUNDS = 5;
@@ -69,6 +69,22 @@ fanScope.dispose();
 const a = signal(0), b = computed(() => a.value + 1), c = computed(() => a.value * 2), d = computed(() => b.value + c.value);
 t('diamond × 100k', () => { for (let i = 0; i < 100000; i++) { a.value = i; d.value; } });
 t('batch 1000 writes × 100', () => { const sigs = Array.from({ length: 1000 }, () => signal(0)); const sc = createScope(); sc.run(() => effect(() => { for (const s of sigs) s.value; })); for (let r = 0; r < 100; r++) batch(() => { for (const s of sigs) s.value = r; }); sc.dispose(); });
+
+// ---- reactive() arrays: 100k rows, filter inside effect, heap after wrap
+{
+    const mk = (n) => Array.from({ length: n }, (_, i) => ({ id: i, done: i % 3 === 0, label: 'row ' + i }));
+    const heap0 = performance.memory ? performance.memory.usedJSHeapSize : 0;
+    const state = reactive({ rows: mk(100000) });
+    const rs = createScope();
+    let n = 0;
+    t('reactive filter 100k (effect)', () => { const sc = createScope(); sc.run(() => effect(() => { n = state.rows.filter(r => r.done).length; })); sc.dispose(); });
+    t('reactive for..of 100k', () => { let c = 0; for (const r of state.rows) if (r.done) c++; });
+    rs.run(() => effect(() => { n = state.rows.filter(r => r.done).length; }));
+    t('reactive push ×20 (filter effect re-runs each)', () => { for (let i = 0; i < 20; i++) state.rows.push({ id: -i, done: true, label: 'x' }); });
+    out['reactive heap delta MB'] = performance.memory ? +((performance.memory.usedJSHeapSize - heap0) / 1048576).toFixed(1) : 'n/a';
+    out['reactive done count'] = n;
+    rs.dispose();
+}
 
 window.__bench = out;
 document.getElementById('out').textContent = JSON.stringify(out, null, 2);
