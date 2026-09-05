@@ -7,7 +7,23 @@
  *   await waitFor(() => t.text().includes('6'));
  *   t.unmount();
  */
-import { mount, destroy, settled, reset, configure, defaults, flushSync, batch, createScope } from './aegis.js';
+import { mount, destroy, settled, reset, configure, defaults, flushSync, batch, createScope, useClock, cache } from './aegis.js';
+
+/**
+ * Детерминированные часы кэша: staleTime, cacheTime и GC идут по ним, Date.now не трогается.
+ *   const clock = fakeClock(); await clock.advance(31_000); … clock.restore();
+ */
+export function fakeClock(start = Date.now()) {
+    let t = start;
+    const restore = useClock(() => t);
+    return {
+        now: () => t,
+        /** сдвинуть время, собрать мусор по новым часам и дождаться эффектов/ресурсов */
+        async advance(ms) { t += ms; cache.gc(t); await flushAll(); },
+        set(ms) { t = ms; cache.gc(t); },
+        restore,
+    };
+}
 
 const _mounted = new Set();
 

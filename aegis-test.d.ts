@@ -58,6 +58,9 @@ export interface MockFetch {
 /** Route table → fake network for request()/api/resource(): { 'GET /api/users/:id': (body, { params }) => … , '*': () => ({ status: 404 }) } */
 export function mockFetch(routes?: Record<string, MockRouteHandler>, opts?: { latency?: number }): MockFetch;
 
+/** Deterministic cache clock: staleTime, cacheTime and GC follow it, Date.now is untouched */
+export function fakeClock(start?: number): { now(): number; /** advance, garbage-collect by the new time, drain pending work */ advance(ms: number): Promise<void>; set(ms: number): void; restore(): void };
+
 /** Unmount everything rendered, restore fetch, reset engine singletons; call in afterEach */
 export function cleanup(): void;
 /** Run fn in a throwaway scope (signals/effects without a component) and dispose it afterwards */

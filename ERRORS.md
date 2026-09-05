@@ -49,4 +49,6 @@ Every warning has a code, and each message is printed once per place. Dev mode i
 | **E039** | `staleTime` is larger than `cacheTime` — the entry is collected while still fresh. | Set `cacheTime >= staleTime` (or `Infinity` for reference data). |
 | **E040** | `invalidate(key)` matched no cache entry (query order, trailing slash, typo). | Use the suggested key, the prefix form `invalidate('/api/users*')`, an array key or a predicate. |
 | **E041** | `revalidateOn` refetched 8+ entries at once on focus/reconnect (thundering herd). | Raise `staleTime` on slow-changing data or set `revalidateOn: []` where mutations already invalidate. |
+| **E042** | 90 %+ of revalidations returned identical data — `staleTime` is far below the observed change rate. | Use the suggested `staleTime` from the warning / `cache.explain(key).suggestedStaleTime`, or `staleTime: 'auto'`. |
+| **E043** | Fewer than 20 % of prefetched responses were ever used (`cache.stats().prefetch`). | Prefetch on `tap` instead of hover, raise the hover delay, or use a predictor. |
 | **S001** | Attempt to set `__proto__` / `prototype` / `constructor` on a reactive object — blocked. | Use a regular property name. |

@@ -42,7 +42,7 @@
         defineElement, anchor, router, command, virtualScroll,
         offlineResource,
         lazy, nextTick, i18n, uncloak, injectStyles,
-        VERSION, mount } from './aegis.js';
+        VERSION, mount, cache } from './aegis.js';
 
     const results = document.getElementById('results');
     const sandbox = document.getElementById('sandbox');
@@ -2863,6 +2863,92 @@
         off();
         dev.resetWarnings();
         reset();
+    })();
+
+    section('💎 кэш фаза 2 — cache API, explain, fakeClock, статистика, prefetch hit/waste');
+
+    await (async () => {
+        reset();
+        const T = await import('./aegis-test.js');
+        const seen = [];
+        const off = onWarn(w => seen.push(w));
+        dev.resetWarnings();
+        const events = [];
+        const offCache = cache.on((k, ev) => events.push(k + ':' + ev.reason + '/' + ev.result));
+        let calls = 0;
+        const fetcher = async (u) => { calls++; return { u, calls }; };
+
+        // get/set/has/keys с нормализацией
+        cache.set({ b: 1, a: 2 }, { hello: 1 });
+        assert('cache.get/set: объектный ключ нормализуется', cache.get({ a: 2, b: 1 })?.hello === 1 && cache.has({ a: 2, b: 1 }));
+        cache.set(['users', 7], { id: 7 });
+        assert('cache.keys: префикс-массив', cache.keys(['users']).length === 1 && cache.get(['users', 7]).id === 7);
+
+        // explain: fresh → stale → inflight с фейковыми часами
+        const clock = T.fakeClock(1_000_000);
+        const sc = createScope();
+        let r;
+        sc.run(() => { r = resource('/t2/a', { cache: true, staleTime: 30_000, cacheTime: 60_000, fetcher }); });
+        await settled();
+        let x = cache.explain('/t2/a');
+        assert('explain: fresh после запроса, why объясняет staleTime', x.state === 'fresh' && /fresh for/.test(x.why) && x.subscribers === 1 && x.history.some(h => h.reason === 'mount' && h.result === 'fetch' && h.status === 'ok'));
+        sc.run(() => { resource('/t2/a', { cache: true, staleTime: 30_000, cacheTime: 60_000, fetcher }); });
+        await settled();
+        assert('explain/history: второй подписчик в пределах staleTime → fresh без запроса', calls === 1 && events.includes('/t2/a:mount/fresh'));
+        await clock.advance(31_000);
+        x = cache.explain('/t2/a');
+        assert('explain: после staleTime — stale (по часам кэша, не Date.now)', x.state === 'stale' && x.age >= 31_000);
+        sc.dispose();
+        assert('explain: без подписчиков — gcIn по cacheTime', cache.explain('/t2/a').subscribers === 0 && cache.explain('/t2/a').gcIn > 0);
+        await clock.advance(60_001);
+        assert('cache.gc(now): запись собрана по часам', !cache.has('/t2/a') && cache.explain('/t2/a').state === 'absent');
+        clock.restore();
+
+        // subscribe держит запись, remove чистит
+        let got = null;
+        const unsub = cache.subscribe('/t2/sub', (v) => { got = v; });
+        cache.set('/t2/sub', { n: 1 });
+        assert('cache.subscribe: получает данные', got && got.n === 1 && cache.explain('/t2/sub').subscribers === 1);
+        unsub();
+        assert('cache.remove: возвращает число удалённых', cache.remove('/t2/*') >= 1 && !cache.has('/t2/sub'));
+
+        // μ̂ и E042: 12 одинаковых ответов при staleTime 0
+        dev.resetWarnings();
+        const sc2 = createScope();
+        let same;
+        sc2.run(() => { same = resource('/t2/same', { cache: true, staleTime: 0, fetcher: async () => ({ v: 1 }) }); });
+        await settled();
+        for (let i = 0; i < 11; i++) { await same.refresh(); }
+        const ex = cache.explain('/t2/same');
+        assert('stats: unchanged считается, suggestedStaleTime есть', ex.fetches === 12 && ex.unchanged === 11 && ex.suggestedStaleTime > 0);
+        assert('E042: staleTime слишком мал для неизменных данных', seen.some(w => w.code === 'E042'));
+        sc2.dispose();
+
+        // prefetch hit / waste
+        reset(); events.length = 0;
+        const clock2 = T.fakeClock(2_000_000);
+        await prefetch('/t2/pf-hit', { fetcher, kind: 'hover', cacheTime: 100 });
+        const sc3 = createScope();
+        sc3.run(() => { resource('/t2/pf-hit', { cache: true, fetcher }); });
+        await prefetch('/t2/pf-waste', { fetcher, kind: 'hover', cacheTime: 100 });
+        await clock2.advance(200);
+        const st = cache.stats();
+        assert('prefetch: hit и waste учтены', st.prefetch.used === 1 && st.prefetch.wasted === 1 && st.prefetch.byKind.hover && stats().prefetch.used === 1);
+        sc3.dispose();
+        clock2.restore();
+        assert('dev.cache(): снимок как массив', Array.isArray(dev.cache()) && dev.cache().every(e => 'state' in e && 'size' in e));
+
+        // панель: вкладка cache показывает записи
+        const panel = await dev.panel();
+        const tabBtn = [...panel.shadow.querySelectorAll('.tabs button')].find(b => /cache/.test(b.textContent));
+        tabBtn.click();
+        await wait(0);
+        const rowsN = panel.shadow.querySelectorAll('.ctable tbody tr').length;
+        assert('panel: вкладка cache со строками записей', rowsN >= 1 && panel.shadow.querySelector('.ctable td.k').textContent.includes('/t2/pf-hit'));
+        panel.close();
+
+        offCache(); off(); dev.resetWarnings(); reset();
+        defaults.motion = true;
     })();
 
     section('component() & destroy()');

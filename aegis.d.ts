@@ -102,6 +102,8 @@ export const dev: {
     overlay: boolean;
     /** Объяснение кода предупреждения из ERRORS.md — печатает в консоль и возвращает текст */
     explain(code: string): Promise<string>;
+    /** Снимок кэша ресурсов (то же, что cache.stats().entries) — console.table(Aegis.dev.cache()) */
+    cache(): CacheEntryStats[];
     /** Панель инспектора в странице (грузит aegis-devtools.js рядом с модулем); также ?aegis-devtools в URL */
     panel(): Promise<{ host: HTMLElement; shadow: ShadowRoot; close(): void; highlight(el: Element | null): void }>;
 };
@@ -112,7 +114,7 @@ export function flushSync(): void;
 /** Синхронно выполнить отложенные полосы micro/frame и очередь эффектов */
 export function flush(): void;
 /** Счётчики движка: flushes, effectRuns, maxRounds, slow (top-20 по мс при dev.profile), scopes, effects, components, кэши */
-export function stats(): { flushes: number; effectRuns: number; maxRounds: number; slow: Array<{ name: string; ms: number }>; scopes: number; effects: number; components: number; resourceCache: number; cssCache: number; queued: number };
+export function stats(): { flushes: number; effectRuns: number; maxRounds: number; slow: Array<{ name: string; ms: number }>; scopes: number; effects: number; components: number; resourceCache: number; cssCache: number; queued: number; prefetch: { fired: number; used: number; wasted: number } | null };
 /** Корневой scope для тестов: const [api, dispose] = root(dispose => …) */
 export function root<T>(fn: (dispose: () => void) => T): [T, () => void];
 /** Дождаться сигнала: resolve при первом значении, для которого predicate истинен; reject TimeoutError / при dispose scope */
@@ -682,7 +684,7 @@ export function store<T extends object>(definition: T): T & {
 export function cachedResource<T = unknown>(source: string | (() => string), opts?: ResourceOptions<T> & CacheOptions): ResourceResult<T>;
 
 /** Прогреть кэш без подписчиков (hover, приближение к viewport); данные доступны resource(url, { cache: true }) */
-export function prefetch(url: string, opts?: { key?: string; staleTime?: number; cacheTime?: number; fetcher?: Fetcher; transform?: (d: unknown) => unknown }): Promise<void>;
+export function prefetch(url: string, opts?: { /** вид прогрева для статистики попаданий (prefetchOn проставляет сам) */ kind?: string; key?: string; staleTime?: number; cacheTime?: number; fetcher?: Fetcher; transform?: (d: unknown) => unknown }): Promise<void>;
 /** Прогрев по намерению: hover (default) | tap | visible; при saveData/2g — только tap. Возвращает dispose */
 export function prefetchOn(el: Element, urlOrFn: string | ((target: Element) => string | null | undefined), opts?: { on?: 'hover' | 'tap' | 'visible'; rootMargin?: string; staleTime?: number }): () => void;
 
@@ -695,6 +697,43 @@ export function infiniteResource<P = unknown, T = unknown>(urlFor: (cursor: unkn
     retry?: boolean | number;
 }): ResourceResult<T[]> & { pages: ReadonlySignal<P[]>; hasMore: ReadonlySignal<boolean>; loadMore(): Promise<void>; reset(): Promise<void> };
 
+export type CacheState = 'fresh' | 'stale' | 'inflight' | 'error' | 'empty' | 'absent';
+export interface CacheEvent { t: number; reason: 'mount' | 'url' | 'refresh' | 'invalidate' | 'focus' | 'reconnect' | 'prefetch' | 'seed' | string; result: 'fetch' | 'fresh' | 'joined' | 'set'; ms?: number; status?: 'ok' | 'error'; changed?: boolean }
+export interface CacheExplain {
+    key: string; state: CacheState; why: string;
+    age?: number | null; staleTime?: number; cacheTime?: number | null; subscribers?: number;
+    /** мс до сборки мусора (null — есть подписчики, Infinity — cacheTime: Infinity) */
+    gcIn?: number | null; fetches?: number; unchanged?: number;
+    /** наблюдаемый интервал изменений / обращений, мс */
+    changeInterval?: number | null; readInterval?: number | null;
+    /** staleTime по наблюдениям (≈5% устаревших чтений) */
+    suggestedStaleTime?: number | null;
+    tags?: string[] | null; prefetched?: string | null; history: CacheEvent[];
+}
+export interface CacheEntryStats { key: string; state: CacheState; age: number | null; staleTime: number; subscribers: number; inflight: boolean; error: string | null; size: number; gcIn: number | null; fetches: number; unchanged: number; suggestedStaleTime: number | null; prefetched: string | null; tags: string[] | null }
+export interface CacheStats { entries: CacheEntryStats[]; prefetch: { fired: number; used: number; wasted: number; byKind: Record<string, { p: number; n: number }> }; now: number }
+/** Публичный доступ к кэшу ресурсов — ключи нормализуются как в resource() */
+export const cache: {
+    get<T = unknown>(key: string | CacheKeyPart[] | Record<string, unknown>): T | undefined;
+    has(key: string | CacheKeyPart[] | Record<string, unknown>): boolean;
+    /** = seed(key, data, { age, staleTime }) */
+    set(key: string | CacheKeyPart[] | Record<string, unknown>, data: unknown, opts?: { age?: number; staleTime?: number }): unknown;
+    /** удалить записи по шаблону (без аргумента — все); возвращает число удалённых */
+    remove(pattern?: InvalidatePattern): number;
+    keys(prefix?: string | CacheKeyPart[]): string[];
+    entry(key: string | CacheKeyPart[]): { key: string; data: Signal<any>; error: Signal<unknown>; inflight: Signal<boolean>; refCount: number; age(): number | null } | null;
+    /** подписка на данные записи (держит её живой); возвращает unsubscribe */
+    subscribe<T = unknown>(key: string | CacheKeyPart[], fn: (data: T | null) => void): () => void;
+    /** события решений кэша: fetch / fresh / joined / set — для assertions в тестах */
+    on(fn: (key: string, ev: CacheEvent) => void): () => void;
+    /** явная сборка мусора по часам (тесты с fakeClock, low-memory); возвращает число удалённых */
+    gc(now?: number): number;
+    /** почему запись свежая/устаревшая, кто её запрашивал, что рекомендовать */
+    explain(key: string | CacheKeyPart[]): CacheExplain;
+    stats(): CacheStats;
+};
+/** Подменить часы кэша (staleTime, cacheTime, explain): useClock(() => t); возвращает restore. См. fakeClock() в aegis/test */
+export function useClock(now?: (() => number) | null): () => void;
 /** Шаблон ключей: точный ключ, 'prefix*', ['users'] (иерархический префикс), предикат или { prefix, exact, tags, refetch } */
 export type InvalidatePattern = string | CacheKeyPart[] | ((key: string, entry?: unknown) => boolean) | { prefix?: string; exact?: string | CacheKeyPart[]; tags?: string | string[]; refetch?: 'active' | 'all' | 'none' };
 /** Сбросить свежесть и перезапросить живые записи; Promise ждёт перезапросы. cancel: false — дождаться летящего запроса и перезапросить после него */
@@ -1359,6 +1398,8 @@ declare const Aegis: {
     AegisWarning: typeof AegisWarning;
     reset: typeof reset;
     flushSync: typeof flushSync;
+    cache: typeof cache;
+    useClock: typeof useClock;
     flush: typeof flush;
     stats: typeof stats;
     when: typeof when;

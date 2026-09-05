@@ -20,6 +20,8 @@ const candidates = {
     firefox: [process.env.FIREFOX, 'C:/Program Files/Mozilla Firefox/firefox.exe', '/Applications/Firefox.app/Contents/MacOS/firefox', '/usr/bin/firefox'],
 };
 const find = (list) => list.find(p => p && existsSync(p));
+// профиль браузера может быть ещё занят процессом — несколько попыток, потом просто оставить
+const rmSafe = async (dir) => { for (let i = 0; i < 5; i++) { try { rmSync(dir, { recursive: true, force: true }); return; } catch (e) { await new Promise(r => setTimeout(r, 400)); } } };
 
 let report = null, resolveReport = null;
 const server = createServer((q, r) => {
@@ -59,7 +61,7 @@ if (chrome) {
         cp.on('close', () => { clearTimeout(timer); res(out); });
         cp.on('error', (e) => { clearTimeout(timer); console.log(`chrome: launch problem — ${e.message}`); res(''); });
     });
-    rmSync(profile, { recursive: true, force: true });
+    await rmSafe(profile);
     const passed = (dom.match(/✓/g) || []).length;
     const fails = [...dom.matchAll(/class="test fail">([^<]*)/g)].map(m => m[1].replace(/^✗\s*/, ''));
     results.chrome = { passed, failed: fails.length, fails };
@@ -72,7 +74,7 @@ if (firefox) {
     const got = await Promise.race([new Promise(res => { resolveReport = res; }), new Promise(res => setTimeout(() => res(null), 240_000))]);
     ff.kill('SIGKILL');
     await new Promise(res => setTimeout(res, 500));
-    rmSync(profile, { recursive: true, force: true });
+    await rmSafe(profile);
     results.firefox = got ? { passed: got.passed, failed: got.failed, fails: (got.fails || []).map(f => f.replace(/^✗\s*/, '')) } : { failed: 1, fails: ['no report within 240 s'] };
 } else results.firefox = { skipped: 'not found (set FIREFOX=…)' };
 
