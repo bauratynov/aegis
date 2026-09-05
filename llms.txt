@@ -11,7 +11,7 @@ Read `aegis.d.ts` for exact types, `ERRORS.md` for warning codes, `test.html` fo
 - Never build HTML from data with `innerHTML`. Data goes through `${}` in `html``` (text nodes, never parsed). Server HTML goes through `swap()`.
 - Everything that subscribes (effects, listeners, timers, resources) must be created inside a component setup or `scope.run()`; it is disposed with the scope. Outside a scope you get E001.
 - `on(el, 'click', fn)` — not `addEventListener`; `interval`/`timeout`/`observe` — not the raw APIs. They clean themselves up.
-- Islands: `register(name, (el, data, ctx) => html`…`)` + server `<div data-aegis="name" data-x="…">`. `hydrate(document)` runs automatically after `register()`.
+- Islands: `island(name, ({ props, html }) => html`…`, { types })` + server `<div data-aegis="name" data-x="…">`; the same component function works as a custom element via `element(tag, Component, { props })`. `hydrate(document)` runs automatically after `island()`/`register()`. `register(name, (el, data, ctx) => …)` is the positional form.
 - `data-*` props are strings; declare `{ types: { count: Number, on: Boolean } }` in `register()` to coerce. Big JSON goes in `<script type="application/json">` inside the island → `data.props`.
 - Async work lives in `resource()` / `mutation()` — not in `effect(async …)` (E016).
 - In `ctx` you get: `el, slot, signal, computed, effect, batch, provide, inject, when, selector, on, delegate, bind, text, attr, cls, style, clsMap, styleMap, html, show, list, interval, timeout, observe, resize, mutate, guardedFetch (pre-bound), debounced, throttled, poll, onDispose`. Everything else — `import` from `./aegis.js`.
@@ -70,14 +70,15 @@ Server side:
 - Data: `resource` (`{ cache }`, `{ offline }`, `{ params, loader }`), `mutation`, `streamResource`, `sse`, `prefetch`, `infiniteResource`, `settled`, `seed`
 - HTTP: `configure({ csrf: 'django' })`, `request`, `api.get|post|put|patch|delete`, `HttpError`, `withRetry`
 - DOM: `html`, `when`, `list`, `show`, `text`, `attr`, `cls`, `style`, `cssVars`, `bind`, `attach`, `ref`, `clone`, `flushSync`
-- Islands: `register`, `hydrate`, `component`, `mount`, `destroy`, `defineElement`, `scaffold`
+- Islands: `island`, `element`, `register`, `hydrate` (`data-aegis-load="visible(300px)|idle(1500)|interaction(click)"`), `component`, `mount`, `destroy`, `defineElement`, `scaffold`
 - Server HTML: `swap` (morph), `boost`, `tpl`, `adopt`, `jsonScript`
 - Router: `router({ '/users/:id': { loader, handler, guard } }, { transition: true })`, `r.search('page', { parse: Number })`
 - Forms: `wireForm(formEl, { schema, rules })`, `form(defaults, { rules, schema })`, rules `required minLen maxLen pattern email min max matches maxSize mime maxFiles`
 - Motion: `transition`, `spring`, `springSignal`, `tween`, `flip`, `animate`, `media`, `reducedMotion`, `theme`, `defaults.motion`
 - Layout: `size`, `inView`, `viewport`
 - A11y: `trap`, `modal`, `roving`, `announce`
-- Testing: `reset()`, `root()`, `settled()`, `onWarn()`, `__AEGIS_DEV__ = 'strict'`, `defaults.fetcher`, `flushSync()`
+- Testing: `reset()`, `root()`, `settled()`, `onWarn()`, `__AEGIS_DEV__ = 'strict'`, `defaults.fetcher`, `flushSync()`, `flush()`
+- Debugging: `stats()`, `dev.profile()`, `dev.of(el)`, `dev.inspect()`, `dev.graph()`, `trace(sig)`, `effect(fn, { trace: true })`; `recipes/` and `playground.html` hold runnable examples
 
 ## Dev codes
 
