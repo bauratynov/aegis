@@ -13,17 +13,77 @@
 // ============================================================================
 
 /**
- * Dev-режим читается лениво при каждом предупреждении, а не один раз при
- * загрузке модуля: import'ы поднимаются наверх, поэтому
- * `window.__AEGIS_DEV__ = true` в том же модуле иначе не успевал бы сработать.
+ * Dev-режим: явный window.__AEGIS_DEV__ побеждает; иначе включается сам на
+ * localhost / 127.0.0.1 / file:// / *.local / *.test, при ?dev в URL модуля
+ * или localStorage['aegis:dev'] = '1' (диагностика на проде у клиента без деплоя).
+ * Результат кэшируется — проверка стоит одно сравнение.
+ * __AEGIS_DEV__ = 'strict' — каждое предупреждение бросает AegisWarning (тесты).
  */
+let _devCache;
 function _dev() {
-    return typeof globalThis !== 'undefined' && !!globalThis.__AEGIS_DEV__;
+    if (_devCache !== undefined) return _devCache;
+    const g = globalThis;
+    let on;
+    if (g.__AEGIS_DEV__ !== undefined) on = !!g.__AEGIS_DEV__;
+    else {
+        const loc = g.location;
+        const h = (loc && loc.hostname) || '';
+        on = (loc && loc.protocol === 'file:') || h === 'localhost' || h === '127.0.0.1' || h === '[::1]' || h.endsWith('.local') || h.endsWith('.test');
+        try { on = on || new URL(import.meta.url).searchParams.has('dev'); } catch (e) { /* no import.meta */ }
+        try { on = on || g.localStorage?.getItem('aegis:dev') === '1'; } catch (e) { /* storage blocked */ }
+        if (on && typeof console !== 'undefined') {
+            console.info(`%c⚡ Aegis dev mode (${h || 'file'}). window.__AEGIS_DEV__ = false to silence.`, 'color:#58a6ff');
+        }
+    }
+    return (_devCache = on);
 }
 
-/** Elm-style three-part warning: what → why → fix */
-function _warn(code, { what, why, fix }) {
+/** Управление dev-режимом из консоли: Aegis.dev.enable() на проде + reload */
+const dev = {
+    get on() { return _dev(); },
+    enable() { try { localStorage.setItem('aegis:dev', '1'); } catch (e) { /* */ } _devCache = undefined; globalThis.__AEGIS_DEV__ = true; _devCache = true; },
+    disable() { try { localStorage.removeItem('aegis:dev'); } catch (e) { /* */ } globalThis.__AEGIS_DEV__ = false; _devCache = false; },
+    /** сбросить дедуп предупреждений (тесты) */
+    resetWarnings() { _seenWarnings.clear(); },
+};
+export { dev };
+
+const _seenWarnings = new Set();
+const _warnHandlers = new Set();
+
+/** Предупреждение движка как исключение (strict-режим) или значение для onWarn() */
+export class AegisWarning extends Error {
+    constructor(code, info) {
+        super(`[Aegis:${code}] ${info.what}`);
+        this.name = 'AegisWarning';
+        this.code = code;
+        this.what = info.what;
+        this.why = info.why;
+        this.fix = info.fix;
+    }
+}
+
+/**
+ * Подписка на предупреждения движка — assertions в тестах:
+ *   const warns = []; const off = onWarn(w => warns.push(w.code)); …; expect(warns).toEqual([]);
+ * Работает только в dev-режиме (там, где предупреждения вообще вычисляются).
+ */
+export function onWarn(fn) {
+    _warnHandlers.add(fn);
+    const off = () => { _warnHandlers.delete(fn); };
+    if (_currentScope) _currentScope.onDispose(off);
+    return off;
+}
+
+/** Elm-style three-part warning: what → why → fix. Каждое сообщение печатается один раз */
+function _warn(code, { what, why, fix }, onceKey) {
     if (!_dev()) return;
+    const key = code + '|' + (onceKey ?? what);
+    if (_seenWarnings.has(key)) return;
+    _seenWarnings.add(key);
+    const info = { code, what, why, fix };
+    for (const h of _warnHandlers) h(info);
+    if (globalThis.__AEGIS_DEV__ === 'strict') throw new AegisWarning(code, info);
     console.warn(
         `⚠ [Aegis:${code}] ${what}\n` +
         `  Why: ${why}\n` +
@@ -69,6 +129,7 @@ const SIGNAL = /*#__PURE__*/ Symbol('aegis.signal');
 
 const _alwaysFalse = () => false;
 function _nm(o) { return typeof o === 'string' ? o : (o && o.name) || null; }
+function _initialOf(o) { return o && typeof o === 'object' && 'initial' in o ? o.initial : undefined; }
 function _eqOf(o) {
     if (typeof o === 'string' || !o) return Object.is;
     const eq = o.equals;
@@ -197,9 +258,9 @@ export function isSignal(v) {
 // ---- Computed ----------------------------------------------------------------
 
 class Computed {
-    constructor(fn, name, eq) {
+    constructor(fn, name, eq, initial) {
         this._fn = fn;
-        this._value = undefined;
+        this._value = initial;
         this._version = 0;
         this._name = name;
         this._eq = eq;
@@ -259,7 +320,7 @@ class Computed {
             _tracking = this;
             let v;
             try {
-                v = this._fn();
+                v = this._fn(this._value);   // computed((prev) => …, { initial }) — предыдущее значение
             } catch (e) {
                 _tracking = prev;
                 _unsubscribe(this);      // неполный набор deps — при следующем чтении полный пересчёт
@@ -289,7 +350,7 @@ Computed.prototype._isComputed = true;
  * версия самого computed растёт только при изменении результата.
  */
 export function computed(fn, nameOrOpts) {
-    const c = new Computed(fn, _nm(nameOrOpts), _eqOf(nameOrOpts));
+    const c = new Computed(fn, _nm(nameOrOpts), _eqOf(nameOrOpts), _initialOf(nameOrOpts));
     if (_currentScope) c._unreg = _currentScope.onDispose(() => c.dispose());
     return c;
 }
@@ -369,6 +430,8 @@ Effect.prototype._isComputed = false;
  */
 export function effect(fn, name) {
     const owner = _currentScope;
+    const explicitName = !!name;                   // именованные (движок, пользователь с name) — без детектора E019
+    if (!name && _dev()) name = fn.name || null;   // авто-имя в dev: function search() {…} → "search"
     if (!owner) {
         _warn('E001', {
             what: `Effect "${name || 'anonymous'}" created outside a component scope — it will never be cleaned up.`,
@@ -380,7 +443,17 @@ export function effect(fn, name) {
     const dispose = () => node.dispose();
     // Регистрируем до первого запуска: в уже уничтоженном scope effect не стартует
     node._unreg = owner ? owner.onDispose(dispose) : null;
-    if (!node._disposed) node._execute();
+    if (!node._disposed) {
+        node._execute();
+        // Детектор потерянной реактивности: эффект, не прочитавший ни одного сигнала, больше не запустится
+        if (_dev() && !explicitName && !node._disposed && (!node._deps || node._deps.length === 0)) {
+            _warn('E019', {
+                what: `Effect "${node._name}" read no signals — it ran once and will never run again.`,
+                why: 'Effects re-run only when a signal read synchronously inside them changes (reads after await are not tracked).',
+                fix: 'Read .value inside the effect (count.value, not a captured number). For a deliberate one-shot, call the function directly.',
+            });
+        }
+    }
     return dispose;
 }
 
@@ -519,11 +592,15 @@ function _flush() {
 let _currentScope = null;
 
 class Scope {
-    constructor(parent) {
+    constructor(parent, name) {
         this.parent = null;
+        this.name = name || null;             // для сообщений об ошибках: component:div#app, list:row
+        this.el = null;                       // элемент компонента (inject() по DOM-предкам)
+        this._ctx = null;                     // provide()/inject(): Map лениво
         this.children = null;                 // ленивый Set: бездетный scope не платит
         this._disposers = new Set();          // Set: onDispose() возвращает unregister — O(1)
         this._disposed = false;
+        this.dispose = this.dispose.bind(this); // можно передавать как callback: t.after(scope.dispose)
         if (parent) {
             if (parent._disposed) {
                 _warn('E005', {
@@ -582,18 +659,81 @@ class Scope {
         this.parent = null;
     }
 }
+if (typeof Symbol.dispose === 'symbol') Scope.prototype[Symbol.dispose] = function () { this.dispose(); };   // using scope = createScope()
 const _noop = () => {};
 
-/** Создать scope (привязывается к родительскому автоматически) */
-export function createScope() {
-    return new Scope(_currentScope);
+/** Создать scope (привязывается к родительскому автоматически). name — для диагностики */
+export function createScope(name) {
+    return new Scope(_currentScope, name);
+}
+
+/**
+ * Корневой scope для тестов и кода вне компонентов:
+ *   const [api, dispose] = root(dispose => { effect(…); return { … }; });
+ */
+export function root(fn) {
+    const scope = new Scope(null, 'root');
+    const r = scope.run(() => fn(scope.dispose));
+    return [r, scope.dispose];
 }
 
 /** Зарегистрировать cleanup в текущем scope. Возвращает unregister */
 export function onDispose(fn) {
     if (_currentScope) return _currentScope.onDispose(fn);
-    console.warn('[Aegis] onDispose вызван вне scope — cleanup не будет автоматическим');
+    _warn('E017', {
+        what: 'onDispose() called outside a scope — the cleanup will never run.',
+        why: 'Cleanups are owned by the scope that is active when they are registered.',
+        fix: 'Call it inside component()/mount() setup or scope.run(() => …).',
+    });
     return _noop;
+}
+
+// ---- provide / inject -----------------------------------------------------------
+
+const _globalCtx = new Map();
+
+/** Типизированный ключ контекста с значением по умолчанию */
+export function createContext(defaultValue) {
+    return { id: Symbol('aegis.context'), default: defaultValue };
+}
+
+/**
+ * Положить значение в контекст текущего scope: тема, локаль, user, jQuery — один раз наверху.
+ * Вне scope — глобальный контекст.
+ */
+export function provide(key, value) {
+    const k = key && key.id ? key.id : key;
+    if (_currentScope) (_currentScope._ctx || (_currentScope._ctx = new Map())).set(k, value);
+    else _globalCtx.set(k, value);
+}
+
+/**
+ * Достать значение из контекста: вверх по scope-дереву, затем по DOM-предкам
+ * (острова без общего root), затем глобальный. Вызывать синхронно в setup, не внутри effect.
+ */
+export function inject(key, fallback) {
+    const k = key && key.id ? key.id : key;
+    let ownerEl = null;
+    for (let sc = _currentScope; sc; sc = sc.parent) {
+        if (!ownerEl && sc.el) ownerEl = sc.el;
+        if (sc._ctx && sc._ctx.has(k)) return sc._ctx.get(k);
+    }
+    if (ownerEl && typeof _components !== 'undefined') {
+        for (let e = ownerEl.parentElement; e; e = e.parentElement) {
+            const c = _components.get(e);
+            const ctx = c && c.scope._ctx;
+            if (ctx && ctx.has(k)) return ctx.get(k);
+        }
+    }
+    if (_globalCtx.has(k)) return _globalCtx.get(k);
+    if (arguments.length < 2 && !(key && 'default' in key)) {
+        _warn('E022', {
+            what: `inject(${String(key && key.id ? key.id.description : key)}) — nothing provided.`,
+            why: 'No provide() for this key in the scope chain, DOM ancestors or globally.',
+            fix: 'Call provide(key, value) in a parent setup, or pass a fallback: inject(key, fallback). Lazy parent island? Use data-aegis-load="eager".',
+        });
+    }
+    return arguments.length >= 2 ? fallback : (key && key.default);
 }
 
 /** Зарегистрировать disposer в текущем scope и вернуть функцию, которая делает cleanup и снимает регистрацию */

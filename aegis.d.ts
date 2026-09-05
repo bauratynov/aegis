@@ -33,11 +33,66 @@ export interface SignalOptions<T> {
     name?: string;
     equals?: false | ((a: T, b: T) => boolean);
 }
+export interface ComputedOptions<T> extends SignalOptions<T> {
+    /** computed((prev) => …, { initial }) — предыдущее значение первым аргументом */
+    initial?: T;
+}
+
+/** Значение, сигнал или геттер — всё, что принимают реактивные хелперы */
+export type Reactive<T> = T | Signal<T> | ReadonlySignal<T> | (() => T);
+export type Displayable = string | number | boolean | null | undefined;
+/** class: строка | массив | { name: reactive truthy } (clsx-семантика) */
+export type ClassValue = string | null | undefined | false | ClassValue[] | Record<string, Reactive<unknown>>;
 
 export function signal<T>(initial: T, nameOrOpts?: string | SignalOptions<T>): Signal<T>;
-export function computed<T>(fn: () => T, nameOrOpts?: string | SignalOptions<T>): ReadonlySignal<T>;
+export function computed<T>(fn: (prev: T) => T, nameOrOpts?: string | ComputedOptions<T>): ReadonlySignal<T>;
 export function effect(fn: () => void | (() => void), name?: string): () => void;
 export function batch<T>(fn: () => T): T;
+
+// ── Dev & testing ──────────────────────────────────────────────
+
+export interface WarningInfo { code: string; what: string; why: string; fix: string }
+/** Предупреждение движка как исключение (window.__AEGIS_DEV__ = 'strict') */
+export class AegisWarning extends Error { code: string; what: string; why: string; fix: string }
+/** Подписка на предупреждения (dev-режим): warnings-as-assertions в тестах. Возвращает unsubscribe */
+export function onWarn(fn: (w: WarningInfo) => void): () => void;
+/** Управление dev-режимом: dev.enable() (localStorage + reload на проде), dev.disable(), dev.resetWarnings() */
+export const dev: { readonly on: boolean; enable(): void; disable(): void; resetWarnings(): void };
+/** Сбросить модульные синглтоны между тестами (компоненты, реестр, кэш ресурсов, live-region) */
+export function reset(opts?: { components?: boolean; cache?: boolean; registry?: boolean; dom?: boolean }): void;
+/** Синхронно выполнить отложенные рендеры show()/list() и очередь эффектов */
+export function flushSync(): void;
+/** Корневой scope для тестов: const [api, dispose] = root(dispose => …) */
+export function root<T>(fn: (dispose: () => void) => T): [T, () => void];
+/** Дождаться сигнала: resolve при первом значении, для которого predicate истинен; reject TimeoutError / при dispose scope */
+export function until<T>(source: Reactive<T>, predicate?: (v: T) => boolean, opts?: { timeout?: number }): Promise<T> & { toBe(v: T): Promise<T>; changed(): Promise<T> };
+
+// ── Context ────────────────────────────────────────────────────
+
+export interface Context<T> { readonly id: symbol; readonly default: T }
+export function createContext<T>(defaultValue?: T): Context<T>;
+/** Положить значение в контекст текущего scope (вне scope — глобально) */
+export function provide<T>(key: Context<T> | string, value: T): void;
+/** Достать из контекста: scope-цепочка → DOM-предки (между островами) → глобальный. Вызывать синхронно в setup */
+export function inject<T>(key: Context<T>): T;
+export function inject<T>(key: Context<T> | string, fallback: T): T;
+export function inject(key: string): unknown;
+
+// ── State helpers ──────────────────────────────────────────────
+
+/** Сигнал в localStorage/sessionStorage с синхронизацией между вкладками */
+export function persisted<T>(key: string, initial: T, opts?: {
+    storage?: Storage | null;
+    serialize?: (v: T) => string;
+    deserialize?: (s: string) => T;
+    sync?: boolean;
+    debounce?: number;
+}): Signal<T> & { clear(): void };
+/** Writable derived: запись живёт до следующего изменения источника */
+export function linked<T>(source: () => T, name?: string): Signal<T>;
+export function linked<S, T>(opts: { source: () => S; compute: (source: S, prev: { source: S; value: T } | undefined) => T }, name?: string): Signal<T>;
+/** O(2) обновлений вместо N для «выбранной строки»: const isSelected = selector(selectedId) */
+export function selector<K, S = K>(source: Signal<S> | ReadonlySignal<S> | (() => S), equals?: (source: S, key: K) => boolean): (key: K) => boolean;
 /** Выполнить fn без подписки на прочитанные сигналы */
 export function untrack<T>(fn: () => T): T;
 export function isSignal(v: unknown): v is Signal<unknown>;
@@ -50,12 +105,18 @@ export function isReactive(v: unknown): boolean;
 // ── Scope ──────────────────────────────────────────────────────
 
 export interface Scope {
+    readonly name: string | null;
+    /** элемент компонента (inject() по DOM-предкам) */
+    el: Element | null;
     run<T>(fn: () => T): T;
+    /** using scope = createScope() */
+    [Symbol.dispose]?(): void;
     /** Возвращает unregister — снять cleanup досрочно */
     onDispose(fn: () => void): () => void;
     dispose(): void;
 }
 
+/** name — для сообщений об ошибках (component:div#app, list:row) */
 export function createScope(name?: string): Scope;
 /** Текущий scope-владелец (null вне scope). Для кода после await: runWithOwner(getOwner(), () => …) */
 export function getOwner(): Scope | null;
@@ -67,8 +128,8 @@ export function onDispose(fn: () => void): () => void;
 export function html(strings: TemplateStringsArray, ...values: unknown[]): DocumentFragment;
 export function render(target: Element, content: DocumentFragment | Element): void;
 
-export function text(el: Element, valueOrFn: string | Signal<string> | (() => string)): () => void;
-export function attr(el: Element, name: string, valueOrFn: unknown | Signal<unknown> | (() => unknown)): () => void;
+export function text(el: Element, value: Reactive<Displayable>): () => void;
+export function attr(el: Element, name: string, value: Reactive<Displayable>): () => void;
 
 /**
  * Toggle a single CSS class reactively.
@@ -76,7 +137,9 @@ export function attr(el: Element, name: string, valueOrFn: unknown | Signal<unkn
  * @param name — class name
  * @param fn — boolean signal, function, or static value
  */
-export function cls(el: Element, name: string, fn: boolean | Signal<boolean> | (() => boolean)): () => void;
+export function cls(el: Element, name: string, value: Reactive<unknown>): () => void;
+/** cls(el, { active: sig, done: () => … }) / cls(el, ['btn', size]) — diff только своих классов */
+export function cls(el: Element, classes: ClassValue): () => void;
 
 /**
  * Bind a single CSS property reactively.
@@ -84,19 +147,22 @@ export function cls(el: Element, name: string, fn: boolean | Signal<boolean> | (
  * @param prop — CSS property name (camelCase)
  * @param fn — string signal, function, or static value
  */
-export function style(el: Element, prop: string, fn: string | Signal<string> | (() => string)): () => void;
+/** --custom-property идёт через setProperty; число — только для unitless-свойств */
+export function style(el: HTMLElement | SVGElement, prop: string, value: Reactive<string | number | null>): () => void;
+/** CSS custom properties из сигналов: cssVars(el, { x, progress }) → --x, --progress */
+export function cssVars(el: HTMLElement | SVGElement, vars: Record<string, Reactive<string | number | null>>): () => void;
 
 /**
  * Toggle multiple CSS classes via a map { className: signal/fn/bool }.
  * @returns cleanup function that disposes all class effects
  */
-export function clsMap(el: Element, classMap: Record<string, boolean | Signal<boolean> | (() => boolean)>): () => void;
+export function clsMap(el: Element, map: Record<string, Reactive<unknown>>): () => void;
 
 /**
  * Bind multiple CSS properties via a map { prop: signal/fn/string }.
  * @returns cleanup function that disposes all style effects
  */
-export function styleMap(el: Element, styles: Record<string, string | Signal<string> | (() => string)>): () => void;
+export function styleMap(el: HTMLElement | SVGElement, map: Record<string, Reactive<string | number | null>>): () => void;
 
 /**
  * Two-way bind an input's value to a signal.
@@ -115,6 +181,27 @@ export function bind(el: HTMLInputElement | HTMLSelectElement | HTMLTextAreaElem
  * @param falseBranch — content factory or element for falsy condition (optional)
  * @returns Comment anchor node (insert this into your DOM)
  */
+/** Три состояния ресурса в html``: ${when(users, { loading, error, data })} */
+export function when<T>(res: { data: { value: T | null; peek(): T | null }; loading?: { value: boolean }; error?: { value: unknown; peek(): unknown }; refresh?: () => unknown }, branches: {
+    loading?: () => Node | Node[] | string;
+    error?: (error: any, retry: () => void) => Node | Node[] | string;
+    /** data(value, signal) — второй аргумент для реактивных list()/text() внутри ветки */
+    data?: (data: T, signal: ReadonlySignal<T | null>) => Node | Node[] | string;
+    empty?: () => Node | Node[] | string;
+}): Comment;
+
+/** Обёртки событий в стиле Svelte 5: @submit=${prevent(save)} (в html`` также @submit.prevent, .stop, .self, .once, .passive, .capture, .outside, .window, .document, .enter/.esc/…, .ctrl/.meta/.shift/.alt, .debounce.N, .throttle.N) */
+export function prevent<E extends Event>(fn: (e: E) => void): (e: E) => void;
+export function stop<E extends Event>(fn: (e: E) => void): (e: E) => void;
+export function self<E extends Event>(fn: (e: E) => void): (e: E) => void;
+
+/** matchMedia как сигнал (один на запрос) */
+export function media(query: string): ReadonlySignal<boolean>;
+/** prefers-reduced-motion как сигнал; запись перекрывает системную настройку */
+export const reducedMotion: Signal<boolean>;
+/** Тема: mode 'light' | 'dark' | 'system' в localStorage + атрибут на <html> + color-scheme */
+export function theme(opts?: { attr?: string; storage?: string }): { mode: Signal<'light' | 'dark' | 'system'>; dark: ReadonlySignal<boolean> };
+
 export interface ShowOptions {
     /** Ветки создаются один раз и прячутся через display:none (аналог v-show): DOM и состояние сохраняются */
     keep?: boolean;
@@ -209,7 +296,13 @@ export function nextTick(fn?: () => void): Promise<void>;
  * @param scope — optional Scope for auto-abort on dispose (falls back to current scope)
  * @returns an async fetch function: (url, opts?) => Promise<json | text | undefined>
  */
-export function guardedFetch(scope?: Scope): (url: string, opts?: RequestOptions) => Promise<any>;
+export interface GuardedFetch {
+    /** устаревший (отменённый) вызов никогда не резолвится; { stale: 'undefined' } — старое поведение */
+    (url: string, opts?: RequestOptions & { stale?: 'undefined' }): Promise<any>;
+    pending: ReadonlySignal<boolean>;
+    error: ReadonlySignal<unknown>;
+}
+export function guardedFetch(scope?: Scope): GuardedFetch;
 
 // ── HTTP layer ─────────────────────────────────────────────────
 
@@ -431,11 +524,12 @@ export function sse(url: string, opts?: {
  * @param opts.debounce — debounce the callback in ms
  * @returns dispose function
  */
+export interface WatchHandle { (): void; stop(): void; pause(): void; resume(): void }
 export function watch<T>(
     source: Signal<T> | ReadonlySignal<T> | (() => T),
-    callback: (newVal: T, oldVal: T | undefined) => void,
-    opts?: { immediate?: boolean; debounce?: number }
-): () => void;
+    callback: (newVal: T, oldVal: T | undefined, onCleanup: (fn: () => void) => void) => void,
+    opts?: { immediate?: boolean; debounce?: number; once?: boolean }
+): WatchHandle;
 
 /**
  * Reactive store from a plain definition object.
@@ -506,7 +600,13 @@ export interface FormResult<T extends Record<string, { value: any; rules?: Valid
     setErrors(errors: Partial<{ [K in keyof T]: string | string[] }>): void;
 }
 
-export function form<T extends Record<string, { value: any; rules?: ValidationRule[] }>>(schema: T): FormResult<T>;
+export function form<T extends Record<string, { value: any; rules?: ValidationRule[] }>>(schema: T): FormResult<T> & FormSubmitState;
+export interface FormSubmitState {
+    submitting: ReadonlySignal<boolean>;
+    submitCount: ReadonlySignal<number>;
+    submitError: ReadonlySignal<unknown>;
+    result: ReadonlySignal<unknown>;
+}
 
 export const required: ValidationRule;
 export function minLen(n: number): ValidationRule;
@@ -572,8 +672,12 @@ export interface ComponentContext<E extends Element = HTMLElement> {
     observe: typeof observe;
     resize: typeof resize;
     mutate: typeof mutate;
+    provide: typeof provide;
+    inject: typeof inject;
+    when: typeof when;
+    selector: typeof selector;
     /** Pre-bound guardedFetch — already tied to this component's scope */
-    guardedFetch: (url: string, opts?: RequestInit) => Promise<any>;
+    guardedFetch: GuardedFetch;
     debounced: typeof debounced;
     throttled: typeof throttled;
     poll: typeof poll;
@@ -845,6 +949,27 @@ declare const Aegis: {
     effect: typeof effect;
     batch: typeof batch;
     untrack: typeof untrack;
+    linked: typeof linked;
+    persisted: typeof persisted;
+    selector: typeof selector;
+    until: typeof until;
+    root: typeof root;
+    provide: typeof provide;
+    inject: typeof inject;
+    createContext: typeof createContext;
+    dev: typeof dev;
+    onWarn: typeof onWarn;
+    AegisWarning: typeof AegisWarning;
+    reset: typeof reset;
+    flushSync: typeof flushSync;
+    when: typeof when;
+    cssVars: typeof cssVars;
+    prevent: typeof prevent;
+    stop: typeof stop;
+    self: typeof self;
+    media: typeof media;
+    reducedMotion: typeof reducedMotion;
+    theme: typeof theme;
     getOwner: typeof getOwner;
     runWithOwner: typeof runWithOwner;
     isSignal: typeof isSignal;

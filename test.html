@@ -30,12 +30,12 @@
         on, delegate, interval, timeout,
         guardedFetch, debounced, throttled,
         html, text, attr, cls, style, bind, show, list,
-        component, register, hydrate, destroy,
+        component, register, hydrate, destroy, destroyAll,
         render, $, $$,
         resource, watch, store, portal, transition, errorBoundary, ref,
         reactive, isReactive,
         form, required, minLen, maxLen, emailRule, matches,
-        wireForm, cachedResource, invalidate, seed, seedFrom, attach, clone, expose, getOwner, runWithOwner, configure, request, api, HttpError, mutation, streamResource, settled, prefetch, infiniteResource,
+        wireForm, cachedResource, invalidate, seed, seedFrom, attach, clone, expose, getOwner, runWithOwner, configure, request, api, HttpError, mutation, streamResource, settled, prefetch, infiniteResource, dev, onWarn, AegisWarning, reset, root, until, createContext, provide, inject, persisted, linked, selector, when, cssVars, media, defaults,
         spring, flip, animate,
         trap, roving, announce,
         css, adoptStyles, scopedStyle,
@@ -643,7 +643,7 @@
         const d = f2.querySelector('div');
         assert('html: несколько значений в одном атрибуте', d.className === 'base on x');
         cls.value = 'off';
-        assert('html: составной атрибут реактивен', d.className === 'base off x');
+        assert('html: составной атрибут реактивен', d.classList.contains('base') && d.classList.contains('off') && d.classList.contains('x') && !d.classList.contains('on'));
 
         const r = ref();
         const f3 = html`<input ${r} type="text">`;
@@ -1172,7 +1172,7 @@
         const many = document.createElement('div');
         many.innerHTML = Array.from({ length: 12 }, (_, i) => `<div data-aegis="h2-island" data-n="${i}"></div>`).join('');
         sandbox.appendChild(many);
-        const hs = hydrate(many, { budget: 0 });
+        const hs = hydrate(many, { budget: -1 });
         const syncMounted = many.querySelectorAll('b').length;
         await hs.ready;
         assert('hydrate: time-slicing — первый синхронно, все после ready', syncMounted >= 1 && syncMounted < 12 && many.querySelectorAll('b').length === 12);
@@ -1226,7 +1226,7 @@
         let gf;
         scope.run(() => { gf = guardedFetch(); });
         const ac2 = new AbortController();
-        const gp = gf('/api/slow', { signal: ac2.signal });
+        const gp = gf('/api/slow', { signal: ac2.signal, stale: 'undefined' });
         ac2.abort();
         assert('guardedFetch: пользовательский signal не теряется', (await gp) === undefined);
         scope.dispose();
@@ -1363,6 +1363,264 @@
         const api = errorBoundary(errRoot, async () => { await wait(1); throw new Error('async crash'); }, (e) => { caught = e.message; });
         await api;
         assert('errorBoundary: ловит async-ошибку setup', caught === 'async crash');
+        sandbox.innerHTML = '';
+    })();
+
+    section('💎 #31/#42/#50 — dev-режим, onWarn, детекторы');
+
+    (() => {
+        assert('dev: включён автоматически на localhost', dev.on === true);
+        const codes = [];
+        const off = onWarn(w => codes.push(w.code));
+        dev.resetWarnings();
+        const s = signal(1);
+        const el = document.createElement('i');
+        text(el, s.value);                          // примитив вместо сигнала
+        show(s.value > 0, () => html`<b>x</b>`);     // статический boolean
+        effect(() => { el.title = 'static'; });      // эффект без зависимостей
+        computed(() => { s.value = 2; }).value;      // запись внутри computed
+        off();
+        assert('onWarn: E019 на text() с примитивом, show() с boolean и effect без deps', codes.filter(c => c === 'E019').length === 3);
+        assert('onWarn: E002 запись в computed', codes.includes('E002'));
+        dev.resetWarnings();
+        const before = codes.filter(c => c === 'E019').length;
+        const off2 = onWarn(w => codes.push(w.code));
+        text(el, 5); text(el, 5);
+        off2();
+        assert('warn: дедуп — одинаковое предупреждение один раз', codes.filter(c => c === 'E019').length === before + 1);
+
+        window.__AEGIS_DEV__ = 'strict';
+        dev.resetWarnings();
+        let strictErr = null;
+        try { text(el, 7); } catch (e) { strictErr = e; }
+        window.__AEGIS_DEV__ = true;
+        assert('strict: предупреждение бросает AegisWarning с кодом', strictErr instanceof AegisWarning && strictErr.code === 'E019');
+        dev.resetWarnings();
+    })();
+
+    section('💎 #33 — class/style объекты, custom properties, SVG');
+
+    (() => {
+        const active = signal(true), size = signal('lg'), w = signal(10), hot = signal(false);
+        const frag = html`<li class="item ${{ active, done: () => !active.value, [`prio-${1}`]: true }}"></li>
+            <button class=${['btn', size, () => active.value && 'btn-primary']}></button>
+            <div class="bar" style=${{ '--w': () => w.value + 'px', color: 'red' }}></div>
+            <svg><circle class=${{ hot }} r="4"/></svg>`;
+        sandbox.appendChild(frag);
+        const li = sandbox.querySelector('li'), btn = sandbox.querySelector('button'), bar = sandbox.querySelector('.bar'), circle = sandbox.querySelector('circle');
+        assert('class: объект — truthy ключи, статика сохранена', li.className === 'item active prio-1');
+        active.value = false;
+        assert('class: реактивный diff', li.className === 'item prio-1 done' || li.classList.contains('done') && !li.classList.contains('active') && li.classList.contains('item'));
+        assert('class: массив с сигналом и функцией', btn.className === 'btn lg');
+        active.value = true; size.value = 'sm';
+        assert('class: массив реактивен', btn.className === 'sm btn-primary btn' || (btn.classList.contains('btn') && btn.classList.contains('sm') && btn.classList.contains('btn-primary') && !btn.classList.contains('lg')));
+        assert('style: объект — custom property через setProperty', bar.style.getPropertyValue('--w') === '10px' && bar.style.color === 'red' && bar.getAttribute('style') !== '[object Object]');
+        w.value = 20;
+        assert('style: custom property реактивна', bar.style.getPropertyValue('--w') === '20px');
+        li.classList.add('foreign');
+        active.value = false; active.value = true;
+        assert('class: чужие классы (jQuery/Bootstrap) не трогаются', li.classList.contains('foreign'));
+        let threw = false;
+        try { hot.value = true; } catch (e) { threw = true; }
+        assert('class на SVG не падает и работает', !threw && circle.classList.contains('hot'));
+
+        const box = document.createElement('div');
+        sandbox.appendChild(box);
+        const x = signal(3);
+        const scope = createScope();
+        scope.run(() => { cssVars(box, { x, progress: () => x.value * 10 }); style(box, '--gap', '4px'); cls(box, { on: x }); });
+        assert('cssVars/style: --переменные', box.style.getPropertyValue('--x') === '3' && box.style.getPropertyValue('--progress') === '30' && box.style.getPropertyValue('--gap') === '4px' && box.classList.contains('on'));
+        x.value = 0;
+        assert('cls(el, obj) реактивен', !box.classList.contains('on') && box.style.getPropertyValue('--progress') === '0');
+        scope.dispose();
+        sandbox.innerHTML = '';
+    })();
+
+    section('💎 #51 — модификаторы событий');
+
+    (() => {
+        const log = [];
+        const scope = createScope();
+        const frag = scope.run(() => html`<form @submit.prevent=${() => log.push('submit')}>
+            <input class="k" @keydown.enter=${() => log.push('enter')} @keydown.esc.window=${() => log.push('esc')}>
+            <div class="menu" @click.outside=${() => log.push('outside')}><span class="inner">x</span></div>
+            <a class="ctl" @click.ctrl.prevent=${() => log.push('ctrl')}>l</a>
+            <div class="selfy" @click.self=${() => log.push('self')}><i>c</i></div>
+        </form>`);
+        sandbox.appendChild(frag);
+        const form = sandbox.querySelector('form'), input = sandbox.querySelector('input.k');
+        const ev = new Event('submit', { bubbles: true, cancelable: true });
+        form.dispatchEvent(ev);
+        assert('@submit.prevent: preventDefault + вызов', ev.defaultPrevented && log.includes('submit'));
+        input.dispatchEvent(new KeyboardEvent('keydown', { key: 'a', bubbles: true }));
+        input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+        assert('@keydown.enter: только Enter', log.filter(l => l === 'enter').length === 1);
+        window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+        assert('@keydown.esc.window: слушатель на window', log.includes('esc'));
+        sandbox.querySelector('.inner').click();
+        sandbox.querySelector('a.ctl').dispatchEvent(new MouseEvent('click', { bubbles: true }));
+        document.body.click();
+        assert('@click.outside: клик внутри не считается, снаружи — да', log.filter(l => l === 'outside').length === 2);
+        sandbox.querySelector('a.ctl').dispatchEvent(new MouseEvent('click', { bubbles: true, ctrlKey: true }));
+        assert('@click.ctrl: только с модификатором', log.filter(l => l === 'ctrl').length === 1);
+        sandbox.querySelector('.selfy i').click();
+        sandbox.querySelector('.selfy').click();
+        assert('@click.self: только сам элемент', log.filter(l => l === 'self').length === 1);
+        scope.dispose();
+        window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+        assert('модификаторы: слушатели сняты со scope', log.filter(l => l === 'esc').length === 1);
+        sandbox.innerHTML = '';
+    })();
+
+    section('💎 #35/#36/#37/#75/#76 — provide/inject, persisted, linked, selector, watch, until');
+
+    await (async () => {
+        const Theme = createContext('light');
+        const host = document.createElement('div');
+        host.innerHTML = '<div class="child"></div>';
+        sandbox.appendChild(host);
+        let seen = null, seenDom = null, seenDefault = null;
+        component(host, ({ provide, inject }) => {
+            provide(Theme, 'dark');
+            provide('jq', 'jQuery!');
+            const scope = createScope();
+            scope.run(() => { seen = inject(Theme) + '/' + inject('jq'); });
+        });
+        component(host.querySelector('.child'), ({ inject }) => { seenDom = inject(Theme); seenDefault = inject(createContext('def')); });
+        assert('provide/inject: по scope-цепочке и по DOM-предкам', seen === 'dark/jQuery!' && seenDom === 'dark' && seenDefault === 'def');
+        destroyAll(sandbox); sandbox.innerHTML = '';
+
+        localStorage.removeItem('t:theme');
+        const theme1 = persisted('t:theme', 'light');
+        theme1.value = 'dark';
+        assert('persisted: пишет в localStorage', localStorage.getItem('t:theme') === '"dark"');
+        const theme2 = persisted('t:theme', 'light');
+        assert('persisted: читает сохранённое', theme2.value === 'dark');
+        theme1.clear();
+        assert('persisted: clear() возвращает initial', theme1.value === 'light' && localStorage.getItem('t:theme') === null);
+
+        const items = signal([{ id: 1 }, { id: 2 }]);
+        const selected = linked(() => items.value[0]?.id ?? null);
+        assert('linked: вычисляется из источника', selected.value === 1);
+        selected.value = 2;
+        assert('linked: запись переопределяет', selected.value === 2);
+        items.value = [{ id: 9 }];
+        assert('linked: сброс при смене источника', selected.value === 9);
+
+        const sel = signal(1);
+        const isSel = selector(sel);
+        let runs = 0;
+        const scope = createScope();
+        scope.run(() => { for (const id of [1, 2, 3, 4, 5]) effect(() => { isSel(id); runs++; }); });
+        runs = 0;
+        sel.value = 3;
+        assert('selector: 2 обновления вместо N', runs === 2 && isSel(3) && !isSel(1));
+        scope.dispose();
+
+        const q = signal('a');
+        const cleanups = [];
+        const w = watch(q, (v, prev, onCleanup) => { onCleanup(() => cleanups.push('c:' + v)); });
+        q.value = 'b'; q.value = 'c';
+        assert('watch: onCleanup перед следующим вызовом', cleanups.join(',') === 'c:b');
+        w.pause(); q.value = 'd'; w.resume(); q.value = 'e';
+        assert('watch: pause/resume', cleanups.join(',') === 'c:b,c:c');
+        w.stop();
+        assert('watch: stop делает cleanup', cleanups.join(',') === 'c:b,c:c,c:e');
+        let onceRuns = 0;
+        watch(q, () => onceRuns++, { once: true });
+        q.value = 'f'; q.value = 'g';
+        assert('watch: once', onceRuns === 1);
+
+        const ready = signal(false);
+        setTimeout(() => { ready.value = true; }, 5);
+        const v = await until(ready);
+        assert('until: resolve при truthy', v === true);
+        const n = signal(0);
+        const p = until(n).toBe(3);
+        n.value = 1; n.value = 3;
+        assert('until().toBe', (await p) === 3);
+        let timedOut = null;
+        try { await until(signal(false), Boolean, { timeout: 10 }); } catch (e) { timedOut = e.name; }
+        assert('until: timeout → TimeoutError', timedOut === 'TimeoutError');
+        const mx = computed(prev => Math.max(prev, n.value), { initial: 0 });
+        mx.value; n.value = 10; mx.value; n.value = 4;
+        assert('computed(prev, { initial })', mx.value === 10);
+    })();
+
+    section('💎 #38/#43 — when() и синхронный первый рендер');
+
+    await (async () => {
+        const items = signal([{ id: 1, n: 'a' }]);
+        const scope = createScope();
+        const frag = scope.run(() => html`<ul>${list(items, i => html`<li>${i.n}</li>`)}</ul><p>${show(() => items.value.length > 0, () => html`<b>yes</b>`)}</p>`);
+        assert('html: list()/show() отрендерены сразу, без await', frag.querySelectorAll('li').length === 1 && !!frag.querySelector('b'));
+        sandbox.appendChild(frag);
+        items.value = [...items.value, { id: 2, n: 'b' }];
+        assert('list: обновление синхронно', sandbox.querySelectorAll('li').length === 2);
+        scope.dispose(); sandbox.innerHTML = '';
+
+        let resolveFetch;
+        const users = resource('/w/users', { fetcher: () => new Promise(r => { resolveFetch = r; }) });
+        const s2 = createScope();
+        const f2 = s2.run(() => html`<section>${when(users, {
+            loading: () => html`<i class="sk">…</i>`,
+            error: (e, retry) => html`<em>${e.message}</em>`,
+            data: (rows, data) => html`<ul>${list(data, u => html`<li>${u.name}</li>`)}</ul>`,
+        })}</section>`);
+        sandbox.appendChild(f2);
+        assert('when: loading-ветка', !!sandbox.querySelector('i.sk'));
+        resolveFetch([{ id: 1, name: 'Ann' }]);
+        await settled();
+        assert('when: data-ветка', sandbox.querySelector('li')?.textContent === 'Ann' && !sandbox.querySelector('i.sk'));
+        const ul = sandbox.querySelector('ul');
+        users.mutate(r => [...r, { id: 2, name: 'Bob' }]);
+        assert('when: refetch/mutate поверх данных не пересоздаёт ветку', sandbox.querySelector('ul') === ul && sandbox.querySelectorAll('li').length === 2);
+        s2.dispose(); sandbox.innerHTML = '';
+    })();
+
+    section('💎 #44/#47/#77/#41 — motion, forms, guardedFetch, reset');
+
+    await (async () => {
+        assert('media(): сигнал', typeof media('(min-width: 1px)').value === 'boolean');
+        defaults.motion = false;
+        const el = document.createElement('div');
+        sandbox.appendChild(el);
+        const open = signal(false);
+        const scope = createScope();
+        scope.run(() => transition(el, open, { duration: 500 }));
+        open.value = true;
+        assert('defaults.motion = false: transition без классов и ожидания', el.hidden === false && !el.classList.contains('aegis-enter-active'));
+        const anim = spring(el, { opacity: [0, 1] });
+        assert('defaults.motion = false: spring сразу в конечное состояние', el.style.opacity === '1' && typeof anim.cancel === 'function');
+        defaults.motion = 'auto';
+        scope.dispose();
+
+        const f = form({ name: { value: '', rules: [required] } });
+        assert('form: submitting/submitCount/$form', f.submitting.value === false && f.submitCount.value === 0 && f.errors.$form.value === null);
+        f.setErrors({ non_field_errors: ['Nope'], name: 'bad', unknown: 'x' });
+        assert('form: setErrors → $form и поле', f.errors.$form.value !== null && f.errors.name.value === 'bad');
+        f.setErrors([{ path: 'name', message: 'from rfc' }]);
+        assert('form: setErrors принимает RFC 9457 массив', f.errors.name.value === 'from rfc');
+
+        const s2 = createScope();
+        let gf;
+        s2.run(() => { gf = guardedFetch(); });
+        let resolved1 = false;
+        const p1 = gf('/g/1', { fetcher: null }).then(() => { resolved1 = true; });
+        configure({ fetch: async (u) => new Response(JSON.stringify({ u }), { headers: { 'Content-Type': 'application/json' } }) });
+        const r2 = await gf('/g/2');
+        await wait(5);
+        assert('guardedFetch: устаревший вызов не резолвится, свежий — да, pending снят', resolved1 === false && r2.u === '/g/2' && gf.pending.value === false);
+        configure({ fetch: null });
+        s2.dispose();
+
+        register('reset-island', () => {});
+        reset();
+        let warned = false;
+        const offW = onWarn(w => { if (w.code === 'E011') warned = true; });
+        const host = document.createElement('div'); host.innerHTML = '<div data-aegis="reset-island"></div>';
+        sandbox.appendChild(host); hydrate(host); offW();
+        assert('reset(): реестр очищен', warned === true);
         sandbox.innerHTML = '';
     })();
 
