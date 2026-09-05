@@ -46,59 +46,9 @@ const dev = {
     /** сбросить дедуп предупреждений (тесты) */
     resetWarnings() { _seenWarnings.clear(); },
     /** performance.measure / console.timeStamp на каждый flush в треке «Aegis» Performance-панели */
-    profile(on = true) { _profiling = !!on; },
-    /** Реактивный мир острова по его DOM-узлу: Aegis.dev.of($0) */
-    of(el) {
-        for (let e = el; e; e = e.parentElement) {
-            const c = typeof _components !== 'undefined' && _components.get(e);
-            if (c) return _inspectScope(c.scope);
-        }
-        return null;
-    },
-    /** JSON-снимок всех компонентов (или scope): для чата с ассистентом */
-    inspect(root) {
-        if (root && root.run) return _inspectScope(root);
-        const out = [];
-        if (typeof _components !== 'undefined') for (const [el, c] of _components) if (!root || root === document || (root.contains && root.contains(el))) out.push(_inspectScope(c.scope));
-        return out;
-    },
-    /** Граф зависимостей как Mermaid (graph LR) */
-    graph(root) {
-        const lines = ['graph LR'];
-        const seen = new Set();
-        const walk = (sc) => {
-            if (!sc || seen.has(sc)) return;
-            seen.add(sc);
-            const label = (sc.name || 'scope').replace(/"/g, '');
-            for (const d of sc._disposers) {
-                const node = d._node;
-                if (!node || !node._deps) continue;
-                for (const src of node._deps) lines.push(`  ${(src._name || 'signal').replace(/[^\w:.-]/g, '_')} --> ${String(node._name || 'effect').replace(/[^\w:.@-]/g, '_')}`);
-            }
-            if (sc.children) for (const c of sc.children) walk(c);
-            void label;
-        };
-        if (root && root.run) walk(root);
-        else if (typeof _components !== 'undefined') for (const [, c] of _components) walk(c.scope);
-        return lines.join('\n');
-    },
+    profile(on = true) { _profiling = !!on; if (on && !_profileMark && typeof _installProfileMark === 'function') _installProfileMark(); },
 };
 
-function _inspectScope(sc) {
-    const effects = [], signals = new Map();
-    const collect = (scope) => {
-        for (const d of scope._disposers) {
-            const node = d._node;
-            if (!node) continue;
-            const deps = (node._deps || []).map(x => x._name || 'signal');
-            effects.push({ name: node._name, deps, scope: scope.name });
-            for (const x of node._deps || []) if (x._name && !signals.has(x._name)) signals.set(x._name, _short(x.peek()));
-        }
-        if (scope.children) for (const c of scope.children) collect(c);
-    };
-    collect(sc);
-    return { scope: sc.name, el: sc.el || null, signals: [...signals].map(([name, value]) => ({ name, value })), effects, children: sc.children ? sc.children.size : 0 };
-}
 export { dev };
 
 const _seenWarnings = new Set();
@@ -507,27 +457,6 @@ class Effect {
 }
 Effect.prototype._isComputed = false;
 
-/** Dev-детектор зомби-привязок (E028): узел выпал из документа, а привязка продолжает его обновлять */
-function _zombieCheck(h, name) {
-    if (h._el.isConnected) { h._seen = true; h._detached = 0; return; }
-    if (h._seen && (h._detached = (h._detached || 0) + 1) >= 2 && !h._warnedZombie) {
-        h._warnedZombie = true;
-        _warn('E028', {
-            what: `binding "${name}" keeps updating <${(h._el.tagName || '').toLowerCase()}> that is no longer in the document.`,
-            why: 'The node was replaced or removed while its owner scope is alive — the binding, its subscription and the detached subtree leak until the owner is disposed.',
-            fix: 'Render the branch through show()/list(), or dispose the binding (const off = text(el, …); off()) before dropping the node.',
-        }, 'zombie:' + name);
-    }
-}
-
-/**
- * Побочный эффект — авто-трекинг зависимостей
- * fn может вернуть cleanup-функцию: она вызывается перед следующим запуском и при dispose.
- * Каждый запуск выполняется под scope, в котором effect был создан.
- * Возвращает dispose-функцию
- *
- * Dev warning если вызван вне scope
- */
 export function effect(fn, nameOrOpts) {
     const owner = _currentScope;
     let name = typeof nameOrOpts === 'string' ? nameOrOpts : (nameOrOpts && nameOrOpts.name) || null;
@@ -698,6 +627,7 @@ export function flush() {
 
 // ---- профилирование (Aegis.dev.profile(true)) и stats()
 let _profiling = false;
+let _profileMark = null;   // разметка Performance-панели — ставится dev.profile() (секция 3), ядро её не тянет
 const _stats = { flushes: 0, effectRuns: 0, maxRounds: 0, slow: [] };
 let _liveEffects = 0, _liveScopes = 0;
 
@@ -750,12 +680,7 @@ function _flush() {
         _stats.flushes++;
         _stats.effectRuns += total;
         if (rounds > _stats.maxRounds) _stats.maxRounds = rounds;
-        if (_profiling && total) {
-            const label = `aegis:flush · ${total} effects · ${rounds} rounds`;
-            const t1 = performance.now();
-            if (typeof console.timeStamp === 'function' && console.timeStamp.length >= 5) console.timeStamp(label, t0, t1, 'Aegis', 'Aegis', 'primary');
-            else if (typeof performance.measure === 'function') { try { performance.measure(label, { start: t0, end: t1, detail: { devtools: { dataType: 'track-entry', track: 'Aegis', color: 'primary', properties: [['rounds', rounds], ['effects', names.join(', ')]] } } }); } catch (e) { /* старый measure */ } }
-        }
+        if (_profiling && total && _profileMark) _profileMark(t0, total, rounds, names);
         if (rounds > 3 && total) _warn('E027', {
             what: `Flush took ${rounds} rounds — effects keep writing signals other effects depend on.`,
             why: 'Each round is an effect reacting to a write from the previous round (ping-pong).',
@@ -763,18 +688,6 @@ function _flush() {
         }, 'rounds');
     }
     if (error) throw error;
-}
-
-/** Счётчики движка (dev): flushes, effectRuns, maxRounds, slow[], scopes, effects, components, caches */
-export function stats() {
-    return {
-        flushes: _stats.flushes, effectRuns: _stats.effectRuns, maxRounds: _stats.maxRounds, slow: _stats.slow.slice(),
-        scopes: _liveScopes, effects: _liveEffects,
-        components: typeof _components !== 'undefined' ? _components.size : 0,
-        resourceCache: typeof _resourceCache !== 'undefined' ? _resourceCache.size : 0,
-        cssCache: typeof _cssCache !== 'undefined' ? _cssCache.size : 0,
-        queued: _queue.length,
-    };
 }
 
 

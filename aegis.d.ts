@@ -216,6 +216,7 @@ export function cssVars(el: HTMLElement | SVGElement, vars: Record<string, React
  * Toggle multiple CSS classes via a map { className: signal/fn/bool }.
  * @returns cleanup function that disposes all class effects
  */
+/** @deprecated Use `cls(el, { active: sig })` — same object form, diffs only its own classes. */
 export function clsMap(el: Element, map: Record<string, Reactive<unknown>>): () => void;
 
 /**
@@ -633,6 +634,7 @@ export function watch<T>(
  *       add(text) { this.items = [...this.items, { id: Date.now(), text, done: false }]; },
  *   });
  */
+/** @deprecated Use `reactive(obj)` — getters become computeds, methods become batched actions, plus `$patch`/`$subscribe`/`$snapshot`/`$reset`. `store()` = `reactive(obj, { shallow: true })`. */
 export function store<T extends object>(definition: T): T & {
     readonly $signals: Record<string, Signal<unknown>>;
     $reset(): void;
@@ -641,6 +643,7 @@ export function store<T extends object>(definition: T): T & {
 // ── Cached Resource (SWR) ──────────────────────────────────────
 
 /** = resource(source, { cache: true, ...opts }) */
+/** @deprecated Use `resource(url, { cache: true, staleTime })`. */
 export function cachedResource<T = unknown>(source: string | (() => string), opts?: ResourceOptions<T> & CacheOptions): ResourceResult<T>;
 
 /** Прогреть кэш без подписчиков (hover, приближение к viewport); данные доступны resource(url, { cache: true }) */
@@ -831,6 +834,7 @@ export interface ComponentContext<E extends Element = HTMLElement> {
 /** Результат component(): если setup вернул шаблон (Node) — он вставлен в el, наружу отдаётся { el, destroy } */
 export type ComponentResult<R> = R extends Node ? { el: Element; destroy(): void } : R;
 
+/** @deprecated Use `mount(el, Component)` — the same setup contract, accepts an element or a selector. `component()` stays as an alias. */
 export function component<E extends Element = HTMLElement, R = void>(
     el: E,
     setup: (ctx: ComponentContext<E>) => R
@@ -869,6 +873,7 @@ export type PropType = NumberConstructor | BooleanConstructor | StringConstructo
  * data-* передаются строками (JSON-литералы парсятся); types объявляет приведение: { count: Number, on: Boolean, tags: JSON }.
  * JSON-блок <script type="application/json"> внутри острова (или data-aegis-props="#id") → data.props и поля data.
  */
+/** Low-level positional form. Prefer `island(name, Component, { types })`; keep `register()` for `{ load }` (lazy island modules). */
 export function register<D = Record<string, unknown>>(
     name: string,
     setup: IslandSetup<D> | { load: () => Promise<IslandSetup<D> | { default: IslandSetup<D> }> },
@@ -1037,6 +1042,7 @@ export interface ElementDefinition<P extends Record<string, PropDefinition> = Re
 }
 
 /** tagName должен содержать дефис (иначе DOMException в рантайме — и ошибка типов здесь) */
+/** @deprecated Use `element(tag, Component, { props })` — the same component function as islands and mount(). `defineElement()` stays as the low-level form. */
 export function defineElement<P extends Record<string, PropDefinition>>(tagName: `${string}-${string}`, def: ElementDefinition<P>): typeof HTMLElement;
 
 // ── Anchor Positioning ─────────────────────────────────────────
@@ -1161,6 +1167,7 @@ export function virtualScroll<T>(parent: Element, items: T[] | Signal<T[]> | Rea
 // ── Offline Resource ───────────────────────────────────────────
 
 /** = resource(source, { offline: true, ...opts }) */
+/** @deprecated Use `resource(url, { offline: true })`. */
 export function offlineResource<T = unknown>(source: string | (() => string), opts?: ResourceOptions<T> & OfflineOptions): OfflineResourceResult<T>;
 
 // ── Server HTML ────────────────────────────────────────────────
