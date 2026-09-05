@@ -35,7 +35,7 @@
         resource, watch, store, portal, transition, errorBoundary, ref,
         reactive, isReactive,
         form, required, minLen, maxLen, emailRule, matches,
-        wireForm, cachedResource, invalidate, seed, seedFrom, attach, clone, expose, getOwner, runWithOwner,
+        wireForm, cachedResource, invalidate, seed, seedFrom, attach, clone, expose, getOwner, runWithOwner, configure, request, api, HttpError, mutation, streamResource, settled, prefetch, infiniteResource,
         spring, flip, animate,
         trap, roving, announce,
         css, adoptStyles, scopedStyle,
@@ -1186,6 +1186,184 @@
         const A = expose();
         assert('expose(): ставит глобал и возвращает объект', window.Aegis === A && typeof A.signal === 'function' && typeof A.attach === 'function');
         delete window.Aegis;
+    })();
+
+    section('💎 #25 — configure() / request() / HttpError');
+
+    await (async () => {
+        const calls = [];
+        const restore = configure({
+            csrf: { header: 'X-Test-CSRF', token: () => 'tok-1' },
+            headers: { 'X-App': 'aegis' },
+            fetch: async (url, init) => {
+                calls.push({ url, init });
+                if (url.includes('/404')) return new Response(JSON.stringify({ errors: { name: 'bad' } }), { status: 404, headers: { 'Content-Type': 'application/json' } });
+                if (url.includes('/slow')) return new Promise((res, rej) => { init.signal?.addEventListener('abort', () => rej(init.signal.reason)); });
+                if (url.includes('/text')) return new Response('{"looks":"json"}', { status: 200, headers: { 'Content-Type': 'text/plain' } });
+                return new Response(JSON.stringify({ ok: true, body: init.body ? JSON.parse(init.body) : null }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+            },
+        });
+        const r = await api.post('/api/todos', { text: 'x' }, { query: { a: 1 } });
+        const c = calls[0];
+        assert('request: JSON-тело, Content-Type, query', r.body.text === 'x' && c.url === '/api/todos?a=1' && c.init.headers.get('content-type') === 'application/json');
+        assert('request: CSRF-заголовок на POST same-origin', c.init.headers.get('x-test-csrf') === 'tok-1' && c.init.headers.get('x-app') === 'aegis');
+        await api.get('/api/todos');
+        assert('request: без CSRF на GET', !calls[1].init.headers.has('x-test-csrf'));
+        let err = null;
+        try { await api.get('/api/404'); } catch (e) { err = e; }
+        assert('request: HttpError с разобранным телом', err instanceof HttpError && err.status === 404 && err.data.errors.name === 'bad');
+        let terr = null;
+        try { await request('/api/slow', { timeout: 30 }); } catch (e) { terr = e; }
+        assert('request: timeout → TimeoutError', terr?.name === 'TimeoutError');
+        const ac = new AbortController();
+        const p = request('/api/slow', { signal: ac.signal }).catch(e => e);
+        ac.abort();
+        assert('request: внешний AbortController уважается', (await p)?.name === 'AbortError');
+        const t = await api.get('/api/text');
+        assert('request: text/plain отдаётся строкой', typeof t === 'string');
+
+        const scope = createScope();
+        let gf;
+        scope.run(() => { gf = guardedFetch(); });
+        const ac2 = new AbortController();
+        const gp = gf('/api/slow', { signal: ac2.signal });
+        ac2.abort();
+        assert('guardedFetch: пользовательский signal не теряется', (await gp) === undefined);
+        scope.dispose();
+        configure({ csrf: null, fetch: null });
+    })();
+
+    section('💎 #29 — единый resource(): контракт, loader, keepPrevious, settled()');
+
+    await (async () => {
+        const seen = [];
+        const fetcher = async (url, { signal } = {}) => { seen.push(url); await new Promise(r => setTimeout(r, 5)); return { url, items: [1, 2] }; };
+        const scope = createScope();
+        let plain, cached, viaLoader, page = signal(1);
+        scope.run(() => {
+            plain = resource('/r/plain', { fetcher });
+            cached = resource(() => `/r/page/${page.value}`, { cache: true, staleTime: 60000, fetcher });
+            viaLoader = resource({ params: () => page.value, loader: async ({ params, signal }) => ({ p: params }) });
+        });
+        assert('resource: контракт', ['loading', 'validating', 'stale', 'status', 'error', 'key', 'refresh', 'mutate', 'abort', 'ready', 'dispose'].every(k => k in plain) && plain.status.value === 'pending' && plain.loading.value === true);
+        await settled();
+        assert('settled(): все запросы завершены', plain.status.value === 'success' && plain.data.value.url === '/r/plain' && viaLoader.data.value.p === 1);
+        const before = plain.data.value;
+        await plain.refresh();
+        assert('resource: refresh поверх данных → validating, structural sharing сохраняет identity', plain.data.value === before);
+        const rp = plain.refresh();
+        const wasValidating = plain.validating.peek() === true && plain.loading.peek() === false;
+        await rp;
+        assert('resource: validating во время refresh, не loading', wasValidating);
+
+        assert('resource({cache}): первая страница', cached.data.value.url === '/r/page/1' && cached.key.value === '/r/page/1');
+        page.value = 2;
+        assert('resource({cache}): keepPrevious — старые данные и stale, пока грузится', cached.data.value.url === '/r/page/1' && cached.stale.value === true && cached.validating.value === true);
+        await settled();
+        assert('resource({cache}): новая страница пришла, stale снят', cached.data.value.url === '/r/page/2' && cached.stale.value === false);
+        assert('resource(loader): params реактивны', viaLoader.data.value.p === 2);
+        const ready = await cached.ready();
+        assert('ready(): отдаёт данные', ready.url === '/r/page/2');
+
+        let failing;
+        scope.run(() => { failing = resource('/r/fail', { fetcher: async () => { throw new HttpError(500, new Response(null, { status: 500 }), null); }, retry: 2 }); });
+        let rejected = null;
+        try { await failing.ready(); } catch (e) { rejected = e; }
+        assert('resource: retry исчерпан → status error, ready() reject', failing.status.value === 'error' && rejected?.status === 500);
+        scope.dispose();
+    })();
+
+    section('💎 #56 — mutation()');
+
+    await (async () => {
+        const scope = createScope();
+        let todos, add, fail;
+        let posts = 0;
+        scope.run(() => {
+            todos = resource('/m/todos', { fetcher: async () => [{ id: 1 }], initial: [] });
+            add = mutation(async (text, { signal }) => { posts++; await new Promise(r => setTimeout(r, 10)); return { id: 2, text }; }, {
+                resources: [todos],
+                optimistic: (text) => todos.mutate(l => [...l, { id: 'tmp', text }]),
+            });
+            fail = mutation(async () => { throw new Error('boom'); }, { resources: [todos], optimistic: () => todos.mutate(l => [...l, { id: 'x' }]) });
+        });
+        await settled();
+        const p1 = add('a'); const p2 = add('b');
+        assert('mutation: optimistic + pending + double-submit guard', todos.data.value.length === 2 && add.pending.value === true && posts === 1);
+        await p1; await p2;
+        assert('mutation: data результата, pending снят', add.data.value.text === 'a' && add.pending.value === false);
+        await fail();
+        assert('mutation: ошибка → откат и error, без throw', todos.data.value.length === 2 && fail.error.value?.message === 'boom');
+        let thrown = null;
+        try { await fail.run(); } catch (e) { thrown = e; }
+        assert('mutation.run(): бросает', thrown?.message === 'boom');
+        scope.dispose();
+    })();
+
+    section('💎 #57 — streamResource()');
+
+    await (async () => {
+        const scope = createScope();
+        const enc = new TextEncoder();
+        configure({ fetch: async () => new Response(new ReadableStream({
+            async start(ctrl) {
+                ctrl.enqueue(enc.encode('{"n":1}\n{"n":'));
+                await new Promise(r => setTimeout(r, 5));
+                ctrl.enqueue(enc.encode('2}\n{"n":3}'));
+                ctrl.close();
+            },
+        }), { status: 200, headers: { 'Content-Type': 'application/x-ndjson' } }) });
+        let rows;
+        scope.run(() => { rows = streamResource('/stream'); });
+        await settled();
+        await wait(30);
+        assert('streamResource: NDJSON по границам чанков', rows.data.value.map(r => r.n).join(',') === '1,2,3' && rows.done.value === true && rows.validating.value === false);
+        configure({ fetch: null });
+        scope.dispose();
+    })();
+
+    section('💎 #111/#115 — prefetch, infiniteResource');
+
+    await (async () => {
+        const seen = [];
+        const fetcher = async (url) => { seen.push(url); const m = url.match(/after=(\d+)/); const c = m ? +m[1] : 0; return { items: [c + 1, c + 2], next: c < 2 ? c + 2 : null }; };
+        await prefetch('/pf/x', { fetcher });
+        const scope = createScope();
+        let r, feed;
+        scope.run(() => {
+            r = resource('/pf/x', { cache: true, staleTime: 60000, fetcher });
+            feed = infiniteResource(cursor => cursor ? `/feed?after=${cursor}` : '/feed', { fetcher });
+        });
+        assert('prefetch: данные уже в кэше, запрос не повторяется', r.data.value.items[0] === 1 && seen.filter(u => u === '/pf/x').length === 1);
+        await settled();
+        assert('infiniteResource: первая страница', feed.data.value.join(',') === '1,2' && feed.hasMore.value === true);
+        feed.loadMore(); feed.loadMore();
+        await settled();
+        assert('infiniteResource: loadMore дедуплицирован, страницы копятся', feed.data.value.join(',') === '1,2,3,4' && seen.filter(u => u.startsWith('/feed')).length === 2);
+        await feed.loadMore();
+        assert('infiniteResource: конец курсора', feed.hasMore.value === false && feed.pages.value.length === 2);
+        scope.dispose();
+    })();
+
+    section('💎 #98 — ленивые острова');
+
+    await (async () => {
+        let loads = 0;
+        register('lazy-island', { load: async () => { loads++; await new Promise(r => setTimeout(r, 5)); return (el, data, { html }) => html`<b>${data.n}</b>`; } });
+        const root = document.createElement('div');
+        root.innerHTML = '<div data-aegis="lazy-island" data-n="1"></div><div data-aegis="lazy-island" data-n="2"></div>';
+        sandbox.appendChild(root);
+        const hs = hydrate(root);
+        assert('lazy: до import() остров pending', hs.length === 2 && hs[0].api === undefined && hs[0].el.dataset.aegisState === 'pending');
+        await hs.ready;
+        assert('lazy: после загрузки смонтированы оба, import один', root.querySelectorAll('b').length === 2 && loads === 1 && hs[1].el.hasAttribute('data-aegis-ready'));
+
+        const errRoot = document.createElement('div');
+        let caught = null;
+        const api = errorBoundary(errRoot, async () => { await wait(1); throw new Error('async crash'); }, (e) => { caught = e.message; });
+        await api;
+        assert('errorBoundary: ловит async-ошибку setup', caught === 'async crash');
+        sandbox.innerHTML = '';
     })();
 
     section('component() & destroy()');

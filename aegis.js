@@ -332,6 +332,14 @@ class Effect {
         try {
             const r = this._fn();
             if (typeof r === 'function') this._cleanup = r;
+            else if (r && typeof r.then === 'function' && !this._warnedAsync) {
+                this._warnedAsync = true;
+                _warn('E016', {
+                    what: `effect "${this._name}" returned a Promise.`,
+                    why: 'Signals read after the first await are not tracked, and the cleanup return value is lost.',
+                    fix: 'Move async work into resource()/mutation()/watch(); keep effect bodies synchronous.',
+                });
+            }
         } finally {
             _tracking = prevT;
             _currentScope = prevS;

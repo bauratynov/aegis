@@ -209,31 +209,218 @@ export function nextTick(fn?: () => void): Promise<void>;
  * @param scope — optional Scope for auto-abort on dispose (falls back to current scope)
  * @returns an async fetch function: (url, opts?) => Promise<json | text | undefined>
  */
-export function guardedFetch(scope?: Scope): (url: string, opts?: RequestInit) => Promise<any>;
+export function guardedFetch(scope?: Scope): (url: string, opts?: RequestOptions) => Promise<any>;
+
+// ── HTTP layer ─────────────────────────────────────────────────
+
+/** Ошибка HTTP-ответа: статус, Response и разобранное тело (e.data.errors из Laravel/Django) */
+export class HttpError extends Error {
+    name: 'HttpError';
+    status: number;
+    response: Response;
+    data: unknown;
+    constructor(status: number, response: Response, data: unknown);
+}
+
+export type CsrfPreset = 'django' | 'rails' | 'laravel' | 'go';
+export interface CsrfConfig {
+    header: string;
+    cookie?: string;
+    meta?: string;
+    token?: () => string;
+    /** decodeURIComponent значения cookie (Laravel) */
+    decode?: boolean;
+}
+export interface AegisConfig {
+    /** пресет или своя схема; null — выключить; без вызова — автодетект из <meta name="aegis-csrf"> / <meta name="csrf-token"> */
+    csrf?: CsrfPreset | CsrfConfig | null;
+    /** заголовки по умолчанию (default: X-Requested-With: XMLHttpRequest) */
+    headers?: Record<string, string>;
+    baseURL?: string;
+    /** мс; 0 — без таймаута */
+    timeout?: number;
+    /** подмена fetch: прокси, логирование, моки */
+    fetch?: (url: string, init: RequestInit) => Promise<Response>;
+    onError?: (error: HttpError, info: { url: string; status: number }) => void;
+    /** после PRG-редиректа формы: 'assign' (default) — location.assign(response.url); 'none'; или свой обработчик */
+    onRedirect?: 'assign' | 'none' | ((response: Response) => void);
+}
+/** Настройка HTTP-слоя под свой бэкенд — одна строка на проект: configure({ csrf: 'django' }) */
+export function configure(opts: AegisConfig): AegisConfig;
+
+export interface RequestOptions extends Omit<RequestInit, 'body' | 'method' | 'headers'> {
+    method?: string;
+    /** объект → JSON + Content-Type; FormData/Blob/string — как есть */
+    body?: unknown;
+    query?: Record<string, string | number | boolean> | URLSearchParams;
+    headers?: HeadersInit;
+    /** мс; default configure().timeout */
+    timeout?: number;
+    /** вернуть Response без разбора тела */
+    raw?: boolean;
+}
+/**
+ * Единый HTTP-запрос: baseURL, query, JSON-тело, CSRF для unsafe same-origin, timeout, HttpError с разобранным телом.
+ */
+export function request<T = unknown>(url: string, init?: RequestOptions & { raw?: false }): Promise<T>;
+export function request(url: string, init: RequestOptions & { raw: true }): Promise<Response>;
+/** Сахар над request() */
+export const api: {
+    get<T = unknown>(url: string, opts?: RequestOptions): Promise<T>;
+    post<T = unknown>(url: string, body?: unknown, opts?: RequestOptions): Promise<T>;
+    put<T = unknown>(url: string, body?: unknown, opts?: RequestOptions): Promise<T>;
+    patch<T = unknown>(url: string, body?: unknown, opts?: RequestOptions): Promise<T>;
+    delete<T = unknown>(url: string, opts?: RequestOptions): Promise<T>;
+};
+export type Fetcher = (url: string, opts: { signal?: AbortSignal; method?: string; body?: unknown }) => Promise<unknown>;
+/** Точка подмены для всего движка: defaults.fetcher = mock — resource/cache/offline/guardedFetch идут через него */
+export const defaults: { fetcher: Fetcher; motion: 'auto' | 'reduce' | 'none' };
+
+export interface RetryOptions {
+    retries?: number;
+    base?: number;
+    max?: number;
+    signal?: AbortSignal;
+    shouldRetry?: (error: unknown, attempt: number) => boolean;
+}
+/** Повтор с exponential backoff и full jitter; уважает Retry-After; AbortError не повторяется */
+export function withRetry<T>(fn: (attempt: number) => Promise<T>, opts?: RetryOptions): Promise<T>;
 
 export function debounced<T extends (...args: any[]) => any>(fn: T, ms: number): T & { cancel(): void };
 export function throttled<T extends (...args: any[]) => any>(fn: T, ms: number): T;
-export function poll(fn: () => Promise<void> | void, ms: number): () => void;
+/** Polling с auto-stop при dispose. В фоновой вкладке спит (background: true — не спать) */
+export function poll(fn: () => Promise<void> | void, ms: number, opts?: { background?: boolean }): () => void;
 
 // ── Data ───────────────────────────────────────────────────────
 
+export type ResourceStatus = 'idle' | 'pending' | 'success' | 'error';
+
+/** Единый контракт resource() / resource({ cache }) / resource({ offline }) / streamResource / infiniteResource */
 export interface ResourceResult<T> {
-    data: Signal<T | null>;
-    loading: Signal<boolean>;
-    error: Signal<Error | null>;
-    refresh(): Promise<void> | void;
-    /** Optimistic update: set data immediately */
+    data: ReadonlySignal<T | null> | Signal<T | null>;
+    /** идёт запрос и данных ещё нет (скелетон один раз) */
+    loading: ReadonlySignal<boolean>;
+    /** идёт запрос поверх данных (dimming, не мигание) */
+    validating: ReadonlySignal<boolean>;
+    /** keepPrevious: показаны данные предыдущего ключа, пока грузятся новые */
+    stale: ReadonlySignal<boolean>;
+    status: ReadonlySignal<ResourceStatus>;
+    error: ReadonlySignal<HttpError | Error | null>;
+    /** текущий URL / сериализованные params */
+    key: ReadonlySignal<string | null>;
+    refresh(): Promise<void>;
+    /** Optimistic update: локальная запись (для offline — ещё и в IndexedDB) */
     mutate(fnOrValue: T | ((prev: T | null) => T)): void;
-    /** Abort inflight request */
     abort(): void;
+    /** последний запрос этого ресурса (для await в тестах) */
+    readonly promise: Promise<void> | null;
+    /** дождаться данных: resolve(data) или reject(error) */
+    ready(): Promise<T | null>;
+    dispose(): void;
 }
 
-export function resource<T = unknown>(source: string | (() => string), opts?: {
+export interface ResourceOptions<T> {
     initial?: T;
     transform?: (data: unknown) => T;
-    fetcher?: (url: string, opts?: any) => Promise<unknown>;
+    fetcher?: Fetcher;
     immediate?: boolean;
-}): ResourceResult<T>;
+    /** structural sharing ответа: неизменённые части сохраняют identity (default true) */
+    share?: boolean;
+    /** повторы с backoff: true → 3, число, или предикат (err, attempt) => boolean; default 0 */
+    retry?: boolean | number | ((error: unknown, attempt: number) => boolean);
+    /** перезапрос по событиям — только opt-in */
+    refetch?: { focus?: boolean; reconnect?: boolean; interval?: number };
+}
+export interface CacheOptions {
+    key?: string;
+    staleTime?: number;
+    cacheTime?: number;
+    /** держать старые данные при смене URL (default true для реактивного source) */
+    keepPrevious?: boolean;
+    /** default ['focus', 'reconnect']; [] — выключить */
+    revalidateOn?: Array<'focus' | 'reconnect'>;
+}
+export interface OfflineOptions {
+    dbName?: string;
+    storeName?: string;
+    staleTime?: number;
+    syncTag?: string;
+}
+export interface LoaderSource<P, T> {
+    params?: P | (() => P);
+    loader: (ctx: { params: P; signal: AbortSignal }) => Promise<T> | T;
+}
+export interface OfflineResourceResult<T> extends ResourceResult<T> {
+    online: ReadonlySignal<boolean>;
+    syncing: ReadonlySignal<boolean>;
+    /** сетевая мутация; офлайн или сетевая ошибка → в IndexedDB-очередь, отправка при online / Background Sync */
+    send(method: string, url: string, body?: unknown, opts?: { optimistic?: (current: T | null) => T }): Promise<unknown>;
+    /** совместимость: mutate('POST', url, body, optimistic) === send(...) */
+    mutate(method: string, url: string, body?: unknown, optimistic?: (current: T | null) => T): Promise<unknown>;
+    mutate(fnOrValue: T | ((prev: T | null) => T)): void;
+}
+
+/**
+ * Реактивная загрузка данных — один примитив:
+ *   resource('/api/users')                                 GET
+ *   resource(() => `/api/users?page=${page.value}`)       перезапрос при изменении сигналов
+ *   resource({ params: () => uid.value, loader: async ({ params, signal }) => … })
+ *   resource(url, { cache: true, staleTime: 30000 })       SWR-кэш (общий по ключу)
+ *   resource(url, { offline: true })                       IndexedDB + очередь мутаций
+ */
+export function resource<T = unknown>(source: string | (() => string | null | false), opts: ResourceOptions<T> & { initial: T } & { cache?: boolean | CacheOptions; offline?: false }): ResourceResult<T> & { data: Signal<T> };
+export function resource<T = unknown>(source: string | (() => string | null | false), opts: ResourceOptions<T> & { offline: true | OfflineOptions }): OfflineResourceResult<T>;
+export function resource<T = unknown>(source: string | (() => string | null | false), opts?: ResourceOptions<T> & { cache?: boolean | CacheOptions; offline?: false }): ResourceResult<T>;
+export function resource<T = unknown, P = unknown>(source: LoaderSource<P, T>, opts?: ResourceOptions<T>): ResourceResult<T>;
+
+/** Дождаться завершения всех запросов resource()/mutation()/guardedFetch — вместо sleep(50) в тестах */
+export function settled(): Promise<void>;
+
+export interface MutationOptions<A extends unknown[]> {
+    /** ресурсы, чьи data снимаются перед optimistic и откатываются при ошибке */
+    resources?: Array<{ data: { peek(): any }; mutate(v: any): void }>;
+    optimistic?: (...args: A) => void;
+    invalidates?: string | ((key: string) => boolean) | Array<string | ((key: string) => boolean)>;
+    /** 'ignore' (default, double-submit guard) | 'queue' | 'latest' | 'parallel' */
+    concurrent?: 'ignore' | 'queue' | 'latest' | 'parallel';
+    onSuccess?: (result: any, ...args: A) => void;
+    onError?: (error: unknown, ...args: A) => void;
+}
+export interface Mutation<A extends unknown[], R> {
+    /** запуск; ошибка не бросается — она в .error (run() бросает) */
+    (...args: A): Promise<R | undefined>;
+    run(...args: A): Promise<R | undefined>;
+    pending: ReadonlySignal<boolean>;
+    error: ReadonlySignal<unknown>;
+    data: ReadonlySignal<R | null>;
+    abort(): void;
+}
+/**
+ * Мутация с pending, double-submit guard, optimistic + rollback, invalidate.
+ *   const addTodo = mutation((text, { signal }) => api.post('/api/todos', { text }, { signal }), { resources: [todos], optimistic: … });
+ */
+export function mutation<A extends unknown[], R>(fn: (...args: [...A, { signal: AbortSignal }]) => Promise<R> | R, opts?: MutationOptions<A>): Mutation<A, R>;
+
+export interface StreamOptions<T> {
+    method?: string;
+    body?: unknown;
+    headers?: HeadersInit;
+    /** 'ndjson' (default: data — массив строк JSON), 'text' (data — строка) или парсер строки */
+    parse?: 'ndjson' | 'text' | ((line: string) => T);
+    initial?: unknown;
+    reduce?: (acc: any, item: T) => any;
+    immediate?: boolean;
+}
+/** Стриминг ответа в растущий сигнал; done — сигнал завершения */
+export function streamResource<T = unknown>(source: string | (() => string | null), opts?: StreamOptions<T>): ResourceResult<any> & { done: ReadonlySignal<boolean> };
+
+/** Server-Sent Events поверх EventSource: event "aegis-signals" пишет JSON в сигналы; закрывается при dispose scope */
+export function sse(url: string, opts?: {
+    signals?: Record<string, Signal<any>>;
+    events?: Record<string, (data: any, e: MessageEvent) => void>;
+    onMessage?: (data: any, e: MessageEvent) => void;
+    withCredentials?: boolean;
+}): { status: ReadonlySignal<'connecting' | 'open' | 'closed'>; close(): void; source: EventSource };
 
 /**
  * Watch a signal/computed for changes.
@@ -275,24 +462,22 @@ export function store<T extends object>(definition: T): T & {
 
 // ── Cached Resource (SWR) ──────────────────────────────────────
 
-export interface CachedResourceResult<T> {
-    data: Signal<T | null>;
-    loading: Signal<boolean>;
-    validating: Signal<boolean>;
-    error: Signal<Error | null>;
-    refresh(): Promise<void> | void;
-    mutate(fnOrValue: T | ((prev: T | null) => T)): void;
-}
+/** = resource(source, { cache: true, ...opts }) */
+export function cachedResource<T = unknown>(source: string | (() => string), opts?: ResourceOptions<T> & CacheOptions): ResourceResult<T>;
 
-export function cachedResource<T = unknown>(source: string | (() => string), opts?: {
-    key?: string;
-    initial?: T;
-    transform?: (data: unknown) => T;
-    fetcher?: (url: string, opts?: any) => Promise<unknown>;
+/** Прогреть кэш без подписчиков (hover, приближение к viewport); данные доступны resource(url, { cache: true }) */
+export function prefetch(url: string, opts?: { key?: string; staleTime?: number; cacheTime?: number; fetcher?: Fetcher; transform?: (d: unknown) => unknown }): Promise<void>;
+/** Прогрев по намерению: hover (default) | tap | visible; при saveData/2g — только tap. Возвращает dispose */
+export function prefetchOn(el: Element, urlOrFn: string | ((target: Element) => string | null | undefined), opts?: { on?: 'hover' | 'tap' | 'visible'; rootMargin?: string; staleTime?: number }): () => void;
+
+/** Курсорная пагинация: страницы копятся, loadMore дедуплицируется */
+export function infiniteResource<P = unknown, T = unknown>(urlFor: (cursor: unknown) => string | null, opts?: {
+    getNext?: (page: P) => unknown;
+    select?: (page: P) => T[];
+    fetcher?: Fetcher;
     immediate?: boolean;
-    staleTime?: number;
-    cacheTime?: number;
-}): CachedResourceResult<T>;
+    retry?: boolean | number;
+}): ResourceResult<T[]> & { pages: ReadonlySignal<P[]>; hasMore: ReadonlySignal<boolean>; loadMore(): Promise<void>; reset(): Promise<void> };
 
 export function invalidate(keyOrPredicate: string | ((key: string) => boolean)): void;
 
@@ -416,9 +601,14 @@ export function mount<R = void>(
 ): ComponentResult<R> | undefined;
 
 /** D — форма data-* атрибутов элемента (JSON-значения парсятся); каст непроверяемый, как defineProps<T>() */
+export type IslandSetup<D = Record<string, unknown>> = (el: HTMLElement, data: D, ctx: ComponentContext<HTMLElement>) => void | object | Node | Promise<void | object | Node>;
+/**
+ * Зарегистрировать компонент по имени; { load } — код острова грузится import()-ом при монтировании
+ * (для visible — за 400px до viewport). Без регистрации работает data-aegis-src="/js/islands/x.js".
+ */
 export function register<D = Record<string, unknown>>(
     name: string,
-    setup: (el: HTMLElement, data: D, ctx: ComponentContext<HTMLElement>) => void | object | Node
+    setup: IslandSetup<D> | { load: () => Promise<IslandSetup<D> | { default: IslandSetup<D> }> }
 ): void;
 export interface HydrateOptions {
     /** MutationObserver: вставленные острова оживают, удалённые уничтожаются (htmx/Turbo/jQuery) */
@@ -602,25 +792,8 @@ export function virtualScroll<T>(parent: Element, items: T[] | Signal<T[]> | Rea
 
 // ── Offline Resource ───────────────────────────────────────────
 
-export interface OfflineResourceResult<T> {
-    data: Signal<T | null>;
-    loading: Signal<boolean>;
-    error: Signal<Error | null>;
-    online: Signal<boolean>;
-    syncing: Signal<boolean>;
-    refresh(): Promise<void>;
-    mutate(method: string, url: string, body: unknown, optimistic?: (current: T) => T): Promise<void>;
-    dispose(): void;
-}
-
-export function offlineResource<T = unknown>(source: string | (() => string), opts?: {
-    dbName?: string;
-    storeName?: string;
-    staleTime?: number;
-    transform?: (data: unknown) => T;
-    fetcher?: (url: string, opts?: any) => Promise<unknown>;
-    syncTag?: string;
-}): OfflineResourceResult<T>;
+/** = resource(source, { offline: true, ...opts }) */
+export function offlineResource<T = unknown>(source: string | (() => string), opts?: ResourceOptions<T> & OfflineOptions): OfflineResourceResult<T>;
 
 // ── i18n ───────────────────────────────────────────────────────
 
@@ -703,6 +876,19 @@ declare const Aegis: {
     mutate: typeof mutate;
     nextTick: typeof nextTick;
     guardedFetch: typeof guardedFetch;
+    configure: typeof configure;
+    request: typeof request;
+    api: typeof api;
+    HttpError: typeof HttpError;
+    defaults: typeof defaults;
+    withRetry: typeof withRetry;
+    mutation: typeof mutation;
+    streamResource: typeof streamResource;
+    sse: typeof sse;
+    settled: typeof settled;
+    prefetch: typeof prefetch;
+    prefetchOn: typeof prefetchOn;
+    infiniteResource: typeof infiniteResource;
     debounced: typeof debounced;
     throttled: typeof throttled;
     poll: typeof poll;
