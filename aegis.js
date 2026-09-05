@@ -53,6 +53,8 @@ const dev = {
     inspect(root) { return typeof _devTools === 'function' ? _devTools().inspect(root) : []; },
     /** Граф зависимостей как Mermaid (graph LR) */
     graph(root) { return typeof _devTools === 'function' ? _devTools().graph(root) : 'graph LR'; },
+    /** Панель инспектора в странице (aegis-devtools.js рядом с модулем): компоненты, сигналы, эффекты, stats, предупреждения */
+    panel() { return import(/* @vite-ignore */ new URL('./aegis-devtools.js', import.meta.url).href).then(m => m.open()); },
 };
 
 export { dev };

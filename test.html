@@ -42,8 +42,7 @@
         defineElement, anchor, router, command, virtualScroll,
         offlineResource,
         lazy, nextTick, i18n, uncloak, injectStyles,
-        VERSION
-    } from './aegis.js';
+        VERSION, mount } from './aegis.js';
 
     const results = document.getElementById('results');
     const sandbox = document.getElementById('sandbox');
@@ -2578,6 +2577,32 @@
         b.click();
         assert('delegate: без configure — прямой addEventListener', n === 1 && !b._aegisH);
         s2.dispose(); sandbox.innerHTML = '';
+    })();
+
+    section('dev.panel() — инспектор в странице');
+
+    await (async () => {
+        const host = document.createElement('div');
+        sandbox.appendChild(host);
+        const Comp = ({ signal, html, effect }) => { const n = signal(41, 'answer'); effect(() => { n.value; }, 'watch-answer'); return html`<b>${n}</b>`; };
+        const inst = mount(host, Comp);
+        const panel = await dev.panel();
+        assert('panel: хост в body с Shadow DOM, помечен data-aegis-ignore', panel.host.isConnected && panel.host.tagName === 'AEGIS-DEVTOOLS' && panel.shadow && panel.host.hasAttribute('data-aegis-ignore'));
+        const tree = panel.shadow.querySelector('.tree');
+        const items = [...tree.querySelectorAll('div')].filter(d => !d.classList.contains('empty'));
+        assert('panel: компоненты в дереве', items.length >= 1 && items.some(d => d.textContent.includes('component')));
+        const mine = items.find(d => d.textContent.includes('1s') || d.textContent.includes('answer'));
+        (mine || items[0]).click();
+        await wait(0);
+        const detail = panel.shadow.querySelector('.detail');
+        assert('panel: выбранный компонент показывает сигналы и эффекты', /answer/.test(detail.textContent) && /41/.test(detail.textContent) && /watch-answer/.test(detail.textContent));
+        const snap = dev.inspect();
+        const withRef = snap.flatMap(c => c.signals).find(sg => sg.name === 'answer');
+        assert('inspect(): ref не-перечислимый — JSON чистый, но сигнал доступен панели', withRef && isSignal(withRef.ref) && !JSON.stringify(withRef).includes('ref'));
+        panel.close();
+        assert('panel: close() убирает хост', !document.querySelector('aegis-devtools'));
+        if (inst && inst.destroy) inst.destroy();
+        sandbox.innerHTML = '';
     })();
 
     section('component() & destroy()');

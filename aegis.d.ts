@@ -72,7 +72,7 @@ export class AegisWarning extends Error { code: string; what: string; why: strin
 /** Подписка на предупреждения (dev-режим): warnings-as-assertions в тестах. Возвращает unsubscribe */
 export function onWarn(fn: (w: WarningInfo) => void): () => void;
 /** Управление dev-режимом: dev.enable() (localStorage + reload на проде), dev.disable(), dev.resetWarnings() */
-export interface ScopeInspection { scope: string | null; el: Element | null; signals: Array<{ name: string; value: string }>; effects: Array<{ name: string; deps: string[]; scope: string | null }>; children: number }
+export interface ScopeInspection { scope: string | null; el: Element | null; signals: Array<{ name: string; value: string; /** сам сигнал (не-перечислимое поле) */ readonly ref?: ReadonlySignal<unknown> }>; effects: Array<{ name: string; deps: string[]; scope: string | null }>; children: number }
 export const dev: {
     readonly on: boolean;
     enable(): void;
@@ -86,6 +86,8 @@ export const dev: {
     inspect(root?: Document | Element | Scope): ScopeInspection[] | ScopeInspection;
     /** Граф зависимостей как Mermaid */
     graph(root?: Scope): string;
+    /** Панель инспектора в странице (грузит aegis-devtools.js рядом с модулем); также ?aegis-devtools в URL */
+    panel(): Promise<{ host: HTMLElement; shadow: ShadowRoot; close(): void; highlight(el: Element | null): void }>;
 };
 /** Сбросить модульные синглтоны между тестами (компоненты, реестр, кэш ресурсов, live-region) */
 export function reset(opts?: { components?: boolean; cache?: boolean; registry?: boolean; dom?: boolean }): void;

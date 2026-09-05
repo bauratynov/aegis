@@ -12,6 +12,7 @@
     "aegis.core.js",
     "aegis.core.min.js",
     "aegis.d.ts",
+    "aegis-devtools.js",
     "aegis-test.js",
     "aegis-test.d.ts",
     "build.mjs"
@@ -67,6 +68,9 @@
     "./core": {
       "types": "./aegis.d.ts",
       "default": "./aegis.core.js"
+    },
+    "./devtools": {
+      "default": "./aegis-devtools.js"
     },
     "./test": {
       "types": "./aegis-test.d.ts",
