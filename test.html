@@ -2486,6 +2486,51 @@
         scope.dispose();
     })();
 
+    section('aegis/test — render, fire, waitFor, mockFetch, cleanup');
+
+    await (async () => {
+        const T = await import('./aegis-test.js');
+        const Counter = ({ props, signal, html }) => { const n = signal(props.start); return html`<button class="c" @click=${() => n.value++}>${n}</button>`; };
+        const t = T.render(Counter, { props: { start: 5 } });
+        assert('test: render монтирует в document.body, find/text работают', t.el.isConnected && t.find('button.c').textContent === '5' && t.text() === '5');
+        T.fire.click(t.find('button'));
+        assert('test: fire.click — реальное событие, сигнал обновился', t.text() === '6');
+        let threw = null;
+        try { t.find('.nope'); } catch (e) { threw = e.message; }
+        assert('test: find() бросает читаемую ошибку', /nothing matches ".nope"/.test(threw));
+
+        const Search = ({ signal, html, when, list }) => {
+            const q = signal('');
+            const hits = resource(() => q.value ? `/api/search?q=${q.value}` : null);
+            return html`<input @input=${(e) => { q.value = e.target.value; }}>${when(hits, { data: (rows, rs) => html`<ul>${list(rs, (x) => html`<li>${x}</li>`, { key: (x) => x })}</ul>` })}`;
+        };
+        const net = T.mockFetch({ 'GET /api/search': (body, { query }) => ['a-' + query.q, 'b-' + query.q], 'POST /api/items/:id': (body, { params }) => ({ status: 201, body: { id: params.id, ...body } }) });
+        const s = T.render(Search);
+        T.fire.input(s.find('input'), 'zz');
+        await T.waitFor(() => s.findAll('li').length === 2);
+        assert('test: mockFetch + waitFor — ресурс получил данные из таблицы маршрутов', s.text() === 'a-zzb-zz' && net.calls.length === 1 && net.last().method === 'GET');
+        const created = await api.post('/api/items/7', { name: 'x' });
+        assert('test: mockFetch — params, body и статус 201', created.id === '7' && created.name === 'x' && net.last().body.name === 'x');
+        let status = null;
+        try { await api.get('/api/unknown'); } catch (e) { status = e.status; }
+        assert('test: mockFetch — нет маршрута → 404 HttpError', status === 404);
+
+        const f = T.render(({ html }) => html`<form @submit.prevent=${() => { f.el.dataset.sent = '1'; }}><input name="a" required></form>`);
+        T.fire.submit(f.find('form'));
+        assert('test: fire.submit — requestSubmit с валидацией (пустое required поле блокирует)', !f.el.dataset.sent);
+        T.fire.input(f.find('input'), 'v');
+        T.fire.submit(f.find('input'));
+        assert('test: fire.submit — после заполнения submit-обработчик вызван', f.el.dataset.sent === '1');
+
+        const r = await T.withScope(() => { const a = signal(1); const b = computed(() => a.value * 2); a.value = 5; return b.value; });
+        assert('test: withScope — сигналы вне компонента', r === 10);
+
+        const before = document.querySelectorAll('[data-aegis-test]').length;
+        T.cleanup();
+        assert('test: cleanup — контейнеры сняты, fetch восстановлен', before === 3 && document.querySelectorAll('[data-aegis-test]').length === 0 && !t.el.isConnected);
+        defaults.motion = true;   // сьют закрепляет motion
+    })();
+
     section('component() & destroy()');
 
     (() => {

@@ -92,6 +92,18 @@ router({
     '/posts/:slug/comments/:cid': { handler: (params) => { const c: string = params.cid; void c; } },
 });
 
+// ── aegis/test — render / fire / waitFor / mockFetch
+import { render, fire, waitFor, mockFetch, cleanup, withScope } from './aegis-test.js';
+const h = render(({ props, html }) => html`<b>${props.n}</b>`, { props: { n: 1 } });
+const b: HTMLElement = h.find('b'); void b;
+fire.click(h.find('b')); fire.input(h.find<HTMLInputElement>('input'), 'x'); fire.key(h.el, 'Enter', { ctrlKey: true });
+await waitFor(() => h.text() === '1');
+const net = mockFetch({ 'GET /api/u/:id': (_body, { params }) => ({ id: params.id }), 'POST /api/u': (body) => ({ status: 201, body }) }, { latency: 10 });
+net.calls[0]?.method; net.restore();
+const ten: number = await withScope(() => 10); void ten;
+cleanup();
+h.unmount();
+
 // ── reactive() — getters become computeds, methods actions, $-API
 const state = reactive({ items: [1, 2], get total() { return this.items.length; }, add(n: number) { this.items.push(n); } });
 const total: number = state.total; void total;

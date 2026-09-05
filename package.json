@@ -12,6 +12,8 @@
     "aegis.core.js",
     "aegis.core.min.js",
     "aegis.d.ts",
+    "aegis-test.js",
+    "aegis-test.d.ts",
     "build.mjs"
   ],
   "license": "MIT",
@@ -65,6 +67,10 @@
     "./core": {
       "types": "./aegis.d.ts",
       "default": "./aegis.core.js"
+    },
+    "./test": {
+      "types": "./aegis-test.d.ts",
+      "default": "./aegis-test.js"
     },
     "./core/min": {
       "types": "./aegis.d.ts",

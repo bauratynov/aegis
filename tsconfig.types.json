@@ -10,5 +10,5 @@
     "skipLibCheck": false,
     "allowImportingTsExtensions": true
   },
-  "files": ["aegis.d.ts", "test-types.ts"]
+  "files": ["aegis.d.ts", "aegis-test.d.ts", "test-types.ts"]
 }
