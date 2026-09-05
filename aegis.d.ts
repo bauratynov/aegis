@@ -926,6 +926,14 @@ export interface FormCore {
     field(key: string): FieldRef;
     /** оживить <form> целиком — все [name], как wireForm */
     attach(formEl: HTMLFormElement): HTMLFormElement;
+    /** ключи полей (реактивно: форма растёт) */
+    keys: ReadonlySignal<string[]>;
+    /** вывод Standard Schema (coerce / trim / default) — уходит в submit вместо сырых values; null при issues */
+    parsed: ReadonlySignal<any>;
+    /** форма растёт: добавить поле (правила — явные или по шаблону 'items[].qty'), удалить, переименовать (сигналы переезжают) */
+    addField(key: string, initial?: unknown, rules?: RuleLike[]): Signal<any>;
+    removeField(key: string): void;
+    renameField(from: string, to: string): void;
     validating: Record<string, ReadonlySignal<boolean>> & { $any: ReadonlySignal<boolean> };
     dirtyFields: ReadonlySignal<Record<string, true>>;
     /** только изменённые поля (для PATCH) */
@@ -971,7 +979,41 @@ export function matches(otherKey: string, msg?: string): ValidationRule<any>;
 
 // ── WireForm ───────────────────────────────────────────────────
 
+/** Строка fieldArray(): key стабилен при перенумерации (ключ для list()), index — текущая позиция */
+export interface FieldArrayRow { key: number; index: number; value(sub: string): Signal<any>; field(sub: string): FieldRef }
+export interface FieldArray<R extends Record<string, any> = Record<string, any>> {
+    rows: ReadonlySignal<FieldArrayRow[]>;
+    length: ReadonlySignal<number>;
+    push(init?: Partial<R>): FieldArrayRow;
+    insert(i: number, init?: Partial<R>): FieldArrayRow;
+    remove(i: number): void;
+    move(from: number, to: number): void;
+    swap(a: number, b: number): void;
+    replace(rows: Partial<R>[]): void;
+    clear(): void;
+    nameOf(i: number, sub?: string): string;
+}
+/**
+ * Массив полей поверх form()/wireForm(): items[i][sub] с устойчивыми ключами строк и перенумерацией имён.
+ *   const items = fieldArray(f, 'items', { row: { qty: 1, sku: '' } });   // правила формы: { 'items[].qty': [min(1)] }
+ *   list(items.rows, row => html`<input bind:field=${row.field('qty')}>`, r => r.key)
+ */
+export function fieldArray<R extends Record<string, any>>(f: FormCore | WireFormResult, path: string, opts?: { row?: R; rules?: { [K in keyof R]?: RuleLike[] }; name?: (i: number, sub?: string) => string; initial?: Partial<R>[] }): FieldArray<R>;
 export interface WireFormResult {
+    /** сама <form> */
+    el: HTMLFormElement;
+    keys: ReadonlySignal<string[]>;
+    parsed: ReadonlySignal<any>;
+    /** подключить input, появившийся после wireForm(); отключить поле; пересканировать форму (после swap/morph/list) */
+    wire(input: HTMLElement): void;
+    unwire(key: string): void;
+    rewire(): void;
+    /** прочитать ошибки из (серверной) разметки формы в errors; true — есть хоть одна */
+    adoptErrors(root?: ParentNode): boolean;
+    addField(key: string, initial?: unknown, rules?: RuleLike[]): Signal<any>;
+    removeField(key: string): void;
+    renameField(from: string, to: string): void;
+    field(key: string): FieldRef;
     fields: Record<string, Signal<unknown>>;
     errors: Record<string, Signal<string | null>>;
     /** истина по полям (sync-правила + схема), независимо от показа */
@@ -994,7 +1036,7 @@ export interface WireFormResult {
     reset(): void;
     setErrors(errors: Record<string, any> | Array<{ path?: string | string[]; pointer?: string; message: string }>): void;
     /** handler(values, { signal, submitter, event }); без handler — серверный submit (FormData, 422 → ошибки полей, 303 → переход) */
-    submit(handler?: ((values: Record<string, unknown>, ctx: { signal: AbortSignal; submitter: HTMLElement | null; event: SubmitEvent | undefined }) => unknown | Promise<unknown>) | { as?: 'json'; headers?: HeadersInit; onSuccess?: (data: any, r: Response) => void; onRedirect?: 'assign' | 'router' | 'none' | ((r: Response) => void); announceSuccess?: boolean }): (e?: Event) => Promise<any>;
+    submit(handler?: ((values: Record<string, unknown>, ctx: { signal: AbortSignal; submitter: HTMLElement | null; event: SubmitEvent | undefined }) => unknown | Promise<unknown>) | { as?: 'json'; headers?: HeadersInit; onSuccess?: (data: any, r: Response) => void; onRedirect?: 'assign' | 'router' | 'none' | ((r: Response) => void); announceSuccess?: boolean; html?: 'morph' | 'replace' | false; intents?: Record<string, (f: WireFormResult, e: SubmitEvent) => void> }): (e?: Event) => Promise<any>;
     step: Signal<number> | null;
     stepCount: number | null;
     next: (() => boolean) | null;
@@ -1021,6 +1063,14 @@ export function wireForm(formEl: HTMLFormElement, opts?: {
     announceSuccess?: boolean;
     /** Escape во время отправки прерывает её */
     escapeAborts?: boolean;
+    /** следить за появлением/удалением полей (MutationObserver) */
+    observe?: boolean;
+    /** приведение значений: { birthday: Date, qty: Number, tags: Array, agree: Boolean } */
+    types?: Record<string, typeof Date | typeof Number | typeof Array | typeof Boolean | typeof String>;
+    /** HTML-ответ сервера (Rails 422 render, Django form_invalid): 'morph' (default) — форма морфится на место и ошибки читаются из разметки; 'replace'; false — не трогать */
+    html?: 'morph' | 'replace' | false;
+    /** <button name="intent" value="add"> или data-intent — локальное действие без запроса; без JS та же кнопка уходит на сервер */
+    intents?: Record<string, (f: WireFormResult, e: SubmitEvent) => void>;
 }): WireFormResult;
 
 // ── Component ──────────────────────────────────────────────────

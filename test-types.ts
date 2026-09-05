@@ -165,6 +165,15 @@ const w3 = wireForm3(document.createElement('form'), { messages: 'page', mode: '
 w3.issues.$any.value; w3.canSubmit.value; w3.status.value; w3.submitted.value; w3.abort();
 const t3 = i18n3({ en: { validation: { minLen: 'At least {n}' } } }, { locale: 'en' }); setValidationMessages(t3); setValidationMessages({ minLen: { one: '{n} char', other: '{n} chars' } }); setValidationMessages(null);
 
+import { fieldArray, min, type FieldArray } from './aegis.js';
+// ── forms phase 4a — fieldArray / growing form / wireForm observe, types, html, intents
+const f4 = form3({ title: '' }, { rules: { 'items[].qty': [min(1)] } });
+const items4: FieldArray<{ qty: number; sku: string }> = fieldArray(f4, 'items', { row: { qty: 1, sku: '' } });
+const row4 = items4.push({ qty: 2 }); row4.field('qty'); row4.value('sku'); items4.move(0, 1); items4.length.value; items4.rows.value[0].key;
+f4.addField('extra', 1, [required]); f4.renameField('extra', 'more'); f4.removeField('more'); const ks: string[] = f4.keys.value; void ks; f4.parsed.value;
+const w4 = wireForm3(document.createElement('form'), { observe: true, types: { d: Date, n: Number, tags: Array }, html: 'morph', intents: { add: (f, e) => { void f.keys; void e; } } });
+w4.wire(document.createElement('input')); w4.unwire('x'); w4.rewire(); w4.adoptErrors(); w4.el.noValidate; w4.parsed.value;
+
 // ── aegis/test — render / fire / waitFor / mockFetch
 import { render, fire, waitFor, mockFetch, cleanup, withScope, fakeClock } from './aegis-test.js';
 const clock = fakeClock(1000); await clock.advance(30_000); clock.restore();

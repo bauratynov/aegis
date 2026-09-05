@@ -42,7 +42,7 @@
         defineElement, anchor, router, command, virtualScroll,
         offlineResource,
         lazy, nextTick, i18n, uncloak, injectStyles,
-        VERSION, mount, cache, withRetry, leader, predictor, speculate, prefetchOn, onError, lens, signals } from './aegis.js';
+        VERSION, mount, cache, withRetry, leader, predictor, speculate, prefetchOn, onError, lens, signals, fieldArray, min } from './aegis.js';
 
     const results = document.getElementById('results');
     const sandbox = document.getElementById('sandbox');
@@ -4265,6 +4265,131 @@
         });
 
         scope3.dispose();
+        offW(); dev.resetWarnings(); reset(); configure({ fetch: null });
+    })();
+
+    section('💎 формы фаза 4a — растущая форма, fieldArray, HTML-ответ 422 с morph, formnovalidate/intents, types/parsed');
+
+    await (async () => {
+        const codes = [];
+        const offW = onWarn((w) => codes.push(w.code));
+        const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+        const ev = (el, type) => el.dispatchEvent(new Event(type, { bubbles: true }));
+        const sc4 = createScope();
+
+        // 1. form(): addField/removeField/renameField, правила по шаблону, реактивные values/valid/dirty/keys
+        sc4.run(() => {
+            const f = form({ title: 'x' }, { rules: { 'items[].qty': [min(1)] } });
+            const before = f.keys.value.length;
+            f.addField('items[0][qty]', 0);
+            assert('растущая форма: новое поле видно в values, keys и valid (правило по шаблону items[].qty)', f.values.value.items[0].qty === 0 && f.keys.value.length === before + 1 && f.valid.value === false && f.issues['items[0][qty]'].value !== null);
+            f.fields['items[0][qty]'].value = 3;
+            assert('растущая форма: dirty и valid реагируют на новое поле', f.dirty.value === true && f.valid.value === true);
+            const sig = f.fields['items[0][qty]'];
+            f.renameField('items[0][qty]', 'items[1][qty]');
+            assert('renameField: тот же сигнал под новым именем, старое исчезло', f.fields['items[1][qty]'] === sig && !('items[0][qty]' in f.fields) && f.values.value.items[1].qty === 3);
+            f.removeField('items[1][qty]');
+            assert('removeField: поле исчезло из values и keys, valid пересчитан', !f.values.value.items && f.keys.value.length === before && f.valid.value === true);
+        });
+
+        // 2. fieldArray(): устойчивые ключи, перенумерация, move, ошибки по актуальному индексу, list() без перерисовки строк
+        await sc4.run(async () => {
+            const f = form({ title: '' }, { rules: { 'items[].qty': [min(1)] } });
+            const items = fieldArray(f, 'items', { row: { qty: 1, sku: '' } });
+            items.push({ qty: 2, sku: 'a' }); items.push({ qty: 0, sku: 'b' }); items.push({ qty: 5, sku: 'c' });
+            assert('fieldArray: три строки в values, dirty, ключи монотонны', f.values.value.items.length === 3 && f.fields['items[1][qty]'].value === 0 && f.dirty.value === true && items.rows.value.map(r => r.key).join() === '1,2,3');
+            const sigB = f.fields['items[1][sku]'];
+            items.remove(0);
+            assert('fieldArray: remove перенумеровывает имена, сигналы переезжают', f.fields['items[0][sku]'] === sigB && f.values.value.items.map(r => r.sku).join() === 'b,c' && items.rows.value[0].key === 2);
+            assert('fieldArray: правило по шаблону работает на актуальном индексе', f.validate() === false && f.errors['items[0][qty]'].value !== null && f.errors['items[1][qty]'].value === null);
+            items.move(0, 1);
+            assert('fieldArray: move переставляет строки и ошибки вместе с ними', f.values.value.items.map(r => r.sku).join() === 'c,b' && f.errors['items[1][qty]'].value !== null && items.rows.value.map(r => r.key).join() === '3,2');
+            f.setErrors({ 'items.1.qty': 'server says no' });
+            assert('fieldArray: серверная ошибка по пути попадает в актуальную строку', f.errors['items[1][qty]'].value === 'server says no');
+            const host = document.createElement('div'); sandbox.appendChild(host);
+            const renders = [];
+            host.appendChild(list(items.rows, (row) => { renders.push(row.key); return html`<div class="row"><input bind:field=${row.field('sku')}></div>`; }, (r) => r.key));
+            await sleep(1);
+            const firstRowEl = host.querySelector('.row');
+            items.insert(0, { qty: 9, sku: 'z' });
+            await sleep(1);
+            assert('fieldArray + list(): вставка в начало не перерисовывает существующие строки (ключи стабильны)', host.querySelectorAll('.row')[1] === firstRowEl && renders.length === 3 && host.querySelectorAll('.row')[0].querySelector('input').value === 'z');
+            assert('fieldArray: length и replace', items.length.value === 3 && (items.replace([{ qty: 1, sku: 'q' }]), items.length.value === 1 && f.values.value.items[0].sku === 'q'));
+        });
+
+        // 3. wireForm: form.elements (кнопки не поля, form="id" снаружи — поле), observe, wire/unwire, formnovalidate, intents
+        await sc4.run(async () => {
+            const formEl = document.createElement('form'); formEl.id = 'pe4';
+            formEl.innerHTML = '<label>Email<input name="email" value="a@b.c"></label><input name="items[0][qty]" value="1"><button name="intent" value="add">+</button><button formnovalidate name="draft">Draft</button><button>Save</button>';
+            sandbox.appendChild(formEl);
+            const outside = document.createElement('input'); outside.setAttribute('form', 'pe4'); outside.name = 'outside'; outside.value = '1'; sandbox.appendChild(outside);
+            let added = 0, submitted = 0;
+            const f = wireForm(formEl, { observe: true, rules: { email: [emailRule], 'items[].qty': [required] }, intents: { add: () => added++ }, submit: (v) => { submitted++; return { ok: true }; } });
+            assert('обнаружение: кнопки не поля, input[form=id] снаружи — поле', !('intent' in f.fields) && !('draft' in f.fields) && 'outside' in f.fields && f.values.value.outside === '1' && f.el === formEl);
+            formEl.insertAdjacentHTML('beforeend', '<input name="items[1][qty]">');
+            await sleep(10);
+            const n1 = formEl.querySelector('[name="items[1][qty]"]');
+            assert('observe: новый input подключён с правилом по шаблону и a11y', 'items[1][qty]' in f.fields && f.keys.value.includes('items[1][qty]') && f.issues['items[1][qty]'].value !== null && n1.getAttribute('aria-describedby'));
+            n1.remove();
+            await sleep(10);
+            assert('observe: удалённый input отключён', !('items[1][qty]' in f.fields) && f.values.value.items.length === 1);
+            const addBtn = formEl.querySelector('[name=intent]');
+            formEl.dispatchEvent(new SubmitEvent('submit', { cancelable: true, submitter: addBtn })); await sleep(5);
+            assert('intents: кнопка intent вызывает обработчик без запроса и без валидации', added === 1 && f.submitCount.value === 0);
+            const emailEl = formEl.querySelector('[name=email]'); emailEl.value = 'bad'; ev(emailEl, 'input');
+            formEl.dispatchEvent(new SubmitEvent('submit', { cancelable: true, submitter: formEl.querySelector('[name=draft]') })); await sleep(5);
+            assert('formnovalidate: черновик уходит в handler мимо клиентской валидации', submitted === 1 && f.status.value === 'success');
+            formEl.dispatchEvent(new SubmitEvent('submit', { cancelable: true, submitter: formEl.querySelectorAll('button')[2] })); await sleep(5);
+            assert('обычная кнопка: валидация блокирует', submitted === 1 && f.errors.email.value !== null);
+        });
+
+        // 4. HTML-ответ 422/200: morph формы на место, ошибки из разметки, identity input, значение активного поля сохранено
+        await sc4.run(async () => {
+            const formEl = document.createElement('form'); formEl.id = 'signup4'; formEl.setAttribute('action', '/f4/save');
+            formEl.innerHTML = '<label>Email<input name="email" value="a@b"></label><label>Pass<input name="password" type="password" value=""></label><button>Go</button>';
+            sandbox.appendChild(formEl);
+            const emailBefore = formEl.querySelector('[name=email]');
+            const f = wireForm(formEl, {});
+            let mode = 422, gate = null;
+            configure({ fetch: async () => {
+                if (gate) await gate;
+                if (mode === 422) return new Response('<html><body><form id="signup4" action="/f4/save"><label>Email<input name="email" value="a@b" aria-invalid="true"><ul class="errorlist"><li>Already taken</li></ul></label><label>Pass<input name="password" type="password"></label><ul class="errorlist nonfield"><li>Fix the form</li></ul><button>Go</button></form></body></html>', { status: 422, headers: { 'Content-Type': 'text/html' } });
+                return new Response('<html><body><form id="signup4" action="/f4/save"><label>Email<input name="email" value="a@b"></label><label>Pass<input name="password" type="password"></label><button>Go</button></form></body></html>', { status: 200, headers: { 'Content-Type': 'text/html' } });
+            } });
+            const pw = formEl.querySelector('[name=password]');
+            let openGate; gate = new Promise(res => { openGate = res; });
+            const pr = f.submit()(new SubmitEvent('submit', { cancelable: true }));
+            await sleep(1); pw.value = 'typing'; ev(pw, 'input');            // пользователь печатает, пока запрос в полёте
+            openGate(); gate = null;
+            const r = await pr;
+            assert('HTML 422: ошибки полей и формы прочитаны из разметки, result.html', f.errors.email.value === 'Already taken' && f.errors.$form.value === 'Fix the form' && r.ok === false && r.html === true && r.status === 422);
+            assert('HTML 422: morph — тот же узел input, aria-invalid, describedby на элемент с текстом ошибки', formEl.querySelector('[name=email]') === emailBefore && emailBefore.getAttribute('aria-invalid') === 'true' && formEl.querySelector('#' + emailBefore.getAttribute('aria-describedby').split(' ').pop()).textContent.includes('Already taken'));
+            assert('HTML 422: значение поля, которое печатал пользователь, не затёрто серверным', formEl.querySelector('[name=password]').value === 'typing');
+            mode = 200; let ok200 = false;
+            const r2 = await f.submit({ onSuccess: () => { ok200 = true; } })(new SubmitEvent('submit', { cancelable: true }));
+            assert('HTML 200 без ошибок → ok, onSuccess, ошибки сняты', r2.ok === true && ok200 && f.errors.email.value === null && f.errors.$form.value === null);
+            configure({ fetch: null });
+        });
+
+        // 5. types и parsed: Date/Number/Array, вывод схемы в submit
+        await sc4.run(async () => {
+            const formEl = document.createElement('form'); formEl.innerHTML = '<input type="date" name="d" value="2026-09-05"><input name="tags" value="a, b ,c"><input name="n" value="7">'; sandbox.appendChild(formEl);
+            const f = wireForm(formEl, { types: { d: Date, tags: Array, n: Number } });
+            assert('types: Date/Array/Number читаются из DOM', f.fields.d.value instanceof Date && f.fields.d.value.getUTCDate() === 5 && f.fields.tags.value.join() === 'a,b,c' && f.fields.n.value === 7);
+            f.fields.d.value = new Date(2026, 8, 6, 12);
+            await sleep(1);
+            assert('types: Date форматируется обратно под type=date', formEl.querySelector('[name=d]').value === '2026-09-06');
+            const schema = { '~standard': { version: 1, vendor: 'mini', validate: (v) => ({ value: { age: Number(v.age), name: String(v.name).trim() } }) } };
+            const g = form({ age: '42', name: ' a ' }, { schema });
+            let got = null;
+            await g.submit((v) => { got = v; });
+            assert('parsed: вывод схемы (coerce/trim) идёт в handler и в f.parsed', got && got.age === 42 && got.name === 'a' && g.parsed.value.age === 42);
+            const bad = { '~standard': { version: 1, vendor: 'mini', validate: (v) => ({ issues: [{ message: 'no', path: ['age'] }] }) } };
+            const h = form({ age: '1' }, { schema: bad });
+            assert('parsed: при issues — null', h.parsed.value === null && h.valid.value === false);
+        });
+
+        sc4.dispose();
         offW(); dev.resetWarnings(); reset(); configure({ fetch: null });
     })();
 
