@@ -143,6 +143,17 @@ const undo7 = speculate({ prerender: 'conservative', exclude: '[data-no-speculat
 const sp7 = stats().speculation; if (sp7) { const q: number = sp7.queued; void q; }
 const cs7 = cache.stats(); const gh: number = cs7.ghost; void gh; cs7.speculation.skipped; cs7.prefetch.hoverDelay;
 
+import { lens, signals, linked, bind, onError, type FunctionBinding } from './aegis.js';
+// ── core phase 2b — lens / signals / function bindings / onError
+const cents = signal(250);
+const price = lens(() => cents.value / 100, (v) => { cents.value = Math.round(v * 100); }); price.value = 3; price.update(v => v + 1);
+const addr = { city: '' }; const city = lens(addr, 'city'); city.value = 'Almaty';
+const fb: FunctionBinding<string> = [() => addr.city, (v) => { addr.city = v; }];
+bind(document.createElement('input'), fb); bind(document.createElement('input'), city);
+const { count: cnt, total: tot } = signals({ count: 1, get total() { return cnt.value * 2; } }); const tv: number = tot.value; void tv;
+const lk = linked(() => cnt.value); lk.update(v => v + 1);
+const offErr = onError((e, info) => { void e; if (info) { const s: string = info.effect; void s; } }); offErr();
+
 // ── aegis/test — render / fire / waitFor / mockFetch
 import { render, fire, waitFor, mockFetch, cleanup, withScope, fakeClock } from './aegis-test.js';
 const clock = fakeClock(1000); await clock.advance(30_000); clock.restore();

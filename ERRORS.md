@@ -55,4 +55,5 @@ Every warning has a code, and each message is printed once per place. Dev mode i
 | **E045** | A disposed `computed()` was read — its value is frozen. | Do not dispose a computed that is still read; `computed()` needs no dispose (it is unsubscribed while nobody observes it). |
 | **E046** | `watch()` / `until()` got a plain value or a reactive object as source — it never fires. | `watch(() => state.count, cb)` or pass the signal. |
 | **E047** | The same object reference was written back into a signal — inner mutations are invisible. | `sig.update(a => [...a, x])`, hold it in `reactive()`, or `signal(v, { equals: false })`. |
+| **E048** | `${count.value}` (or `title=${count.value}`) inside html`` is a snapshot — inserted once, never updates. | Pass the signal `${count}` or a getter `${() => …}`; a deliberate snapshot is `${count.peek()}`. |
 | **S001** | Attempt to set `__proto__` / `prototype` / `constructor` on a reactive object — blocked. | Use a regular property name. |

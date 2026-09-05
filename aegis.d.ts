@@ -153,6 +153,19 @@ export function persisted<T>(key: string, initial: T, opts?: {
     debounce?: number;
 }): Signal<T> & { clear(): void };
 /** Writable derived: запись живёт до следующего изменения источника */
+/**
+ * Двусторонняя линза: чтение — computed(get), запись — set(v) в источник (без локального состояния).
+ *   bind:value=${lens(() => cents.value / 100, v => cents.value = Math.round(v * 100))}   |   lens(state.address, 'city')
+ */
+export function lens<T>(get: () => T, set: (v: T) => void, name?: string): Signal<T>;
+export function lens<O extends object, K extends keyof O>(obj: O, key: K, name?: string): Signal<O[K]>;
+/** [get, set] — function binding для bind:value / bind(): то же, что lens(get, set) */
+export type FunctionBinding<T = any> = [() => T, (v: T) => void];
+/**
+ * Именованные сигналы из ключей объекта — для E-сообщений, trace() и dev.graph(); геттер → computed.
+ *   const { count, query } = signals({ count: 0, query: '' });
+ */
+export function signals<T extends Record<string, unknown>>(obj: T, opts?: { prefix?: string }): { [K in keyof T]: Signal<T[K]> };
 export function linked<T>(source: () => T, name?: string): Signal<T>;
 export function linked<S, T>(opts: { source: () => S; compute: (source: S, prev: { source: S; value: T } | undefined) => T }, name?: string): Signal<T>;
 /** Внешний источник как сигнал: (EventTarget, event, map) | (producer(set) => unsubscribe, initial) | { subscribe } */
@@ -215,7 +228,7 @@ export function onDispose(fn: () => void): () => void;
 // ── DOM Rendering ──────────────────────────────────────────────
 
 /** Что можно вставить в html``: текст, узел, сигнал, функция (реактивно), ref/attach, class/style-объект, массив. Promise/Date — нет (${String(date)}, when()/resource()) */
-export type HtmlValue = Displayable | Node | ReadonlySignal<any> | ((...args: any[]) => unknown) | Ref<any> | Attachment<any> | ClassValue | Record<string, Reactive<unknown>> | HtmlValue[];
+export type HtmlValue = Displayable | Node | ReadonlySignal<any> | ((...args: any[]) => unknown) | Ref<any> | Attachment<any> | ClassValue | Record<string, Reactive<unknown>> | FunctionBinding | HtmlValue[];
 export function html(strings: TemplateStringsArray, ...values: HtmlValue[]): DocumentFragment;
 export function render(target: Element, content: DocumentFragment | Element): void;
 
@@ -261,7 +274,7 @@ export function styleMap(el: HTMLElement | SVGElement, map: Record<string, React
  * Handles checkbox/radio (checked), number, select.
  * @returns cleanup function
  */
-export function bind(el: HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement, sig: Signal<any>): () => void;
+export function bind(el: HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement, sig: Signal<any> | FunctionBinding): () => void;
 
 /**
  * Conditional rendering with automatic scope management.

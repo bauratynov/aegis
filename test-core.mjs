@@ -2,7 +2,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-    signal, computed, effect, batch, untrack, isSignal, createScope, onDispose, onError, flush,
+    signal, computed, effect, batch, untrack, isSignal, createScope, onDispose, onError, flush, signals,
 } from './aegis.js';
 import { fuzzGraph } from './fuzz-graph.mjs';
 
@@ -373,4 +373,24 @@ test('signal({ watched, unwatched }): хуки на первом и послед
     assert.equal(down, 0);          // computed ещё держит
     sc2.dispose();
     assert.equal(down, 1);
+});
+
+// ── ядро фаза 2b: signals(), _endTrack при сдвиге зависимостей ──
+test('signals({}): имена из ключей, геттер → computed, prefix', () => {
+    const { count, total } = signals({ count: 2, get total() { return count.value * 10; } });
+    assert.equal(count._name, 'count'); assert.equal(total._name, 'total'); assert.equal(total.value, 20);
+    count.value = 3; assert.equal(total.value, 30);
+    assert.equal(signals({ a: 1 }, { prefix: 'cart' }).a._name, 'cart.a');
+});
+
+test('_endTrack: сдвиг порядка 2000 зависимостей — линейно, подписки точные', () => {
+    const N = 2000, sigs = Array.from({ length: N }, (_, i) => signal(i));
+    let off = 0; const sc = createScope();
+    sc.run(() => effect(() => { for (let i = 0; i < N; i++) sigs[(i + off) % N].value; }));
+    const t0 = performance.now();
+    for (let r = 0; r < 20; r++) { off++; sigs[0].value = r + 1; }
+    assert.ok(performance.now() - t0 < 300, 'too slow');
+    assert.ok(sigs.every(s => s.subs && s.subs.size === 1));
+    sc.dispose();
+    assert.ok(sigs.every(s => !s.subs || s.subs.size === 0));
 });

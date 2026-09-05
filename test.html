@@ -42,7 +42,7 @@
         defineElement, anchor, router, command, virtualScroll,
         offlineResource,
         lazy, nextTick, i18n, uncloak, injectStyles,
-        VERSION, mount, cache, withRetry, leader, predictor, speculate, prefetchOn, onError } from './aegis.js';
+        VERSION, mount, cache, withRetry, leader, predictor, speculate, prefetchOn, onError, lens, signals } from './aegis.js';
 
     const results = document.getElementById('results');
     const sandbox = document.getElementById('sandbox');
@@ -3998,6 +3998,122 @@
         }
 
         assert('ядро 2a: живых эффектов после секции столько же, сколько до', stats().effects === eff0);
+        offW(); dev.resetWarnings(); reset();
+    })();
+
+    section('💎 ядро фаза 2b — _endTrack O(n), lens() и function bindings, signals(), E048 снимок в html``, ленивый $reset');
+
+    await (async () => {
+        const codes = [];
+        const offW = onWarn((w) => codes.push(w.code));
+        const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+        const fireInput = (el, v) => { el.value = v; el.dispatchEvent(new Event('input', { bubbles: true })); };
+
+        // 1. _endTrack: сдвиг порядка чтения 2000 зависимостей — не квадратично, подписки точные
+        {
+            const N = 2000, sigs = Array.from({ length: N }, (_, i) => signal(i));
+            let off = 0; const sc = createScope();
+            sc.run(() => effect(() => { for (let i = 0; i < N; i++) sigs[(i + off) % N].value; }));
+            const t0 = performance.now();
+            for (let r = 0; r < 20; r++) { off++; sigs[0].value = r + 1; }
+            const ms = performance.now() - t0;
+            assert('_endTrack: 20 сдвигов × 2000 зависимостей укладываются в 200 мс', ms < 200);
+            assert('_endTrack: после сдвигов у каждого сигнала ровно один подписчик', sigs.every(sg => sg.subs && sg.subs.size === 1));
+            sc.dispose();
+            assert('_endTrack: dispose снимает все 2000 подписок', sigs.every(sg => !sg.subs || sg.subs.size === 0));
+        }
+
+        // 2. lens() и function bindings [get, set]
+        {
+            const cents = signal(250, 'cents');
+            const l = lens(() => cents.value / 100, (v) => { cents.value = Math.round(v * 100); }, 'price');
+            assert('lens: чтение — производное, имя для dev', l.value === 2.5 && l._name === 'price' && isSignal(l));
+            l.value = 3.75;
+            assert('lens: запись транслируется в источник', cents.value === 375 && l.value === 3.75);
+            l.update(v => v + 1);
+            assert('lens: update() через источник', cents.value === 475);
+            const host = document.createElement('div'); sandbox.appendChild(host);
+            const sc = createScope();
+            sc.run(() => { host.appendChild(html`<input type="number" bind:value=${l}>`); });
+            const inp = host.querySelector('input');
+            assert('lens: bind:value показывает производное значение', inp.value === '4.75');
+            fireInput(inp, '5.5');
+            assert('lens: ввод пишет в источник через set', cents.value === 550);
+            cents.value = 100;
+            assert('lens: запись в источник обновляет поле', inp.value === '1');
+            const st = reactive({ addr: { city: '' } });
+            sc.run(() => { host.appendChild(html`<input class="fb" bind:value=${[() => st.addr.city, (v) => { st.addr.city = v; }]}>`); });
+            const fb = host.querySelector('input.fb');
+            fireInput(fb, 'Almaty');
+            assert('function binding: [get, set] в bind:value пишет во вложенное поле reactive', st.addr.city === 'Almaty');
+            st.addr.city = 'Astana';
+            assert('function binding: запись в источник обновляет поле', fb.value === 'Astana');
+            const l2 = lens(st.addr, 'city');
+            assert('lens(obj, key): чтение и запись по ключу', l2.value === 'Astana' && (l2.value = 'Aktau', st.addr.city === 'Aktau') && l2._name === 'lens:city');
+            const el3 = document.createElement('input'); host.appendChild(el3);
+            sc.run(() => bind(el3, [() => cents.value, (v) => { cents.value = v; }]));
+            fireInput(el3, '7');
+            assert('bind(el, [get, set]) принимает пару функций', cents.value === '7' || cents.value === 7);
+            const lk = linked(() => cents.value);
+            lk.update(v => 'x' + v);
+            assert('linked: получил update() и имя через общую writable-обёртку', lk.value === 'x7' && lk._name === 'linked');
+            sc.dispose();
+        }
+
+        // 3. signals({}) — имена из ключей
+        {
+            const { count, total } = signals({ count: 2, get total() { return count.value * 10; } });
+            assert('signals: имена из ключей, геттер → computed', count._name === 'count' && total._name === 'total' && total.value === 20);
+            const c = signals({ a: 1 }, { prefix: 'cart' });
+            assert('signals: prefix', c.a._name === 'cart.a');
+            dev.resetWarnings(); codes.length = 0;
+            const msgs = []; const off2 = onWarn(w => msgs.push(w.what));
+            computed(() => { count.value = 5; }).value;
+            off2();
+            assert('signals: E002 называет переменную по имени', msgs.some(m => m.includes('"count"')));
+        }
+
+        // 4. E048: ${count.value} в html`` — снимок
+        {
+            dev.resetWarnings(); codes.length = 0;
+            const count = signal(7, 'count'), flag = signal(true, 'flag');
+            html`<b>${count.value}</b>`;
+            assert('E048: ${count.value} в тексте — предупреждение', codes.includes('E048'));
+            await sleep(0);
+            const e48 = () => codes.filter(c => c === 'E048').length;
+            const n = e48();
+            const scH = createScope();
+            scH.run(() => { html`<b>${count.peek()}</b><i class=${() => flag.value ? 'x' : ''}>${count}</i>`; html`<b>${7}</b>`; });
+            scH.dispose();
+            assert('E048: peek(), геттер, сигнал и литерал без предшествующего чтения — молчат', e48() === n);
+            html`<span title=${count.value}></span>`;
+            assert('E048: снимок в атрибуте тоже ловится', codes.filter(c => c === 'E048').length === 2);
+            await sleep(0);
+            const m = e48();
+            html`<b class=${flag.value ? 'on' : 'off'}>${flag.value}</b>`;
+            assert('E048: boolean и строка-результат тернарного (не значение сигнала) не считаются снимком', e48() === m);
+        }
+
+        // 5. reactive(): ленивый снимок и $reset без structuredClone
+        {
+            const nested = { b: 1 };
+            const st = reactive({ a: nested, list: [1], x: 1 });
+            const tc0 = performance.now();
+            const huge = reactive({ rows: Array.from({ length: 100000 }, (_, i) => ({ i, done: false })) });
+            const create = performance.now() - tc0;
+            assert('$reset ленивый: reactive() на 100k строк не клонирует дерево при создании (< 15 мс)', create < 15 && huge.rows.length === 100000);
+            st.a.b = 2; st.list.push(2); st.x = 5; st.extra = true;
+            const aRef = st.a;
+            st.$reset();
+            assert('$reset: вложенная запись, массив, корень и новый ключ восстановлены', st.a.b === 1 && st.list.length === 1 && st.list[0] === 1 && st.x === 1 && !('extra' in st));
+            assert('$reset: identity вложенного объекта сохранена (list() по объекту-ключу не перерисует строки)', st.a === aRef);
+            const big = reactive({ rows: Array.from({ length: 50000 }, (_, i) => ({ i, done: false })) });
+            const t0 = performance.now(); big.rows[0].done = true; const ms = performance.now() - t0;
+            assert('$reset ленивый: первая запись в строку большого массива не клонирует дерево (< 20 мс)', ms < 20 && big.rows[0].done === true);
+            big.$reset();
+            assert('$reset: восстановление большого объекта корректно', big.rows[0].done === false && big.rows.length === 50000);
+        }
+
         offW(); dev.resetWarnings(); reset();
     })();
 

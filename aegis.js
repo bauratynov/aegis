@@ -238,15 +238,19 @@ function _track(src) {
 function _endTrack(obs) {
     const deps = obs._deps;
     if (!deps) return;
-    const n = obs._n;
-    for (let i = n; i < deps.length; i++) _unsubIfGone(obs, deps[i], deps, n);
-    deps.length = n;
-    obs._vers.length = n;
-    const ev = obs._evict;
-    if (ev) {
-        obs._evict = null;
-        for (const s of ev) _unsubIfGone(obs, s, deps, n);
+    const n = obs._n, ev = obs._evict, tail = deps.length - n;
+    if (!ev && !tail) return;                                    // стабильный запуск — ноль работы
+    if ((ev ? ev.length : 0) + tail <= 8) {                       // 1–2 смены зависимостей: линейный скан без аллокаций
+        for (let i = n; i < deps.length; i++) _unsubIfGone(obs, deps[i], deps, n);
+        deps.length = n; obs._vers.length = n;
+        if (ev) { obs._evict = null; for (const src of ev) _unsubIfGone(obs, src, deps, n); }
+        return;
     }
+    // массовый сдвиг (unshift/sort/filter в reactive-массиве): одно множество живых источников — O(n), а не O(n²)
+    const gone = deps.splice(n); obs._vers.length = n;
+    const live = new Set(deps);
+    for (let i = 0; i < gone.length; i++) if (!live.has(gone[i])) _delSub(gone[i], obs);
+    if (ev) { obs._evict = null; for (let i = 0; i < ev.length; i++) if (!live.has(ev[i])) _delSub(ev[i], obs); }
 }
 
 function _unsubIfGone(obs, src, deps, n) {
@@ -302,7 +306,7 @@ class Signal {
         if (u) this._u = u;        // unwatched(): ушёл последний
     }
     get value() {
-        _track(this);
+        if (_tracking) _track(this); else if (_devCache === true) _noteUntracked(this);
         return this._value;
     }
     set value(v) {
@@ -346,6 +350,28 @@ Signal.prototype[SIGNAL] = true;
  * @param {string|Object} [nameOrOpts] — имя для debug, или { name, equals }
  * @returns {Signal<T>}
  */
+// dev: последние сигналы, прочитанные вне tracking — html`` сверяет с ними статические значения (${count.value} — снимок, E048)
+let _untracked = null, _untrackedFlush = false;
+function _noteUntracked(sig) {
+    const r = _untracked || (_untracked = []);
+    if (r.length >= 16) r.shift();
+    r.push({ s: sig, v: sig._value });
+    if (!_untrackedFlush) { _untrackedFlush = true; queueMicrotask(() => { _untrackedFlush = false; _untracked = null; }); }
+}
+/**
+ * Именованные сигналы из объекта: имена берутся из ключей — для E-сообщений, trace(), dev.graph().
+ *   const { count, query } = signals({ count: 0, query: '' });                                   // signal(0, 'count'), signal('', 'query')
+ *   const { items, total } = signals({ items: [], get total() { return items.value.length; } }); // геттер → computed('total')
+ */
+export function signals(obj, { prefix } = {}) {
+    const out = {};
+    const descs = Object.getOwnPropertyDescriptors(obj);
+    for (const k of Object.keys(descs)) {
+        const d = descs[k], nm = prefix ? prefix + '.' + k : k;
+        out[k] = d.get ? computed(() => d.get.call(out), nm) : signal(d.value, nm);
+    }
+    return out;
+}
 export function signal(initial, nameOrOpts) {
     const o = nameOrOpts && typeof nameOrOpts === 'object' ? nameOrOpts : null;
     return new Signal(initial, _nm(nameOrOpts), _eqOf(nameOrOpts), o && o.watched, o && o.unwatched);
@@ -391,7 +417,7 @@ class Computed {
     get value() {
         if (this._stale()) this._recompute();
         if (this._disposed && _devCache === true) _deadRead(this);
-        _track(this);                              // подписка ДО броска: читатель узнает о выздоровлении
+        if (_tracking) _track(this); else if (_devCache === true) _noteUntracked(this);   // подписка ДО броска: читатель узнает о выздоровлении
         if (this._err) throw this._err.e;
         return this._value;
     }
