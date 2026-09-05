@@ -35,7 +35,7 @@
         resource, watch, store, portal, transition, errorBoundary, ref,
         reactive, isReactive,
         form, required, minLen, maxLen, emailRule, matches,
-        wireForm, cachedResource, invalidate, seed, seedFrom, attach, clone, expose, getOwner, runWithOwner, configure, request, api, HttpError, mutation, streamResource, settled, prefetch, infiniteResource, dev, onWarn, AegisWarning, reset, root, until, createContext, provide, inject, persisted, linked, selector, when, cssVars, media, defaults,
+        wireForm, cachedResource, invalidate, seed, seedFrom, attach, clone, expose, getOwner, runWithOwner, configure, request, api, HttpError, mutation, streamResource, settled, prefetch, infiniteResource, dev, onWarn, AegisWarning, reset, flushSync, root, until, createContext, provide, inject, persisted, linked, selector, when, cssVars, media, defaults, swap, boost, tpl, adopt, jsonScript,
         spring, flip, animate,
         trap, roving, announce,
         css, adoptStyles, scopedStyle,
@@ -1769,6 +1769,76 @@
         const f3 = form({ email: 'e@x.io', address: { city: 'ok' } }, { schema });
         await f3.submit(async (values) => { got = values; });
         assert('form: submit(handler) получает вложенные values', got && got.email === 'e@x.io');
+    })();
+
+    section('💎 #30 — swap() и morph');
+
+    await (async () => {
+        register('sw-island', (el, data, { html, onDispose }) => { window.__swDisposed = (window.__swDisposed || 0); onDispose(() => window.__swDisposed++); return html`<b>${data.n}</b>`; });
+        const host = document.createElement('div');
+        host.innerHTML = '<section id="cart"><ul id="lines"><li id="l1">A <input id="qty" value="1"></li><li id="l2">B</li></ul><div data-aegis="sw-island" data-n="1"></div></section>';
+        sandbox.appendChild(host);
+        hydrate(host);
+        const cart = host.querySelector('#cart');
+        const l1 = host.querySelector('#l1'), qty = host.querySelector('#qty');
+        qty.value = 'typed';
+        const before = window.__swDisposed;
+        await swap(cart, '<section id="cart"><ul id="lines"><li id="l1">A <input id="qty" value="9"></li><li id="l3">C</li></ul><div data-aegis="sw-island" data-n="2"></div><p class="new">n</p></section>', { mode: 'morph' });
+        assert('swap morph: узлы с id сохраняются, новые вставляются, лишние удаляются', host.querySelector('#l1') === l1 && host.querySelector('#l3') && !host.querySelector('#l2') && host.querySelector('.new'));
+        assert('swap morph: тот же input, значение сервера применено (не в фокусе)', host.querySelector('#qty') === qty && qty.value === '9');
+        assert('swap morph: остров с изменёнными data-* перемонтирован с новыми props', window.__swDisposed === before + 1 && host.querySelector('[data-aegis] b').textContent === '2');
+
+        await swap(cart, '<html><head><title>T</title></head><body><nav>x</nav><section id="cart"><i class="inner">only</i></section></body></html>');
+        assert('swap inner: из целой страницы берётся селектор target', cart.querySelector('i.inner') && !host.querySelector('nav'));
+        assert('swap inner: острова заменённого поддерева уничтожены', window.__swDisposed === before + 2);
+
+        const r = await swap(cart, '<div data-aegis="sw-island" data-n="5" data-cloak></div>', { mode: 'append' });
+        assert('swap append: вставленный остров гидрирован, data-cloak снят', r.inserted[0].querySelector('b')?.textContent === '5' && !r.inserted[0].hasAttribute('data-cloak'));
+        const resp = new Response('<div data-aegis="sw-island" data-n="7"></div>', { headers: { 'Content-Type': 'text/html' } });
+        await swap(cart, resp, { mode: 'inner' });
+        assert('swap: принимает Response', cart.querySelector('b')?.textContent === '7');
+        destroyAll(host); sandbox.innerHTML = '';
+    })();
+
+    section('💎 #58/#81/#126 — props островов, tpl(), adopt()');
+
+    await (async () => {
+        let got = null;
+        register('props-island', (el, data) => { got = data; }, { types: { count: Number, on: Boolean, tags: JSON } });
+        const host = document.createElement('div');
+        host.innerHTML = '<div data-aegis="props-island" data-count="5" data-on="" data-zip="01234" data-id="9007199254740993" data-tags=\'["a"]\'><scr' + 'ipt type="application/json">{"user":{"name":"Ann"}}</scr' + 'ipt></div>';
+        sandbox.appendChild(host);
+        hydrate(host);
+        assert('props: types → число/boolean/JSON, строки остаются строками', got.count === 5 && got.on === true && Array.isArray(got.tags) && got.zip === '01234' && got.id === '9007199254740993');
+        assert('props: JSON-блок внутри острова → data.props и поля', got.props.user.name === 'Ann' && got.user.name === 'Ann');
+        sandbox.innerHTML = '';
+
+        sandbox.innerHTML = '<template id="card-tpl"><li class="card"><b data-slot="name"></b><span data-slot="price"></span></li></template><ul id="cards"></ul>';
+        const card = tpl('#card-tpl', sandbox);
+        const items = signal([{ id: 1, name: 'A', price: 3, sale: true }]);
+        const scope = createScope();
+        scope.run(() => sandbox.querySelector('#cards').appendChild(list(items, it => card({ name: () => it.name, price: { text: () => it.price + '$', attr: { title: it.price }, cls: { sale: it.sale } } }))));
+        flushSync();
+        const li = sandbox.querySelector('li.card');
+        assert('tpl: клон серверного template со слотами', li && li.querySelector('b').textContent === 'A' && li.querySelector('span').textContent === '3$' && li.querySelector('span').title === '3' && li.querySelector('span').classList.contains('sale'));
+        scope.dispose(); sandbox.innerHTML = '';
+
+        const server = document.createElement('div');
+        server.innerHTML = '\n  <span class="value">SSR</span>\n  <button class="inc" title="x">+</button>\n  <ul><li>keep</li></ul>\n';
+        sandbox.appendChild(server);
+        const span = server.querySelector('.value'), btn = server.querySelector('.inc');
+        const count = signal(3);
+        const s2 = createScope();
+        let mutations = 0;
+        const mo = new MutationObserver(r => { mutations += r.length; });
+        mo.observe(server, { childList: true, subtree: true });
+        s2.run(() => adopt(server)`<span class="value">${count}</span><button class="inc" @click=${() => count.value++} title=${() => 't' + count.value}>+</button><ul><li>keep</li></ul>`);
+        assert('adopt: те же узлы, текст и атрибут привязаны', server.querySelector('.value') === span && span.textContent === '3' && btn.title === 't3');
+        btn.click();
+        assert('adopt: событие и реактивность', count.value === 4 && span.textContent === '4' && btn.title === 't4');
+        await wait(0);
+        assert('adopt: 0 вставок/удалений узлов', mutations === 0);
+        mo.disconnect(); s2.dispose(); sandbox.innerHTML = '';
     })();
 
     section('component() & destroy()');

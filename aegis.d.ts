@@ -761,9 +761,16 @@ export type IslandSetup<D = Record<string, unknown>> = (el: HTMLElement, data: D
  * Зарегистрировать компонент по имени; { load } — код острова грузится import()-ом при монтировании
  * (для visible — за 400px до viewport). Без регистрации работает data-aegis-src="/js/islands/x.js".
  */
+export type PropType = NumberConstructor | BooleanConstructor | StringConstructor | JSON | ObjectConstructor | ArrayConstructor | ((raw: string) => unknown);
+/**
+ * Зарегистрировать компонент по имени; { load } — код острова грузится import()-ом при монтировании.
+ * data-* передаются строками (JSON-литералы парсятся); types объявляет приведение: { count: Number, on: Boolean, tags: JSON }.
+ * JSON-блок <script type="application/json"> внутри острова (или data-aegis-props="#id") → data.props и поля data.
+ */
 export function register<D = Record<string, unknown>>(
     name: string,
-    setup: IslandSetup<D> | { load: () => Promise<IslandSetup<D> | { default: IslandSetup<D> }> }
+    setup: IslandSetup<D> | { load: () => Promise<IslandSetup<D> | { default: IslandSetup<D> }> },
+    opts?: { types?: Record<string, PropType> }
 ): void;
 export interface HydrateOptions {
     /** MutationObserver: вставленные острова оживают, удалённые уничтожаются (htmx/Turbo/jQuery) */
@@ -981,6 +988,8 @@ export interface Router {
     setState(state: unknown): void;
     /** первый маршрут отрендерен */
     ready: Promise<unknown>;
+    /** есть ли маршрут для пути (boost() уступает роутеру) */
+    matches(path: string): boolean;
     cleanup(): void;
     dispose(): void;
 }
@@ -1015,6 +1024,56 @@ export function virtualScroll<T>(parent: Element, items: T[] | Signal<T[]> | Rea
 
 /** = resource(source, { offline: true, ...opts }) */
 export function offlineResource<T = unknown>(source: string | (() => string), opts?: ResourceOptions<T> & OfflineOptions): OfflineResourceResult<T>;
+
+// ── Server HTML ────────────────────────────────────────────────
+
+export type SwapMode = 'inner' | 'outer' | 'append' | 'prepend' | 'before' | 'after' | 'morph';
+/**
+ * Вставить серверный HTML аккуратно: dispose островов в заменяемом поддереве, вставка, hydrate новых,
+ * снятие data-cloak, восстановление фокуса и курсора. mode 'morph' — точечный патч (id-aware), узлы не пересоздаются.
+ * Если ответ — целая страница, берётся селектор target (или select).
+ */
+export function swap(target: Element, html: string | Response | Document | DocumentFragment | Element, opts?: {
+    mode?: SwapMode;
+    select?: string;
+    transition?: boolean | { name?: string; cls?: string };
+    hydrate?: boolean;
+}): Promise<{ inserted: Node[] }>;
+
+/**
+ * MPA-навигация без перезагрузки: fetch страницы → morph root → View Transitions.
+ * Острова вне root переживают переход. Opt-out: data-no-boost; ссылки router()-а не трогаются (routers: [r]).
+ */
+export function boost(opts?: {
+    root?: string | Element;
+    mode?: SwapMode;
+    transition?: boolean;
+    prefetch?: 'hover' | false;
+    scroll?: 'restore' | 'preserve';
+    head?: 'title' | 'title+styles' | false;
+    routers?: Router[];
+}): { pending: ReadonlySignal<boolean>; visit(url: string): Promise<boolean>; dispose(): void };
+
+export type SlotSpec = Reactive<Displayable> | {
+    text?: Reactive<Displayable>;
+    attr?: Record<string, Reactive<Displayable>>;
+    cls?: ClassValue;
+    style?: Record<string, Reactive<string | number | null>>;
+    prop?: Record<string, Reactive<unknown>>;
+    on?: Record<string, (e: Event) => void>;
+};
+/** Серверный <template> со слотами [data-slot] как источник разметки для list()/show(); HTML не парсится (CSP) */
+export function tpl(target: string | HTMLTemplateElement, root?: Document | Element): (slots?: Record<string, SlotSpec>) => DocumentFragment;
+
+/**
+ * Привязать html``-шаблон к уже отрендеренному сервером DOM без перерисовки (0 мутаций):
+ *   adopt(el)`<span class="value">${count}</span><button @click=${inc}>+</button>`
+ * Структура элементов должна совпадать; текстовые значения — единственный ребёнок элемента.
+ */
+export function adopt(root: Element, opts?: { trust?: boolean }): (strings: TemplateStringsArray, ...values: unknown[]) => Element;
+
+/** JSON из <script type="application/json"> (Django json_script) — кэш по элементу */
+export function jsonScript<T = unknown>(target: string | Element, root?: Document | Element): T | undefined;
 
 // ── i18n ───────────────────────────────────────────────────────
 
@@ -1174,6 +1233,15 @@ declare const Aegis: {
     command: typeof command;
     virtualScroll: typeof virtualScroll;
     offlineResource: typeof offlineResource;
+    swap: typeof swap;
+    boost: typeof boost;
+    tpl: typeof tpl;
+    adopt: typeof adopt;
+    jsonScript: typeof jsonScript;
+    transitioning: typeof transitioning;
+    email: typeof email;
+    min: typeof min;
+    max: typeof max;
     i18n: typeof i18n;
     $: typeof $;
     $$: typeof $$;
