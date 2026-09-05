@@ -14,20 +14,26 @@
 
 // ── Reactive Core ──────────────────────────────────────────────
 
-export interface Signal<T> {
-    value: T;
-    peek(): T;
-    subscribe(fn: (value: T) => void): () => void;
-    readonly _type: typeof SIGNAL;
-}
+declare const SIGNAL: unique symbol;
 
 export interface ReadonlySignal<T> {
     readonly value: T;
+    /** прочитать без подписки */
     peek(): T;
+    /** ручная подписка: fn(value) при каждом реальном изменении; возвращает unsubscribe */
     subscribe(fn: (value: T) => void): () => void;
+    /** бренд: только сигналы Aegis (не любой { value }) */
+    readonly [SIGNAL]: true;
 }
-
-declare const SIGNAL: unique symbol;
+export interface Signal<T> extends ReadonlySignal<T> {
+    value: T;
+    /** sig.update(v => v + 1) */
+    update(fn: (prev: T) => T): void;
+}
+/** computed(): read-only сигнал с ручным dispose (обычно не нужен — умирает со scope) */
+export interface Computed<T> extends ReadonlySignal<T> {
+    dispose(): void;
+}
 
 export interface SignalOptions<T> {
     name?: string;
@@ -45,7 +51,7 @@ export type Displayable = string | number | boolean | null | undefined;
 export type ClassValue = string | null | undefined | false | ClassValue[] | Record<string, Reactive<unknown>>;
 
 export function signal<T>(initial: T, nameOrOpts?: string | SignalOptions<T>): Signal<T>;
-export function computed<T>(fn: (prev: T) => T, nameOrOpts?: string | ComputedOptions<T>): ReadonlySignal<T>;
+export function computed<T>(fn: (prev: T) => T, nameOrOpts?: string | ComputedOptions<T>): Computed<T>;
 export interface EffectOptions {
     name?: string;
     /** печатать причину каждого перезапуска (dev) */
@@ -177,7 +183,9 @@ export function onDispose(fn: () => void): () => void;
 
 // ── DOM Rendering ──────────────────────────────────────────────
 
-export function html(strings: TemplateStringsArray, ...values: unknown[]): DocumentFragment;
+/** Что можно вставить в html``: текст, узел, сигнал, функция (реактивно), ref/attach, class/style-объект, массив. Promise/Date — нет (${String(date)}, when()/resource()) */
+export type HtmlValue = Displayable | Node | ReadonlySignal<any> | ((...args: any[]) => unknown) | Ref<any> | Attachment<any> | ClassValue | Record<string, Reactive<unknown>> | HtmlValue[];
+export function html(strings: TemplateStringsArray, ...values: HtmlValue[]): DocumentFragment;
 export function render(target: Element, content: DocumentFragment | Element): void;
 
 export function text(el: Element, value: Reactive<Displayable>): () => void;
@@ -455,7 +463,7 @@ export function inView(el: Element, opts?: IntersectionObserverInit): { visible:
 /** Окно как сигналы (singleton, один passive listener, запись в rAF) */
 export function viewport(): { width: ReadonlySignal<number>; height: ReadonlySignal<number>; scrollX: ReadonlySignal<number>; scrollY: ReadonlySignal<number> };
 
-export function debounced<T extends (...args: any[]) => any>(fn: T, ms: number): T & { cancel(): void };
+export function debounced<T extends (...args: any[]) => any>(fn: T, ms: number): T & { cancel(): void; /** вызвать немедленно, отменив таймер */ flush: T };
 export function throttled<T extends (...args: any[]) => any>(fn: T, ms: number): T;
 /** Polling с auto-stop при dispose. В фоновой вкладке спит (background: true — не спать) */
 export function poll(fn: () => Promise<void> | void, ms: number, opts?: { background?: boolean }): () => void;
@@ -662,9 +670,11 @@ export function seedFrom(root?: Document | Element): number;
 
 // ── Form ───────────────────────────────────────────────────────
 
-export type ValidationRule = (value: unknown, key: string, fields: Record<string, Signal<unknown>>) => string | null;
+export type ValidationRule<V = unknown> = (value: V, key: string, fields: Record<string, Signal<unknown>>) => string | null;
+/** Поле формы: { value, rules } — правила типизированы значением: minLen(3) на числовом поле — ошибка типов */
+export interface FieldDef<V = any> { value: V; rules?: Array<ValidationRule<V> | AsyncValidationRule<V>> }
 
-export interface FormResult<T extends Record<string, { value: any; rules?: ValidationRule[] }>> {
+export interface FormResult<T extends Record<string, { value: any; rules?: any[] }>> {
     fields: { [K in keyof T]: Signal<T[K]['value']> };
     errors: { [K in keyof T]: Signal<string | null> };
     dirty: ReadonlySignal<boolean>;
@@ -676,7 +686,7 @@ export interface FormResult<T extends Record<string, { value: any; rules?: Valid
     setErrors(errors: Partial<{ [K in keyof T]: string | string[] }>): void;
 }
 
-export function form<T extends Record<string, { value: any; rules?: ValidationRule[] }>>(schema: T): FormResult<T> & FormSubmitState & FormCore;
+export function form<S extends Record<string, any>>(schema: { [K in keyof S]: FieldDef<S[K]> }): FormResult<{ [K in keyof S]: FieldDef<S[K]> }> & FormSubmitState & FormCore;
 export interface FormSubmitState {
     submitting: ReadonlySignal<boolean>;
     submitCount: ReadonlySignal<number>;
@@ -720,8 +730,8 @@ export interface FormOptions {
     schema?: StandardSchemaV1<any, any>;
     asyncDebounce?: number;
 }
-/** form(defaults, { rules, schema }) — виртуальная форма из значений по умолчанию */
-export function form<T extends Record<string, any>>(defaults: T, opts: FormOptions): FormResult<{ [K in keyof T]: { value: T[K] } }> & FormSubmitState & FormCore & {
+/** form(defaults, { rules, schema }) — форма из значений по умолчанию: form({ name: '', age: 0 }) */
+export function form<T extends Record<string, any>>(defaults: T & { [K in keyof T]: T[K] extends { value: any } ? never : T[K] }, opts?: FormOptions): FormResult<{ [K in keyof T]: { value: T[K] } }> & FormSubmitState & FormCore & {
     submit(handler: (values: T) => unknown | Promise<unknown>): Promise<unknown>;
     submit(url: string, opts?: { headers?: HeadersInit; transform?: (v: T) => unknown; fetchOpts?: RequestOptions }): Promise<{ ok: boolean; status?: number; data?: any; error?: unknown }>;
 };
@@ -729,12 +739,12 @@ export const email: ValidationRule<string>;
 export function min(n: number, msg?: string): ValidationRule<number | string | null>;
 export function max(n: number, msg?: string): ValidationRule<number | string | null>;
 
-export const required: ValidationRule;
-export function minLen(n: number): ValidationRule;
-export function maxLen(n: number): ValidationRule;
-export function pattern(re: RegExp, msg?: string): ValidationRule;
-export const emailRule: ValidationRule;
-export function matches(otherKey: string, msg?: string): ValidationRule;
+export const required: ValidationRule<any>;
+export function minLen(n: number): ValidationRule<string>;
+export function maxLen(n: number): ValidationRule<string>;
+export function pattern(re: RegExp, msg?: string): ValidationRule<string>;
+export const emailRule: ValidationRule<string>;
+export function matches(otherKey: string, msg?: string): ValidationRule<any>;
 
 // ── WireForm ───────────────────────────────────────────────────
 
@@ -841,9 +851,13 @@ export function mount<R = void>(
 /** Компонент = функция (ctx) => Node | api | void; ctx.props — reactive()-объект props */
 export type Component<P = Record<string, any>, R = void | object | Node> = (ctx: ComponentContext & { props: P & ReactiveExtras<P> }) => R | Promise<R>;
 /** Остров из компонента-функции: data-* (с types) → ctx.props */
-export function island<P = Record<string, any>>(name: string, component: Component<P>, opts?: { types?: Record<string, PropType> }): void;
+/** ctx.props острова: объявленные types → типизированы, остальные data-* — unknown */
+export type IslandProps<T> = { [K in keyof T]: PropValue<{ type: T[K] }> } & Record<string, unknown>;
+export function island<T extends Record<string, PropType> = {}>(name: string, component: Component<IslandProps<T>>, opts?: { types?: T }): void;
+/** ctx.props custom element: { count: Number } → number | null, { count: { type: Number, default: 0 } } → number */
+export type ElementProps<P> = { [K in keyof P]: PropValue<P[K] extends PropType ? { type: P[K] } : P[K]> };
 /** Custom element из того же компонента: атрибуты → ctx.props (реактивно) */
-export function element<P = Record<string, any>>(tag: string, component: Component<P>, opts?: { props?: Record<string, PropType | { type: PropType; default?: unknown; reflect?: boolean }>; shadow?: boolean; styles?: CSSStyleSheet | string }): void;
+export function element<P extends Record<string, PropType | { type: PropType; default?: unknown; reflect?: boolean }> = {}>(tag: `${string}-${string}`, component: Component<ElementProps<P>>, opts?: { props?: P; shadow?: boolean; styles?: CSSStyleSheet | string; formAssociated?: boolean }): void;
 export type IslandSetup<D = Record<string, unknown>> = (el: HTMLElement, data: D, ctx: ComponentContext<HTMLElement>) => void | object | Node | Promise<void | object | Node>;
 /**
  * Зарегистрировать компонент по имени; { load } — код острова грузится import()-ом при монтировании
@@ -999,19 +1013,31 @@ export interface PropDefinition<T = unknown> {
     attribute?: string;
 }
 
-export interface ElementDefinition {
-    props?: Record<string, PropDefinition>;
+/** Тип значения prop из { type, default }: { type: Number } → number | null, { type: Number, default: 0 } → number */
+export type PropValue<P> = P extends { type: BooleanConstructor } ? boolean
+    : P extends { type: NumberConstructor } ? (P extends { default: number } ? number : number | null)
+    : P extends { type: StringConstructor } ? (P extends { default: string } ? string : string | null)
+    : P extends { type: ArrayConstructor } ? (P extends { default: infer D } ? D : unknown[] | null)
+    : P extends { type: ObjectConstructor } ? (P extends { default: infer D } ? D : Record<string, unknown> | null)
+    : P extends { type: (raw: string) => infer R } ? R
+    : P extends { default: infer D } ? D : unknown;
+export type PropSignals<P> = { [K in keyof P]: Signal<PropValue<P[K]>> };
+
+export interface ElementDefinition<P extends Record<string, PropDefinition> = Record<string, PropDefinition>> {
+    props?: P;
     shadow?: boolean;
     styles?: CSSStyleSheet | string;
-    setup?: (el: HTMLElement, props: Record<string, Signal<unknown>>, ctx: {
+    setup?: (el: HTMLElement, props: PropSignals<P>, ctx: {
         internals?: ElementInternals;
         shadow?: ShadowRoot;
-    }) => void | (() => DocumentFragment | Element);
+        emit(name: string, detail?: unknown): boolean;
+    }) => void | (() => DocumentFragment | Element) | Node;
     formAssociated?: boolean;
     extends?: string;
 }
 
-export function defineElement(tagName: string, def: ElementDefinition): typeof HTMLElement;
+/** tagName должен содержать дефис (иначе DOMException в рантайме — и ошибка типов здесь) */
+export function defineElement<P extends Record<string, PropDefinition>>(tagName: `${string}-${string}`, def: ElementDefinition<P>): typeof HTMLElement;
 
 // ── Anchor Positioning ─────────────────────────────────────────
 
@@ -1106,7 +1132,7 @@ export interface Router {
  * guard/redirect как данные, search-параметры как сигналы, ленивые маршруты через import().
  * Не перехватывает: hash-ссылки, формы, download, data-aegis-reload, несовпавшие пути (уходят на сервер).
  */
-export function router<R extends Record<string, RouteHandler<any, any> | RouteDef>>(routes: { [K in keyof R & string]: RouteHandler<any, K> | (RouteDef & { handler?: RouteHandler<any, K> }) }, opts?: RouterOptions): Router;
+export function router<R extends Record<string, unknown>>(routes: { [K in keyof R]: K extends string ? RouteHandler<any, K> | (RouteDef & { handler?: RouteHandler<any, K> }) : never }, opts?: RouterOptions): Router;
 /** Идёт View Transition роутера */
 export const transitioning: ReadonlySignal<boolean>;
 
@@ -1192,15 +1218,33 @@ export function jsonScript<T = unknown>(target: string | Element, root?: Documen
 /**
  * Translation function with reactive dictionary.
  */
-export interface TranslationFunction {
-    /** Translate a key, with optional param substitution */
-    (key: string, params?: Record<string, string>): string;
+export type PluralForms = Partial<Record<'zero' | 'one' | 'two' | 'few' | 'many' | 'other', string>>;
+export interface I18nOptions {
+    /** начальная локаль (default: <html lang> или 'en') */
+    locale?: string;
+    /** локаль-запас для отсутствующих ключей */
+    fallback?: string;
+    pluralOpts?: Intl.PluralRulesOptions;
+    /** писать t.locale в <html lang> */
+    syncLang?: boolean;
+}
+export interface TranslationFunction<K extends string = string> {
+    /** Translate a key, with optional param substitution ({name}) and plural by params.n / params.count */
+    (key: K, params?: Record<string, string | number>): string;
     /** Replace entire dictionary (e.g. on locale switch) */
-    load(newDict: Record<string, string>): void;
+    load(newDict: Record<string, unknown>): void;
     /** Merge additional translations into the current dictionary */
-    merge(extra: Record<string, string>): void;
+    merge(extra: Record<string, unknown>): void;
     /** The reactive dictionary signal */
-    dict: Signal<Record<string, string>>;
+    dict: Signal<Record<string, unknown>>;
+    /** реактивная локаль; запись переключает словарь (ленивая подгрузка → t.loading) */
+    locale: Signal<string>;
+    loading: ReadonlySignal<boolean>;
+    num(v: number | bigint, o?: Intl.NumberFormatOptions): string;
+    date(v: Date | number, o?: Intl.DateTimeFormatOptions): string;
+    rel(v: number, unit: Intl.RelativeTimeFormatUnit, o?: Intl.RelativeTimeFormatOptions): string;
+    list(v: Iterable<string>, o?: Intl.ListFormatOptions): string;
+    plural(n: number, forms: PluralForms): string;
 }
 
 /**
@@ -1219,7 +1263,8 @@ export function maxFiles(n: number, msg?: string): ValidationRule<any>;
  * реактивная локаль t.locale с ленивой подгрузкой (t.loading), Intl-форматтеры t.num/t.date/t.rel/t.list.
  * i18n(flatDict) — плоский словарь одной локали.
  */
-export function i18n(dict?: Record<string, string>): TranslationFunction;
+export function i18n<D extends Record<string, string>>(dict: D, opts?: I18nOptions): TranslationFunction<keyof D & string>;
+export function i18n(dicts?: Record<string, unknown>, opts?: I18nOptions): TranslationFunction;
 
 // ── Helpers ────────────────────────────────────────────────────
 

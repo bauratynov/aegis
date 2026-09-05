@@ -1,0 +1,14 @@
+{
+  "compilerOptions": {
+    "strict": true,
+    "noEmit": true,
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "lib": ["ES2023", "ESNext.Disposable", "DOM", "DOM.Iterable"],
+    "types": [],
+    "skipLibCheck": false,
+    "allowImportingTsExtensions": true
+  },
+  "files": ["aegis.d.ts", "test-types.ts"]
+}

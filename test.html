@@ -2402,6 +2402,20 @@
         sandbox.innerHTML = '';
     })();
 
+    section('💎 #60 — defineElement: снятый атрибут возвращает default');
+
+    await (async () => {
+        defineElement('x-default-test', { props: { n: { type: Number, default: 0 }, s: { type: String }, on: { type: Boolean } }, setup(el, props) { el.props = props; } });
+        const el = document.createElement('x-default-test');
+        el.setAttribute('n', '5'); el.setAttribute('s', 'x'); el.setAttribute('on', '');
+        sandbox.appendChild(el);
+        await wait(0);
+        assert('defineElement: атрибуты прочитаны', el.props.n.value === 5 && el.props.s.value === 'x' && el.props.on.value === true);
+        el.removeAttribute('n'); el.removeAttribute('s'); el.removeAttribute('on');
+        assert('defineElement: removeAttribute → default (0), null без default, false для Boolean', el.props.n.value === 0 && el.props.s.value === null && el.props.on.value === false);
+        sandbox.innerHTML = '';
+    })();
+
     section('component() & destroy()');
 
     (() => {
