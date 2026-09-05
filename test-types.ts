@@ -127,6 +127,22 @@ const isLeader = leader('sse', { fallback: false }); const l: boolean = isLeader
 const off = resource<number[]>('/api/queue', { offline: { maxAttempts: 5 } });
 const dead = off.failed.value; if (dead.length) { const url: string = dead[0].mutation.url; void url; }
 
+import { predictor, speculate, prefetchOn, prefetch, boost, type Predictor } from './aegis.js';
+// ── cache phase 7 — speculation budget / intent / predictor / speculate
+configure({ speculation: { maxInflight: 2, saveData: 'respect' }, prefetch: { minUtility: 0, hoverDelay: 'auto', horizon: 1500 } });
+configure({ speculation: false });
+prefetch('/api/next', { p: 0.4, kind: 'predict' }); prefetch('/api/x', { force: true });
+prefetchOn(document.body, (a) => a.getAttribute('data-api'), { on: 'hover', delay: 'auto', velocity: 300, p: () => 0.5, rootMargin: 'auto' });
+const pred: Predictor = predictor({ decay: 0.95, kappa: 5, storage: null });
+pred.learn('/a', '/b'); const top = pred.next('/a', ['/b', '/c'])[0]; const pp: number = top.p; void pp; pred.prior('/a', { '/b': 0.6 }); pred.p('/a', '/b'); pred.reset();
+const r7 = router({ '/u/:id': { loader: (p, { signal, speculative }) => ({ id: p.id, spec: !!speculative, aborted: !!signal?.aborted }), handler: () => {} } },
+    { preload: { on: 'hover', delay: 'auto' }, preloadTTL: 20_000, preloadData: true, predict: { predictor: pred, topK: 2, minP: 0.3 } });
+r7.preload('/u/1', 0.5);
+const b7 = boost({ prefetch: { on: 'visible', rootMargin: 'auto' }, predict: true }); b7.prefetch('/orders', 0.4);
+const undo7 = speculate({ prerender: 'conservative', exclude: '[data-no-speculate]' }); undo7();
+const sp7 = stats().speculation; if (sp7) { const q: number = sp7.queued; void q; }
+const cs7 = cache.stats(); const gh: number = cs7.ghost; void gh; cs7.speculation.skipped; cs7.prefetch.hoverDelay;
+
 // ── aegis/test — render / fire / waitFor / mockFetch
 import { render, fire, waitFor, mockFetch, cleanup, withScope, fakeClock } from './aegis-test.js';
 const clock = fakeClock(1000); await clock.advance(30_000); clock.restore();

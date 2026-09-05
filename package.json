@@ -46,7 +46,8 @@
   },
   "sideEffects": false,
   "scripts": {
-    "test": "node --test test-core.mjs && node check-exports.mjs && tsc -p tsconfig.types.json",
+    "test": "node --test test-core.mjs && node check-exports.mjs && tsc -p tsconfig.types.json && node test-prefetch-sim.mjs",
+    "test:prefetch": "node test-prefetch-sim.mjs",
     "build": "node build.mjs",
     "test:browsers": "node test-browsers.mjs",
     "prepublishOnly": "npm run build && npm test"

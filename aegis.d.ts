@@ -114,7 +114,7 @@ export function flushSync(): void;
 /** Синхронно выполнить отложенные полосы micro/frame и очередь эффектов */
 export function flush(): void;
 /** Счётчики движка: flushes, effectRuns, maxRounds, slow (top-20 по мс при dev.profile), scopes, effects, components, кэши */
-export function stats(): { flushes: number; effectRuns: number; maxRounds: number; slow: Array<{ name: string; ms: number }>; scopes: number; effects: number; components: number; resourceCache: number; cssCache: number; queued: number; prefetch: { fired: number; used: number; wasted: number } | null };
+export function stats(): { flushes: number; effectRuns: number; maxRounds: number; slow: Array<{ name: string; ms: number }>; scopes: number; effects: number; components: number; resourceCache: number; cssCache: number; queued: number; prefetch: { fired: number; used: number; wasted: number; hoverDelay: number } | null; speculation: { inflight: number; queued: number; fired: number; skipped: number; aborted: number } | null };
 /** Корневой scope для тестов: const [api, dispose] = root(dispose => …) */
 export function root<T>(fn: (dispose: () => void) => T): [T, () => void];
 /** Дождаться сигнала: resolve при первом значении, для которого predicate истинен; reject TimeoutError / при dispose scope */
@@ -446,6 +446,10 @@ export interface AegisConfig {
     breaker?: boolean | { threshold?: number; cooldown?: number; key?: (url: string) => string };
     /** идентификация сущностей для cache.patchEntity() и cache: { entity }: (obj) => 'user:42' | null */
     identify?: ((obj: any) => string | null) | null;
+    /** спекулятивные запросы (prefetch, preload маршрута, predict, прогрев островов): 'auto' — по navigator.connection (saveData / 2g / prefers-reduced-data → выключено, 3g → один в полёте), false — никогда, { maxInflight, saveData: 'ignore' } */
+    speculation?: 'auto' | false | { maxInflight?: number; saveData?: 'respect' | 'ignore' };
+    /** порог полезности прогрева (p·min(rtt, horizon) − передача − fixedCost, мс) и задержка hover: 80 | 'auto' (адаптивная по dwell-гистограммам) */
+    prefetch?: { minUtility?: number; fixedCost?: number; horizon?: number; hoverDelay?: number | 'auto'; rtt?: number; bytes?: number } | null;
     /** лимит повторов на клиент в скользящем окне: retries ≤ ratio × requests + min; отказ — e.budget === true */
     retryBudget?: boolean | { ratio?: number; min?: number; window?: number };
     /** планировщик ревалидации: refill token bucket на причину (мс), параллелизм, стаггер между стартами, джиттер reconnect */
@@ -733,9 +737,9 @@ export function store<T extends object>(definition: T): T & {
 export function cachedResource<T = unknown>(source: string | (() => string), opts?: ResourceOptions<T> & CacheOptions): ResourceResult<T>;
 
 /** Прогреть кэш без подписчиков (hover, приближение к viewport); данные доступны resource(url, { cache: true }) */
-export function prefetch(url: string, opts?: { /** вид прогрева для статистики попаданий (prefetchOn проставляет сам) */ kind?: string; key?: string; staleTime?: number; cacheTime?: number; fetcher?: Fetcher; transform?: (d: unknown) => unknown }): Promise<void>;
+export function prefetch(url: string, opts?: { /** вид прогрева для статистики попаданий (prefetchOn проставляет сам) */ kind?: string; /** вероятность использования — прогрев только при p·rtt выше цены сети */ p?: number; /** мимо бюджета сети (configure({ speculation })) */ force?: boolean; key?: string; staleTime?: number; cacheTime?: number; fetcher?: Fetcher; transform?: (d: unknown) => unknown }): Promise<void>;
 /** Прогрев по намерению: hover (default) | tap | visible; при saveData/2g — только tap. Возвращает dispose */
-export function prefetchOn(el: Element, urlOrFn: string | ((target: Element) => string | null | undefined), opts?: { on?: 'hover' | 'tap' | 'visible'; rootMargin?: string; staleTime?: number }): () => void;
+export function prefetchOn(el: Element, urlOrFn: string | ((target: Element) => string | null | undefined), opts?: { on?: 'hover' | 'tap' | 'visible'; /** 'auto' — горизонт по скорости скролла (400 / 1200 / 3000 px) */ rootMargin?: string; /** задержка hover: мс | 'auto' */ delay?: number | 'auto'; /** порог скорости курсора (px/s): ниже — «целится», греем сразу */ velocity?: number; /** вероятность использования (или функция от цели) для порога полезности */ p?: number | ((target: Element) => number); staleTime?: number; kind?: string }): () => void;
 
 /** Курсорная пагинация: страницы копятся, loadMore дедуплицируется */
 export function infiniteResource<P = unknown, T = unknown>(urlFor: (cursor: unknown) => string | null, opts?: {
@@ -760,7 +764,7 @@ export interface CacheExplain {
     tags?: string[] | null; prefetched?: string | null; /** ETag последнего ответа (If-None-Match → 304) */ etag?: string | null; staleTimeMode?: 'http' | 'auto' | string | null; history: CacheEvent[];
 }
 export interface CacheEntryStats { key: string; state: CacheState; age: number | null; staleTime: number; subscribers: number; inflight: boolean; error: string | null; size: number; gcIn: number | null; fetches: number; unchanged: number; suggestedStaleTime: number | null; prefetched: string | null; tags: string[] | null }
-export interface CacheStats { entries: CacheEntryStats[]; prefetch: { fired: number; used: number; wasted: number; byKind: Record<string, { p: number; n: number }> }; bytes: number; evictions: number; limits: { maxEntries: number; maxBytes: number }; now: number }
+export interface CacheStats { entries: CacheEntryStats[]; prefetch: { fired: number; used: number; wasted: number; byKind: Record<string, { p: number; n: number }>; hoverDelay: number }; speculation: { inflight: number; queued: number; fired: number; skipped: number; aborted: number }; ghost: number; bytes: number; evictions: number; limits: { maxEntries: number; maxBytes: number }; now: number }
 /** Публичный доступ к кэшу ресурсов — ключи нормализуются как в resource() */
 export const cache: {
     get<T = unknown>(key: string | CacheKeyPart[] | Record<string, unknown>): T | undefined;
@@ -807,6 +811,19 @@ export function seed(key: string | CacheKeyPart[], data: unknown, opts?: { age?:
  * Идемпотентна; hydrate() вызывает её сама. Возвращает число засеянных записей.
  */
 export function seedFrom(root?: Document | Element): number;
+/** Предиктор переходов: марковская цепь 1-го порядка по паттернам маршрутов с забыванием (decay), серверным prior (kappa pseudo-counts) и persist в storage */
+export interface Predictor {
+    learn(from: string, to: string): void;
+    /** ранжировать кандидатов: p = (счётчик + kappa·prior + alpha) / (n + kappa + alpha·|candidates|) */
+    next(from: string, candidates: string[]): Array<{ key: string; p: number }>;
+    p(from: string, to: string): number;
+    /** серверный prior для from: { to: p } — или <script type="application/json" data-aegis-predict="from"> через seedFrom()/hydrate() */
+    prior(from: string, map: Record<string, number>): void;
+    reset(): void;
+}
+export function predictor(opts?: { decay?: number; alpha?: number; kappa?: number; storage?: Storage | { getItem(k: string): string | null; setItem(k: string, v: string): void; removeItem(k: string): void } | null; key?: string; max?: number }): Predictor;
+/** Speculation Rules для server-first страниц: один <script type="speculationrules"> с document-rules (prefetch / prerender по eagerness); без поддержки — <link rel="prefetch"> по намерению. Возвращает dispose */
+export function speculate(opts?: { prefetch?: boolean; prerender?: boolean | 'conservative' | 'moderate' | 'eager'; eagerness?: 'conservative' | 'moderate' | 'eager'; select?: string; exclude?: string; urls?: string[] }): () => void;
 /** Лидер среди вкладок (Web Locks): true ровно в одной вкладке, лок переходит при её закрытии; .release() — отдать; без Web Locks — fallback */
 export function leader(name?: string, opts?: { fallback?: boolean }): ReadonlySignal<boolean> & { release(): void };
 
@@ -1218,7 +1235,7 @@ export interface RouteDef<D = unknown> {
     /** компонент-страница (контракт island()/mount()); монтируется в router({ outlet }) или в outlet родительского layout */
     component?: Component<RouteComponentProps<string, D>>;
     /** данные до dispose старой страницы; отменяется через signal при новой навигации */
-    loader?: (params: Record<string, string>, ctx: { signal: AbortSignal | undefined; query: Record<string, string>; params: Record<string, string> }) => D | Promise<D>;
+    loader?: (params: Record<string, string>, ctx: { signal: AbortSignal | undefined; query: Record<string, string>; params: Record<string, string>; /** true — прогрев до перехода (hover / predict / r.preload): можно снизить priority */ speculative?: boolean }) => D | Promise<D>;
     /** true — идём; false — отменить (sync); строка — redirect; Promise — ждём */
     guard?: (to: RouteInfo, from: RouteInfo) => boolean | string | void | Promise<boolean | string | void>;
     redirect?: string | ((to: RouteInfo, from: RouteInfo) => string);
@@ -1237,8 +1254,14 @@ export interface RouterOptions {
     transition?: boolean | ((info: { back: boolean }) => string[] | false);
     /** класс активной ссылки (aria-current="page" ставится всегда) */
     activeClass?: string;
-    /** прогрев ленивых маршрутов/данных: 'hover' | 'visible' | false */
-    preload?: 'hover' | 'visible' | false;
+    /** прогрев кода и loader маршрута по намерению: 'hover' (замедление курсора или delay) | 'visible' | 'tap' | { on, delay: 80 | 'auto', velocity, rootMargin } */
+    preload?: 'hover' | 'visible' | 'tap' | boolean | { on?: 'hover' | 'visible' | 'tap'; delay?: number | 'auto'; velocity?: number; rootMargin?: string };
+    /** сколько мс прогретый loader ждёт перехода (default 30000) */
+    preloadTTL?: number;
+    /** false — preload греет только код маршрута, не loader */
+    preloadData?: boolean;
+    /** предиктор переходов: после каждого маршрута учится (pattern → pattern) и в idle греет top-K вероятных ссылок страницы (p ≥ minP, полезность > 0) */
+    predict?: boolean | { predictor?: Predictor; topK?: number; minP?: number };
     scroll?: 'after-transition' | 'manual';
     beforeEach?: (to: RouteInfo, from: RouteInfo) => void;
     /** пересоздавать scope при изменении только search (старое поведение) */
@@ -1276,6 +1299,8 @@ export interface Router {
     ready: Promise<unknown>;
     /** есть ли маршрут для пути (boost() уступает роутеру) */
     matches(path: string): boolean;
+    /** прогреть маршрут (код + loader) до перехода в рамках бюджета сети; p — вероятность для порога полезности */
+    preload(path: string, p?: number): Promise<void>;
     cleanup(): void;
     dispose(): void;
 }
@@ -1340,11 +1365,13 @@ export function boost(opts?: {
     root?: string | Element;
     mode?: SwapMode;
     transition?: boolean;
-    prefetch?: 'hover' | false;
+    prefetch?: 'hover' | 'visible' | 'tap' | boolean | { on?: 'hover' | 'visible' | 'tap'; delay?: number | 'auto'; velocity?: number; rootMargin?: string };
+    /** предиктор: учится на aegis:load (пути нормализуются: числа → :id), в idle греет HTML top-K вероятных страниц */
+    predict?: boolean | { predictor?: Predictor; topK?: number; minP?: number };
     scroll?: 'restore' | 'preserve';
     head?: 'title' | 'title+styles' | false;
     routers?: Router[];
-}): { pending: ReadonlySignal<boolean>; visit(url: string): Promise<boolean>; dispose(): void };
+}): { pending: ReadonlySignal<boolean>; visit(url: string): Promise<boolean>; /** прогреть HTML страницы в рамках бюджета сети */ prefetch(url: string, p?: number): Promise<void>; dispose(): void };
 
 export type SlotSpec = Reactive<Displayable> | {
     text?: Reactive<Displayable>;
