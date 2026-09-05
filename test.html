@@ -42,7 +42,7 @@
         defineElement, anchor, router, command, virtualScroll,
         offlineResource,
         lazy, nextTick, i18n, uncloak, injectStyles,
-        VERSION, mount, cache, withRetry } from './aegis.js';
+        VERSION, mount, cache, withRetry, leader } from './aegis.js';
 
     const results = document.getElementById('results');
     const sandbox = document.getElementById('sandbox');
@@ -3243,6 +3243,131 @@
         defaults.motion = true;
     })();
 
+    section('💎 кэш фаза 6 — persist, шина между вкладками, Web Locks, офлайн-очередь как лог');
+
+    await (async () => {
+        reset();
+        const seen = [];
+        const off = onWarn(w => seen.push(w));
+        dev.resetWarnings();
+        // headless Chrome: indexedDB есть, но операции не завершаются — проверяем реальным круговым put/get с таймаутом
+        const hasIDB = typeof indexedDB !== 'undefined' && await Promise.race([new Promise((res) => {
+            try {
+                const r = indexedDB.open('aegis-probe', 1);
+                r.onupgradeneeded = () => r.result.createObjectStore('s');
+                r.onerror = () => res(false); r.onblocked = () => res(false);
+                r.onsuccess = () => { const db = r.result; const tx = db.transaction('s', 'readwrite'); tx.objectStore('s').put(1, 'k'); const g = tx.objectStore('s').get('k'); g.onsuccess = () => { db.close(); res(g.result === 1); }; g.onerror = () => res(false); };
+            } catch (e) { res(false); }
+        }), new Promise(res => setTimeout(() => res(false), 1500))]);
+
+        // persist: запись пишется в IndexedDB и гидрирует новый инстанс без запроса
+        if (hasIDB) {
+            const sc = createScope();
+            let a;
+            sc.run(() => { a = resource('/t6/persist', { cache: { persist: { version: 1 } }, staleTime: 60000, fetcher: async () => ({ saved: 1 }) }); });
+            await settled();
+            const rec = await Promise.race([cache.persisted('/t6/persist'), new Promise(res => setTimeout(() => res('timeout'), 3000))]);
+            assert('persist: запись в IDB после ответа', !!rec && rec !== 'timeout' && rec.data.saved === 1 && rec.v === 1 && rec.n > 0);
+            sc.dispose();
+            if (rec && rec !== 'timeout') {
+            cache.gc(Number.MAX_SAFE_INTEGER);                       // убрать из памяти
+            const sc2 = createScope();
+            let fetches = 0, b;
+            sc2.run(() => { b = resource('/t6/persist', { cache: { persist: { version: 1 } }, staleTime: 60000, fetcher: async () => { fetches++; return { saved: 2 }; } }); });
+            const hydrated = await cache.hydrated('/t6/persist');
+            await settled();
+            assert('persist: новый инстанс гидрирован с диска, свежий — без запроса', hydrated === true && b.data.value && b.data.value.saved === 1 && fetches === 0 && cache.explain('/t6/persist').history.some(h => h.reason === 'persist'));
+            sc2.dispose();
+            cache.remove('/t6/persist');
+            assert('persist: remove чистит и IDB', (await cache.persisted('/t6/persist')) === null);
+            cache.gc(Number.MAX_SAFE_INTEGER);
+            const sc3 = createScope();
+            let c;
+            sc3.run(() => { c = resource('/t6/persist', { cache: { persist: { version: 2 } }, staleTime: 60000, fetcher: async () => ({ saved: 3 }) }); });
+            await settled();
+            assert('persist: другая version — с диска не берётся', c.data.value && c.data.value.saved === 3);
+            sc3.dispose();
+            }
+        }
+
+        // шина между вкладками: имитируем вторую вкладку своим BroadcastChannel
+        if (typeof BroadcastChannel === 'function') {
+            const other = new BroadcastChannel('aegis:cache');
+            const got = [];
+            other.onmessage = (ev) => got.push(ev.data);
+            const sc4 = createScope();
+            let r;
+            sc4.run(() => { r = resource('/t6/sync', { cache: true, staleTime: 60000, fetcher: async () => ({ n: 1 }) }); });
+            await settled();
+            for (let i = 0; i < 50 && !got.some(m => m.t === 'set'); i++) await new Promise(res => setTimeout(res, 5));
+            assert('sync: ответ разослан другим вкладкам с Lamport-меткой', got.some(m => m.t === 'set' && m.key === '/t6/sync' && m.data.n === 1 && typeof m.v === 'number' && m.tab));
+            const v0 = cache.explain('/t6/sync').v;
+            other.postMessage({ t: 'set', key: '/t6/sync', data: { n: 2 }, v: v0 + 5, tab: 'zzzzzz', lastFetch: Date.now(), freshUntil: Date.now() + 60000 });
+            for (let i = 0; i < 50 && r.data.value.n !== 2; i++) await new Promise(res => setTimeout(res, 5));
+            assert('sync: более новая запись из другой вкладки применяется без запроса', r.data.value.n === 2 && cache.explain('/t6/sync').v === v0 + 5);
+            other.postMessage({ t: 'set', key: '/t6/sync', data: { n: 0 }, v: 1, tab: 'aaaaaa', lastFetch: Date.now() });
+            for (let i = 0; i < 10; i++) await new Promise(res => setTimeout(res, 5));
+            assert('sync: устаревшая запись (меньше v) игнорируется', r.data.value.n === 2);
+            got.length = 0;
+            await invalidate('/t6/sync');
+            for (let i = 0; i < 50 && !got.some(m => m.t === 'inv'); i++) await new Promise(res => setTimeout(res, 5));
+            assert('sync: invalidate рассылает inv', got.some(m => m.t === 'inv' && m.key === '/t6/sync'));
+            other.close();
+            sc4.dispose();
+        }
+
+        // leader(): один лидер среди вкладок (в одной вкладке — сразу true)
+        const sc5 = createScope();
+        let L;
+        sc5.run(() => { L = leader('t6'); });
+        for (let i = 0; i < 50 && !L.value; i++) await new Promise(res => setTimeout(res, 5));
+        assert('leader: лок получен', L.value === true);
+        L.release();
+        assert('leader: release отдаёт лок', L.value === false);
+        sc5.dispose();
+
+        // офлайн-очередь как лог: атомарный enqueue, Idempotency-Key, FIFO по ключу, dead-letter на 4xx
+        if (hasIDB) {
+            const savedFetcher = defaults.fetcher;
+            const log = [];
+            configure({ fetch: async (url, init) => {
+                const u = new URL(url, location.href); const h = new Headers(init && init.headers);
+                log.push((init.method || 'GET') + ' ' + u.pathname + ' ik=' + (h.get('Idempotency-Key') ? 'y' : 'n'));
+                if (u.pathname === '/t6/off/reject') return new Response(JSON.stringify({ message: 'bad' }), { status: 422, headers: { 'Content-Type': 'application/json' } });
+                return new Response(JSON.stringify({ ok: true }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+            } });
+            const sc6 = createScope();
+            let o;
+            sc6.run(() => { o = resource('/t6/off/list', { offline: true, fetcher: async () => [1] }); });
+            await settled();
+            await new Promise(res => setTimeout(res, 50));
+            // «уходим офлайн»: send кладёт в очередь, если нет сети — эмулируем сетевой ошибкой
+            configure({ fetch: async () => { throw new TypeError('Failed to fetch'); } });
+            await o.send('POST', '/t6/off/item', { a: 1 }, { optimistic: (l) => [...(l || []), 2] });
+            await o.send('POST', '/t6/off/reject', { a: 2 });
+            const st = await import('./aegis-test.js');
+            await st.flushAll();
+            assert('offline log: optimistic применён, две мутации в очереди', o.data.value.length === 2);
+            configure({ fetch: async (url, init) => {
+                const u = new URL(url, location.href); const h = new Headers(init && init.headers);
+                log.push((init.method || 'GET') + ' ' + u.pathname + ' ik=' + (h.get('Idempotency-Key') ? 'y' : 'n'));
+                if (u.pathname === '/t6/off/reject') return new Response(JSON.stringify({ message: 'bad' }), { status: 422, headers: { 'Content-Type': 'application/json' } });
+                return new Response(JSON.stringify({ ok: true }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+            } });
+            window.dispatchEvent(new Event('online'));
+            let flushed = false;
+            try { await st.waitFor(() => log.some(l => l.startsWith('POST /t6/off/item')) && o.failed.value.length === 1, { timeout: 4000 }); flushed = true; } catch (e) { flushed = false; }
+            assert('offline log: очередь ушла после online', flushed);
+            assert('offline log: flush ушёл с Idempotency-Key, 422 → dead-letter (failed), остальное доставлено', log.some(l => l === 'POST /t6/off/item ik=y') && o.failed.value[0].error.status === 422 && o.failed.value[0].mutation.url === '/t6/off/reject');
+            sc6.dispose();
+            configure({ fetch: null });
+            defaults.fetcher = savedFetcher;
+        }
+
+        off(); dev.resetWarnings(); reset();
+        defaults.motion = true;
+    })();
+
     section('component() & destroy()');
 
     (() => {
@@ -4298,10 +4423,12 @@
         assert('offlineResource: data loaded', r.data.peek()?.items?.length === 3);
         assert('offlineResource: not loading after fetch', r.loading.peek() === false);
 
-        // Optimistic mutation
-        r.mutate('POST', '/test/mutation', { new: true }, (old) => {
+        // Optimistic mutation (сетевая часть — через request(): мокаем fetch)
+        configure({ fetch: async () => new Response('{"ok":true}', { status: 200, headers: { 'Content-Type': 'application/json' } }) });
+        await r.mutate('POST', '/test/mutation', { new: true }, (old) => {
             return { ...old, items: [...old.items, 4] };
-        });
+        }).catch(() => {});
+        configure({ fetch: null });
         await new Promise(r => setTimeout(r, 50));
         assert('offlineResource: optimistic update', r.data.peek()?.items?.length === 4);
 

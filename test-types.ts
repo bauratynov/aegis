@@ -117,6 +117,16 @@ mutation<[User], User>(async (v, { etag }) => api.put('/api/users/' + v.id, v, {
 });
 const sz: number = cache.size().bytes; void sz; cache.stats().limits.maxEntries;
 
+// ── cache phase 6 — persist / sync / leader / offline dead-letter
+import { leader } from './aegis.js';
+resource<User[]>('/api/users', { cache: { persist: { version: 2, maxBytes: 5_000_000, maxAge: 86_400_000 }, sync: false, staleTime: 60_000 } });
+resource<User[]>('/api/users', { cache: { persist: true } });
+const rec = await cache.persisted('/api/users'); if (rec) { const at: number = rec.at; void at; }
+const hyd: boolean = await cache.hydrated(['users', 1]); void hyd;
+const isLeader = leader('sse', { fallback: false }); const l: boolean = isLeader.value; void l; isLeader.release();
+const off = resource<number[]>('/api/queue', { offline: { maxAttempts: 5 } });
+const dead = off.failed.value; if (dead.length) { const url: string = dead[0].mutation.url; void url; }
+
 // ── aegis/test — render / fire / waitFor / mockFetch
 import { render, fire, waitFor, mockFetch, cleanup, withScope, fakeClock } from './aegis-test.js';
 const clock = fakeClock(1000); await clock.advance(30_000); clock.restore();

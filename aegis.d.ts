@@ -585,8 +585,14 @@ export interface CacheOptions {
     background?: boolean;
     /** не вытеснять запись по лимитам кэша */
     pin?: boolean;
+    /** запись переживает перезагрузку (IndexedDB): true | { version — смена формата сбрасывает, maxBytes — бюджет хранилища (4 MB), maxAge — срок (7 дней) } */
+    persist?: boolean | { version?: number; maxBytes?: number; maxAge?: number };
+    /** делиться данными и инвалидацией с другими вкладками (BroadcastChannel, default true) */
+    sync?: boolean;
 }
 export interface OfflineOptions {
+    /** попыток на мутацию до dead-letter (default 10); 4xx — сразу */
+    maxAttempts?: number;
     dbName?: string;
     storeName?: string;
     staleTime?: number;
@@ -597,6 +603,8 @@ export interface LoaderSource<P, T> {
     loader: (ctx: { params: P; signal: AbortSignal }) => Promise<T> | T;
 }
 export interface OfflineResourceResult<T> extends ResourceResult<T> {
+    /** dead-letter: мутации, которые сервер отверг или не удалось доставить */
+    failed: ReadonlySignal<Array<{ mutation: { mutId: string; method: string; url: string; body: unknown }; error: unknown }>>;
     online: ReadonlySignal<boolean>;
     syncing: ReadonlySignal<boolean>;
     /** сетевая мутация; офлайн или сетевая ошибка → в IndexedDB-очередь, отправка при online / Background Sync */
@@ -773,6 +781,10 @@ export const cache: {
     patchEntity(entityKey: string, fn: (node: any) => any): number;
     /** трёхстороннее слияние объектов */
     merge3<T = any>(base: T, local: T, server: T): { value: T; conflicts: string[] };
+    /** запись persist-хранилища (IndexedDB): { data, at, v, n } | null */
+    persisted(key: string | CacheKeyPart[]): Promise<{ data: unknown; at: number; v: number; n: number; etag?: string | null } | null>;
+    /** дождаться гидрации записи с диска: true — данные пришли из persist */
+    hydrated(key: string | CacheKeyPart[]): Promise<boolean>;
     /** записи, байты (при maxBytes), вытеснения и лимиты */
     size(): { entries: number; bytes: number; evictions: number; maxEntries: number; maxBytes: number };
     /** почему запись свежая/устаревшая, кто её запрашивал, что рекомендовать */
@@ -795,6 +807,8 @@ export function seed(key: string | CacheKeyPart[], data: unknown, opts?: { age?:
  * Идемпотентна; hydrate() вызывает её сама. Возвращает число засеянных записей.
  */
 export function seedFrom(root?: Document | Element): number;
+/** Лидер среди вкладок (Web Locks): true ровно в одной вкладке, лок переходит при её закрытии; .release() — отдать; без Web Locks — fallback */
+export function leader(name?: string, opts?: { fallback?: boolean }): ReadonlySignal<boolean> & { release(): void };
 
 // ── Form ───────────────────────────────────────────────────────
 
