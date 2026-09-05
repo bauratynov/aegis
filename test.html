@@ -2662,6 +2662,40 @@
         dev.resetWarnings();
     })();
 
+    section('позиция в исходнике (site) — html``, effect(), resource()');
+
+    await (async () => {
+        const seen = [];
+        const off = onWarn(w => seen.push(w));
+        dev.resetWarnings();
+        const scope = createScope();
+        scope.run(() => { html`<button @click=${undefined}>x</button>`; });     // E034 из test.html
+        const e34 = seen.find(w => w.code === 'E034');
+        assert('site: предупреждение из html`` знает файл и строку вызова', e34 && typeof e34.site === 'string' && /test\.html:\d+:\d+$/.test(e34.site) && /test\.html/.test(e34.url));
+        scope.dispose();
+
+        effect(() => {});                                                       // E001 вне scope + E019 без сигналов
+        const e01 = seen.find(w => w.code === 'E001');
+        assert('site: effect() вне scope — позиция вызова effect()', e01 && /test\.html:\d+:\d+$/.test(e01.site || ''));
+
+        const sc2 = createScope();
+        let inner = null;
+        sc2.run(() => { effect(() => { inner = signal(1).value; }, 'my-watch'); });
+        const snap = dev.inspect(sc2);
+        const ef = snap.effects.find(e => e.name === 'my-watch');
+        assert('site: dev.inspect() отдаёт позицию пользовательского эффекта', ef && /test\.html:\d+:\d+$/.test(ef.site || ''));
+        sc2.dispose();
+
+        const sc3 = createScope();
+        sc3.run(() => { resource('/api/x/undefined', { fetcher: async () => ({}) }); });
+        await settled();
+        const e35 = seen.find(w => w.code === 'E035');
+        assert('site: resource() — позиция вызова resource()', e35 && /test\.html:\d+:\d+$/.test(e35.site || ''));
+        sc3.dispose();
+        off();
+        dev.resetWarnings();
+    })();
+
     section('component() & destroy()');
 
     (() => {

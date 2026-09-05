@@ -95,19 +95,39 @@ export function onWarn(fn) {
 }
 
 /** Elm-style three-part warning: what → why → fix. Каждое сообщение печатается один раз */
-function _warn(code, { what, why, fix, el }, onceKey) {
+// Позиция в исходнике (dev): первый кадр стека вне aegis*.js — «At: /js/app.js:42:15». Chrome «at fn (url:l:c)», Firefox «fn@url:l:c».
+let _curSite = null;   // позиция html``-шаблона, который сейчас разбирается/инстанцируется (наследуется его эффектами и предупреждениями)
+function _callSite() {
+    if (!_dev()) return null;
+    const lim = Error.stackTraceLimit;
+    Error.stackTraceLimit = 16;
+    const stack = new Error().stack || '';
+    Error.stackTraceLimit = lim;
+    for (const line of stack.split('\n')) {
+        const m = /(?:^|[\s(@])((?:https?|file|blob):[^\s()]*?):(\d+):(\d+)\)?\s*$/.exec(line);
+        if (!m) continue;
+        const url = m[1];
+        if (/\/aegis[^/]*\.(?:m?js)$/.test(url)) continue;   // aegis.js, aegis_full.js, aegis.min.js, aegis-devtools.js, aegis-test.js
+        return { url, line: +m[2], col: +m[3], short: url.replace(/^[a-z]+:\/\/[^/]+/, '').replace(/\?.*$/, '') + ':' + m[2] + ':' + m[3] };   // без origin и query
+    }
+    return null;
+}
+
+function _warn(code, { what, why, fix, el, site }, onceKey) {
     if (!_dev()) return;
     const key = code + '|' + (onceKey ?? what);
     if (_seenWarnings.has(key)) return;
     _seenWarnings.add(key);
     const where = typeof _scopePath === 'function' && _currentScope ? _scopePath(_currentScope) : '';
-    const info = { code, what, why, fix, where: where || null, el: el || null };
+    const at = site || _curSite;
+    const info = { code, what, why, fix, where: where || null, el: el || null, site: at ? at.short : null, url: at ? at.url : null };
     for (const h of _warnHandlers) h(info);
     if (globalThis.__AEGIS_DEV__ === 'strict') throw new AegisWarning(code, info);
     const msg = `⚠ [Aegis:${code}] ${what}\n` +
         `  Why: ${why}\n` +
         `  Fix: ${fix}` +
         (where ? `\n  Where: ${where}` : '') +
+        (at ? `\n  At: ${at.short}` : '') +
         `\n  Docs: Aegis.dev.explain('${code}')`;
     if (el) console.warn(msg + '\n  Element:', el); else console.warn(msg);
     if (dev.overlay !== false && typeof document !== 'undefined' && !_overlayOff()) _overlayNotify(info);
@@ -457,6 +477,7 @@ class Effect {
             else if (r && typeof r.then === 'function' && !this._warnedAsync) {
                 this._warnedAsync = true;
                 _warn('E016', {
+                    site: this._site,
                     what: `effect "${this._name}" returned a Promise.`,
                     why: 'Signals read after the first await are not tracked, and the cleanup return value is lost.',
                     fix: 'Move async work into resource()/mutation()/watch(); keep effect bodies synchronous.',
@@ -489,14 +510,17 @@ export function effect(fn, nameOrOpts) {
     const lane = nameOrOpts && typeof nameOrOpts === 'object' && (nameOrOpts.flush === 'micro' || nameOrOpts.flush === 'frame') ? nameOrOpts.flush : null;
     const explicitName = !!name;                   // именованные (движок, пользователь с name) — без детектора E019
     if (!name && _dev()) name = fn.name || null;   // авто-имя в dev: function search() {…} → "search"
+    const site = _dev() ? ((name && /[:@]/.test(name)) ? _curSite : _callSite()) : null;
     if (!owner) {
         _warn('E001', {
+            site,
             what: `Effect "${name || 'anonymous'}" created outside a component scope — it will never be cleaned up.`,
             why: 'Effects created outside a scope leak subscribers forever, causing memory growth.',
             fix: `Wrap in component(el, ({ effect }) => { ... }) or scope.run(() => effect(...))`,
         });
     }
     const node = new Effect(fn, name, owner, trace, lane);
+    node._site = site;
     const dispose = () => node.dispose();
     dispose._node = node;
     // Регистрируем до первого запуска: в уже уничтоженном scope effect не стартует
@@ -506,6 +530,7 @@ export function effect(fn, nameOrOpts) {
         // Детектор потерянной реактивности: эффект, не прочитавший ни одного сигнала, больше не запустится
         if (_dev() && !explicitName && !node._disposed && (!node._deps || node._deps.length === 0)) {
             _warn('E019', {
+                site: node._site,
                 what: `Effect "${node._name}" read no signals — it ran once and will never run again.`,
                 why: 'Effects re-run only when a signal read synchronously inside them changes (reads after await are not tracked).',
                 fix: 'Read .value inside the effect (count.value, not a captured number). For a deliberate one-shot, call the function directly.',

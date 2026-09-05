@@ -70,13 +70,17 @@ export interface WarningInfo {
     /** путь scope, где возникло предупреждение: component:div#app ‹ list:row (null вне scope) */
     where?: string | null;
     /** элемент, к которому относится предупреждение (печатается в консоль как %o) */
-    el?: Element | null; code: string; what: string; why: string; fix: string }
+    el?: Element | null;
+    /** позиция в исходнике (dev): '/js/app.js:42:15' — html``-шаблон, effect() или resource(), где возникло предупреждение */
+    site?: string | null;
+    /** полный URL файла для site */
+    url?: string | null; code: string; what: string; why: string; fix: string }
 /** Предупреждение движка как исключение (window.__AEGIS_DEV__ = 'strict') */
 export class AegisWarning extends Error { code: string; what: string; why: string; fix: string }
 /** Подписка на предупреждения (dev-режим): warnings-as-assertions в тестах. Возвращает unsubscribe */
 export function onWarn(fn: (w: WarningInfo) => void): () => void;
 /** Управление dev-режимом: dev.enable() (localStorage + reload на проде), dev.disable(), dev.resetWarnings() */
-export interface ScopeInspection { scope: string | null; el: Element | null; signals: Array<{ name: string; value: string; /** сам сигнал (не-перечислимое поле) */ readonly ref?: ReadonlySignal<unknown> }>; effects: Array<{ name: string; deps: string[]; scope: string | null }>; children: number }
+export interface ScopeInspection { scope: string | null; el: Element | null; signals: Array<{ name: string; value: string; /** сам сигнал (не-перечислимое поле) */ readonly ref?: ReadonlySignal<unknown> }>; effects: Array<{ name: string; deps: string[]; scope: string | null; /** позиция effect() в исходнике (dev) */ site?: string | null }>; children: number }
 export const dev: {
     readonly on: boolean;
     enable(): void;

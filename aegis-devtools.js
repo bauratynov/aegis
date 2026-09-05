@@ -94,7 +94,7 @@ export function open() {
                             <h4>signals</h4>
                             ${list(() => current.value.signals, (sg) => html`<div class="row"><span class="n" title=${sg.name}>${sg.name}</span><span class=${{ v: true, changed: () => changed(sg.name, sg.value) }}>${() => fmt(sg.value)}</span>${sg.ref ? html`<button title="log who writes this signal (trace)" @click=${() => trace(sg.ref)}>trace</button>` : ''}</div>`, { key: 'name' })}
                             <h4>effects</h4>
-                            ${list(() => current.value.effects, (ef) => html`<div class="row"><span class="n" title=${ef.name}>${ef.name}</span><span class="deps">← ${ef.deps.join(', ') || '—'}</span></div>`, { key: (ef, i) => ef.name + '#' + i })}
+                            ${list(() => current.value.effects, (ef) => html`<div class="row"><span class="n" title=${ef.site || ef.name}>${ef.name}</span><span class="deps">← ${ef.deps.join(', ') || '—'}${ef.site ? ' · ' + ef.site : ''}</span></div>`, { key: (ef, i) => ef.name + '#' + i })}
                         `, () => html`<div class="empty">select a component</div>`)}
                         ${show(() => s.value.slow.length > 0, () => html`<h4>slow effects (&gt; 1 ms)</h4>${list(() => s.value.slow.slice().reverse(), (x) => html`<div class="row"><span class="n">${x.name}</span><span class="v">${x.ms} ms</span></div>`, { key: (x, i) => x.name + i })}`)}
                         ${show(() => warnings.value.length > 0, () => html`<h4>warnings</h4>${list(warnings, (w) => html`<div class=${'row ' + (w.code[0] === 'S' ? 'err' : 'warn')}><span class="n">${w.code}</span><span class="v">${w.what}</span></div>`, { key: (w, i) => w.code + i })}`)}
@@ -153,7 +153,7 @@ export function notify(info) {
     t.innerHTML = '<span class="x">×</span><b></b> <span class="w"></span><small></small>';
     t.querySelector('b').textContent = info.code;
     t.querySelector('.w').textContent = info.what;
-    t.querySelector('small').textContent = (info.where ? info.where + ' · ' : '') + 'Fix: ' + info.fix + ' · click for the inspector';
+    t.querySelector('small').textContent = (info.site ? info.site + ' · ' : '') + (info.where ? info.where + ' · ' : '') + 'Fix: ' + info.fix + ' · click for the inspector';
     t.addEventListener('click', (e) => { t.remove(); if (!e.target.classList.contains('x')) { const p = open(); if (info.el && info.el.isConnected) p.highlight(info.el); } });
     sh.appendChild(t);
     setTimeout(() => t.remove(), 12000);
