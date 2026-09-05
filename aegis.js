@@ -47,6 +47,12 @@ const dev = {
     resetWarnings() { _seenWarnings.clear(); },
     /** performance.measure / console.timeStamp на каждый flush в треке «Aegis» Performance-панели */
     profile(on = true) { _profiling = !!on; if (on && !_profileMark && typeof _installProfileMark === 'function') _installProfileMark(); },
+    /** Реактивный мир острова по его DOM-узлу: Aegis.dev.of($0) */
+    of(el) { return typeof _devTools === 'function' ? _devTools().of(el) : null; },
+    /** JSON-снимок всех компонентов (или scope): для чата с ассистентом */
+    inspect(root) { return typeof _devTools === 'function' ? _devTools().inspect(root) : []; },
+    /** Граф зависимостей как Mermaid (graph LR) */
+    graph(root) { return typeof _devTools === 'function' ? _devTools().graph(root) : 'graph LR'; },
 };
 
 export { dev };

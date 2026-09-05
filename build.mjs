@@ -37,6 +37,21 @@ await build({
     legalComments: 'none',
 });
 
+// Что стоит подмножество при сборке бандлером (tree-shaking по именованным импортам; sideEffects: false в package.json)
+const SUBSETS = {
+    'signals only': 'signal, computed, effect, batch, createScope',
+    'islands + html`` + list': 'island, mount, html, list, show, when, signal, computed, effect, on, bind, hydrate',
+    '+ resource / mutation / api': 'island, mount, html, list, show, when, signal, computed, effect, on, bind, hydrate, resource, mutation, api, settled',
+    '+ forms': 'island, mount, html, list, show, when, signal, computed, effect, on, bind, hydrate, resource, mutation, api, settled, form, wireForm, required, minLen, emailRule',
+    '+ router': 'island, mount, html, list, show, when, signal, computed, effect, on, bind, hydrate, resource, mutation, api, settled, form, wireForm, required, minLen, emailRule, router',
+};
+if (process.argv.includes('--subsets')) {
+    for (const [name, list] of Object.entries(SUBSETS)) {
+        const r = await build({ stdin: { contents: `export { ${list} } from './${src}';`, resolveDir: '.', loader: 'js' }, write: false, bundle: true, minify: true, format: 'esm', target: ['es2022'], legalComments: 'none' });
+        console.log(`subset ${name.padEnd(28)} ${kb(Buffer.from(r.outputFiles[0].contents))}`);
+    }
+}
+
 console.log(`${src} → aegis.min.js      ${kb(readFileSync('aegis.min.js'))}`);
 console.log(`core   → aegis.core.js     ${kb(core)}  (readable)`);
 console.log(`core   → aegis.core.min.js ${kb(readFileSync('aegis.core.min.js'))}`);
