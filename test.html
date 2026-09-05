@@ -2531,6 +2531,55 @@
         defaults.motion = true;   // сьют закрепляет motion
     })();
 
+    section('делегирование событий — configure({ delegateEvents })');
+
+    (() => {
+        configure({ delegateEvents: ['click', 'input'] });
+        const scope = createScope();
+        const log = [];
+        let frag;
+        scope.run(() => {
+            frag = html`<div class="outer" @click=${function (e) { log.push('outer:' + (e.currentTarget === this) + ':' + this.className); }}>
+                <button class="inner" @click=${function (e) { log.push('inner:' + this.className + ':' + (e.currentTarget === this)); }}>x</button>
+                <button class="stopper" @click=${(e) => { log.push('stop'); e.stopPropagation(); }}>s</button>
+                <button class="direct" @click.direct=${() => log.push('direct')}>d</button>
+                <input class="inp" @input=${(e) => log.push('input:' + e.target.value)}>
+            </div>`;
+        });
+        sandbox.appendChild(frag);
+        const outer = sandbox.querySelector('.outer'), inner = sandbox.querySelector('.inner'), stopper = sandbox.querySelector('.stopper'), direct = sandbox.querySelector('.direct');
+        assert('delegate: на элементах нет прямых слушателей, обработчики в el._aegisH', inner._aegisH && inner._aegisH.click && inner._aegisH.click.length === 1 && !direct._aegisH);
+        inner.click();
+        assert('delegate: порядок всплытия и this/currentTarget как у нативного', log.join('|') === 'inner:inner:true|outer:true:outer');
+        log.length = 0;
+        stopper.click();
+        assert('delegate: stopPropagation останавливает родителя', log.join('|') === 'stop');
+        log.length = 0;
+        direct.click();
+        assert('delegate: @click.direct — напрямую, но родитель-делегат всё равно получает всплытие', log.join('|') === 'direct|outer:true:outer');
+        log.length = 0;
+        const inp = sandbox.querySelector('.inp');
+        inp.value = 'q'; inp.dispatchEvent(new Event('input', { bubbles: true }));
+        assert('delegate: input делегируется', log.join('|') === 'input:q');
+        scope.dispose();
+        log.length = 0;
+        inner.click();
+        assert('delegate: dispose scope снимает обработчики', log.length === 0 && !inner._aegisH.click);
+        configure({ delegateEvents: null });
+        sandbox.innerHTML = '';
+
+        // без opt-in — как раньше, прямой слушатель
+        const s2 = createScope();
+        let n = 0;
+        let f2;
+        s2.run(() => { f2 = html`<button @click=${() => n++}>p</button>`; });
+        sandbox.appendChild(f2);
+        const b = sandbox.querySelector('button');
+        b.click();
+        assert('delegate: без configure — прямой addEventListener', n === 1 && !b._aegisH);
+        s2.dispose(); sandbox.innerHTML = '';
+    })();
+
     section('component() & destroy()');
 
     (() => {

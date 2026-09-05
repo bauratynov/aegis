@@ -7,7 +7,7 @@
 <script type="module">
 // Бенчмарк в духе js-framework-benchmark: create/update/swap/select/remove/clear + ядро.
 // Запуск: статический сервер + Chrome (headless без --virtual-time-budget), результат — в <pre id="out"> и window.__bench.
-import { signal, list, html, createScope, batch, effect, computed, selector, defaults, flushSync, reactive } from './aegis.js';
+import { signal, list, html, createScope, batch, effect, computed, selector, defaults, flushSync, reactive, configure } from './aegis.js';
 defaults.motion = false;
 const out = {};
 const N = 1000, ROUNDS = 5;
@@ -47,6 +47,13 @@ t('remove row', (r) => { rows.value = rows.value.filter((_, i) => i !== r * 3); 
 t('append 1000', () => { rows.value = [...rows.value, ...build(N)]; flushSync(); rows.value = rows.value.slice(0, N); flushSync(); });
 t('create 10000', () => { rows.value = build(10 * N); flushSync(); rows.value = []; flushSync(); });
 t('clear 1000', () => { rows.value = build(N); flushSync(); rows.value = []; flushSync(); });
+
+// ---- event delegation (opt-in): same rows, one document listener instead of two per row
+configure({ delegateEvents: ['click'] });
+t('create 1000 (delegated events)', () => { rows.value = build(N); flushSync(); });
+t('create 10000 (delegated events)', () => { rows.value = build(10 * N); flushSync(); rows.value = []; flushSync(); });
+configure({ delegateEvents: null });
+rows.value = []; flushSync();
 
 // ---- html`` instantiate
 const tpl = (i) => html`<div class="a ${'b'}" title=${'t' + i}><span>${i}</span><b @click=${() => {}}>x</b></div>`;

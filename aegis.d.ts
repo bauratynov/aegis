@@ -409,6 +409,8 @@ export interface CsrfConfig {
     decode?: boolean;
 }
 export interface AegisConfig {
+    /** делегирование событий: один listener на document для перечисленных типов (только всплывающие; capture/passive/once и @ev.direct — напрямую) */
+    delegateEvents?: string[] | null;
     /** пресет или своя схема; null — выключить; без вызова — автодетект из <meta name="aegis-csrf"> / <meta name="csrf-token"> */
     csrf?: CsrfPreset | CsrfConfig | null;
     /** заголовки по умолчанию (default: X-Requested-With: XMLHttpRequest) */
