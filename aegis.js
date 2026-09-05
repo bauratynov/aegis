@@ -115,67 +115,10 @@ function _callSite() {
 
 let _curStrings = null;     // strings текущего html``-шаблона (для позиции конкретного ${})
 let _curValueIndex = -1;    // индекс значения ${}, которое сейчас применяется
-const _srcCache = new Map();
-function _source(url) {
-    let p = _srcCache.get(url);
-    if (!p) { p = (typeof fetch === 'function' ? fetch(url).then(r => r.ok ? r.text() : null) : Promise.resolve(null)).catch(() => null); _srcCache.set(url, p); }
-    return p;
-}
-/** Смещение в тексте по line:col (1-based) */
-function _offsetOf(text, line, col) {
-    let pos = 0;
-    for (let l = 1; l < line; l++) { pos = text.indexOf('\n', pos); if (pos < 0) return -1; pos++; }
-    return pos + col - 1;
-}
-/** Позиция значения #index (или токена token) внутри html``-литерала, начинающегося после site */
-function _locateInTemplate(text, site, strings, index, token) {
-    const from = _offsetOf(text, site.line, site.col);
-    if (from < 0) return -1;
-    const tick = text.indexOf('`', Math.max(0, from - 8));
-    if (tick < 0 || tick - from > 4000) return -1;
-    if (token != null) { const i = text.indexOf(token, tick); return i >= 0 && i - tick < 20000 ? i : -1; }
-    const raw = strings && strings.raw;
-    if (!raw) return -1;
-    let pos = tick + 1;
-    for (let i = 0; i < raw.length; i++) {
-        if (text.substr(pos, raw[i].length) !== raw[i]) return -1;
-        pos += raw[i].length;
-        if (i === index) return pos;                 // начало ${
-        if (i === raw.length - 1) return -1;
-        if (text.substr(pos, 2) !== '${') return -1;
-        pos += 2;
-        let depth = 1;
-        while (depth && pos < text.length) {
-            const ch = text[pos];
-            if (ch === '{') depth++;
-            else if (ch === '}') depth--;
-            else if (ch === '`' || ch === "'" || ch === '"') { const q = ch; pos++; while (pos < text.length && text[pos] !== q) { if (text[pos] === '\\') pos++; pos++; } }
-            pos++;
-        }
-    }
-    return -1;
-}
-/** Строка исходника с кареткой под позицией */
-function _caretLine(text, pos, label) {
-    const ls = text.lastIndexOf('\n', pos - 1) + 1;
-    let le = text.indexOf('\n', pos); if (le < 0) le = text.length;
-    const line = text.slice(ls, le), col = pos - ls;
-    const lineNo = text.slice(0, ls).split('\n').length;
-    const trimmed = line.replace(/^\s+/, ''), shift = line.length - trimmed.length;
-    const width = Math.max(1, Math.min(40, (line.slice(col).match(/^\$\{[^}]*\}|^\S+/) || [''])[0].length));
-    const head = `  ${lineNo} | `;
-    return `${head}${trimmed.slice(0, 160)}\n${' '.repeat(head.length + col - shift)}${'^'.repeat(width)}${label ? ' ' + label : ''}`;
-}
-/** Promise<строка сниппета | null> для предупреждения с позицией */
+/** Promise<строка сниппета | null> — реализация в aegis-devtools.js (только dev, грузится один раз) */
 function _snippet(at, strings, index, token) {
     if (!at || !at.url) return Promise.resolve(null);
-    return _source(at.url).then(text => {
-        if (!text) return null;
-        let pos = -1, label = '';
-        if (strings && (index >= 0 || token != null)) { pos = _locateInTemplate(text, at, strings, index, token); label = token != null ? '' : `value #${index + 1}`; }
-        if (pos < 0) pos = _offsetOf(text, at.line, at.col);
-        return pos >= 0 ? _caretLine(text, pos, label) : null;
-    }).catch(() => null);
+    return _devtoolsModule().then(m => m && typeof m.snippet === 'function' ? m.snippet(at, strings, index, token) : null).catch(() => null);
 }
 
 function _warn(code, { what, why, fix, el, site, token }, onceKey) {
@@ -206,10 +149,8 @@ function _warn(code, { what, why, fix, el, site, token }, onceKey) {
 }
 const _overlayOff = () => { try { return localStorage.getItem('aegis:overlay') === '0'; } catch (e) { return false; } };
 let _overlayMod = null;
-function _overlayNotify(info) {
-    (_overlayMod || (_overlayMod = import(/* @vite-ignore */ new URL('./aegis-devtools.js', import.meta.url).href).catch(() => null)))
-        .then(m => { if (m && typeof m.notify === 'function') m.notify(info); });
-}
+const _devtoolsModule = () => _overlayMod || (_overlayMod = import(/* @vite-ignore */ new URL('./aegis-devtools.js', import.meta.url).href).catch(() => null));
+function _overlayNotify(info) { _devtoolsModule().then(m => { if (m && typeof m.notify === 'function') m.notify(info); }); }
 
 // Prototype pollution deny-list (используется proxy-обёртками store/reactive)
 const _DENIED_KEYS = new Set(['__proto__', 'prototype', 'constructor']);
