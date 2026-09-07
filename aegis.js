@@ -1,4 +1,4 @@
-/**
+﻿/**
  * AEGIS — Frontend Engine
  * Zero-build, zero-footgun, signal-based reactive UI.
  * Categories of bugs impossible by design.
@@ -1076,6 +1076,275 @@ function _scoped(cleanup) {
     };
     _adopt(off);
     return off;
+}
+
+
+// ============================================================================
+// 3. SCOPED UTILITIES — auto-cleanup обёртки
+// ============================================================================
+
+// ---- Dev-инструменты поверх ядра (Aegis.dev.of / inspect / graph, разметка Performance-панели) — вне aegis.core.js
+let _devToolsCache = null;
+function _devTools() {
+    return _devToolsCache || (_devToolsCache = {
+    of(el) {
+    for (let e = el; e; e = e.parentElement) {
+        const c = typeof _components !== 'undefined' && _components.get(e);
+        if (c) return _inspectScope(c.scope);
+    }
+    return null;
+    },
+    inspect(root) {
+    if (root && root.run) return _inspectScope(root);
+    const out = [];
+    if (typeof _components !== 'undefined') for (const [el, c] of _components) if (!root || root === document || (root.contains && root.contains(el))) out.push(_inspectScope(c.scope));
+    return out;
+    },
+    graph(root) {
+    const lines = ['graph LR'];
+    const seen = new Set();
+    const walk = (sc) => {
+        if (!sc || seen.has(sc)) return;
+        seen.add(sc);
+                for (const d of sc._disposers) {
+            const node = d._node;
+            if (!node || !node._deps) continue;
+            for (const src of node._deps) lines.push(`  ${(src._name || 'signal').replace(/[^\w:.-]/g, '_')} --> ${String(node._name || 'effect').replace(/[^\w:.@-]/g, '_')}`);
+        }
+        if (sc.children) for (const c of sc.children) walk(c);
+            };
+    if (root && root.run) walk(root);
+    else if (typeof _components !== 'undefined') for (const [, c] of _components) walk(c.scope);
+    return lines.join('\n');
+    },
+    });
+}
+
+function _inspectScope(sc) {
+    const effects = [], signals = new Map();
+    const collect = (scope) => {
+        for (const d of scope._disposers) {
+            const node = d._node;
+            if (!node) continue;
+            const deps = (node._deps || []).map(x => x._name || 'signal');
+            effects.push({ name: node._name, deps, scope: scope.name, site: node._site ? node._site.short : null });
+            for (const x of node._deps || []) if (x._name && !signals.has(x._name)) signals.set(x._name, { value: _short(x.peek()), ref: x });
+        }
+        if (scope.children) for (const c of scope.children) collect(c);
+    };
+    collect(sc);
+    const sigs = [...signals].map(([name, { value, ref }]) => { const o = { name, value }; Object.defineProperty(o, 'ref', { value: ref, enumerable: false }); return o; });
+    return { scope: sc.name, el: sc.el || null, signals: sigs, effects, children: sc.children ? sc.children.size : 0 };
+}
+
+/** Счётчики движка (dev): flushes, effectRuns, maxRounds, slow[], scopes, effects, components, caches */
+export function stats() {
+    return {
+        flushes: _stats.flushes, effectRuns: _stats.effectRuns, maxRounds: _stats.maxRounds, slow: _stats.slow.slice(), reordered: _stats.reordered,
+        scopes: _liveScopes, effects: _liveEffects,
+        components: typeof _components !== 'undefined' ? _components.size : 0,
+        resourceCache: typeof _resourceCache !== 'undefined' ? _resourceCache.size : 0,
+        prefetch: typeof _pf !== 'undefined' ? { fired: _pf.fired, used: _pf.used, wasted: _pf.wasted, hoverDelay: _hov.d } : null,
+        speculation: typeof _spec !== 'undefined' ? { inflight: _spec.inflight, queued: _spec.queued.length, fired: _spec.fired, skipped: _spec.skipped, aborted: _spec.aborted } : null,
+        cssCache: typeof _cssCache !== 'undefined' ? _cssCache.size : 0,
+        queued: _queue.length,
+    };
+}
+
+/** performance.measure / console.timeStamp на каждый flush в треке «Aegis» Performance-панели */
+function _installProfileMark() {
+    _profileMark = (t0, total, rounds, names) => {
+        const label = `aegis:flush · ${total} effects · ${rounds} rounds`;
+        const t1 = performance.now();
+        if (typeof console.timeStamp === 'function' && console.timeStamp.length >= 5) console.timeStamp(label, t0, t1, 'Aegis', 'Aegis', 'primary');
+        else if (typeof performance.measure === 'function') { try { performance.measure(label, { start: t0, end: t1, detail: { devtools: { dataType: 'track-entry', track: 'Aegis', color: 'primary', properties: [['rounds', rounds], ['effects', names.join(', ')]] } } }); } catch (e) { /* старый measure */ } }
+    };
+}
+
+/**
+ * addEventListener с авто-удалением при dispose scope.
+ * Обработчик выполняется в batch(): пять записей сигналов — один flush.
+ */
+// Делегирование по opt-in: configure({ delegateEvents: ['click', 'input', 'change', 'keydown', 'pointerdown', 'submit'] }).
+// Обработчик хранится на элементе (el._aegisH[type]), один listener на document (или ShadowRoot); порядок и
+// stopPropagation как у нативного всплытия. Не-всплывающие события и listener-опции (capture/passive/once) — всегда напрямую.
+// Внутри чужих виджетов, глотающих события (stopPropagation в jQuery/Bootstrap): @click.direct=${fn} или on(el, 'click', fn, { direct: true }).
+let _delegated = null;
+const _NO_DELEGATE = new Set(['focus', 'blur', 'scroll', 'mouseenter', 'mouseleave', 'pointerenter', 'pointerleave', 'load', 'error', 'resize']);
+const _delegateRoots = new WeakMap();   // root → Set(event)
+function _dispatchDelegated(e) {
+    const type = e.type;
+    const path = e.composedPath();
+    for (let i = 0; i < path.length; i++) {
+        const node = path[i];
+        const map = node._aegisH;
+        if (!map || !map[type]) continue;
+        const list = map[type];
+        Object.defineProperty(e, 'currentTarget', { configurable: true, get: () => node });
+        for (let j = 0; j < list.length; j++) { list[j].call(node, e); if (e.cancelBubble) break; }
+        if (e.cancelBubble) break;
+        if (node === this) break;   // корень: дальше не наш
+    }
+    try { delete e.currentTarget; } catch (x) { /* */ }
+}
+function _delegateOn(el, event, h) {
+    // элемент из html`` ещё лежит в DocumentFragment — корень по нему не определить; ShadowRoot — только если уже прикреплён
+    const root = el.getRootNode ? el.getRootNode() : document;
+    const target = typeof ShadowRoot !== 'undefined' && root instanceof ShadowRoot ? root : document;
+    let set = _delegateRoots.get(target);
+    if (!set) _delegateRoots.set(target, set = new Set());
+    if (!set.has(event)) { set.add(event); target.addEventListener(event, _dispatchDelegated); }
+    const map = el._aegisH || (el._aegisH = Object.create(null));
+    (map[event] || (map[event] = [])).push(h);
+    return () => { const l = map[event]; if (!l) return; const i = l.indexOf(h); if (i >= 0) l.splice(i, 1); if (!l.length) delete map[event]; };
+}
+
+export function on(el, event, handler, opts) {
+    let dispose;
+    const h = typeof handler === 'function'
+        ? function (e) {
+            if (opts && typeof opts === 'object' && opts.once) dispose();
+            return batch(() => handler.call(this, e));
+        }
+        : handler;   // { handleEvent } — как есть
+    const canDelegate = _delegated && _delegated.has(event) && typeof handler === 'function' && el && el.nodeType === 1 && !_NO_DELEGATE.has(event)
+        && (!opts || (typeof opts === 'object' && !opts.capture && !opts.passive && !opts.once && !opts.direct && !opts.signal));
+    if (canDelegate) {
+        const off = _delegateOn(el, event, h);
+        let doneD = false;
+        dispose = _scoped(() => { if (doneD) return; doneD = true; off(); });
+        return dispose;
+    }
+    if (opts && typeof opts === 'object' && opts.direct) { const { direct, ...rest } = opts; opts = Object.keys(rest).length ? rest : undefined; }
+    el.addEventListener(event, h, opts);
+    let done = false;
+    dispose = _scoped(() => {
+        if (done) return;
+        done = true;
+        el.removeEventListener(event, h, opts);
+    });
+    return dispose;
+}
+
+/**
+ * Делегирование событий — один listener на контейнер
+ */
+export function delegate(el, event, selector, handler) {
+    const wrapper = (e) => {
+        const target = e.target.closest(selector);
+        if (target && el.contains(target)) {
+            handler.call(target, e, target);
+        }
+    };
+    return on(el, event, wrapper);
+}
+
+/**
+ * setInterval с авто-очисткой
+ */
+export function interval(fn, ms) {
+    const id = setInterval(fn, ms);
+    return _scoped(() => clearInterval(id));
+}
+
+/**
+ * setTimeout с авто-очисткой; сработавший таймер снимает себя со scope
+ */
+export function timeout(fn, ms) {
+    let dispose;
+    const id = setTimeout(() => { dispose(); fn(); }, ms);
+    dispose = _scoped(() => clearTimeout(id));
+    return dispose;
+}
+
+function _noObserver(api) {
+    _warn('E018', {
+        what: `${api} is not available in this environment — the observer is a no-op.`,
+        why: 'jsdom/SSR do not implement it; the component still mounts.',
+        fix: 'Polyfill it in tests, or treat the callback as optional behaviour.',
+    });
+    return _noop;
+}
+
+/**
+ * IntersectionObserver с авто-disconnect
+ */
+export function observe(el, callback, opts) {
+    if (typeof IntersectionObserver === 'undefined') return _noObserver('IntersectionObserver');
+    const obs = new IntersectionObserver(callback, opts);
+    obs.observe(el);
+    return _scoped(() => obs.disconnect());
+}
+
+/**
+ * ResizeObserver с авто-disconnect
+ */
+export function resize(el, callback) {
+    if (typeof ResizeObserver === 'undefined') return _noObserver('ResizeObserver');
+    const obs = new ResizeObserver(callback);
+    obs.observe(el);
+    return _scoped(() => obs.disconnect());
+}
+
+/**
+ * MutationObserver с авто-disconnect
+ */
+export function mutate(el, callback, opts) {
+    if (typeof MutationObserver === 'undefined') return _noObserver('MutationObserver');
+    const obs = new MutationObserver(callback);
+    obs.observe(el, opts);
+    return _scoped(() => obs.disconnect());
+}
+
+
+/**
+ * Размер элемента как сигналы (ResizeObserver, без чтения rect внутри effect)
+ *   const { width, height } = size(card);   cls(card, 'compact', () => width.value < 320);
+ */
+export function size(el, { box = 'border-box' } = {}) {
+    const r0 = el.getBoundingClientRect ? el.getBoundingClientRect() : { width: 0, height: 0 };
+    const width = signal(r0.width, 'size:width'), height = signal(r0.height, 'size:height');
+    if (typeof ResizeObserver === 'undefined') { _noObserver('ResizeObserver'); return { width, height }; }
+    const obs = new ResizeObserver((entries) => {
+        const e = entries[entries.length - 1];
+        const b = (box === 'content-box' ? e.contentBoxSize : e.borderBoxSize);
+        const bs = b && b[0];
+        batch(() => {
+            width.value = bs ? Math.round(bs.inlineSize * 2) / 2 : e.contentRect.width;
+            height.value = bs ? Math.round(bs.blockSize * 2) / 2 : e.contentRect.height;
+        });
+    });
+    obs.observe(el, { box });
+    _scoped(() => obs.disconnect());
+    return { width, height };
+}
+
+/** Видимость элемента как сигналы (IntersectionObserver): { visible, ratio } */
+export function inView(el, opts) {
+    const visible = signal(false, 'inView:visible'), ratio = signal(0, 'inView:ratio');
+    observe(el, (entries) => {
+        const e = entries[entries.length - 1];
+        batch(() => { visible.value = e.isIntersecting; ratio.value = e.intersectionRatio; });
+    }, opts);
+    return { visible, ratio };
+}
+
+let _viewport = null;
+/** Окно как сигналы (singleton): { width, height, scrollX, scrollY } — один passive listener, запись в rAF */
+export function viewport() {
+    if (_viewport) return _viewport;
+    const w = typeof window !== 'undefined' ? window : null;
+    const width = signal(w ? w.innerWidth : 0, 'viewport:width'), height = signal(w ? w.innerHeight : 0, 'viewport:height');
+    const scrollX = signal(w ? w.scrollX : 0, 'viewport:scrollX'), scrollY = signal(w ? w.scrollY : 0, 'viewport:scrollY');
+    _viewport = { width, height, scrollX, scrollY };
+    if (w) {
+        let raf = 0;
+        const update = () => { raf = 0; batch(() => { width.value = w.innerWidth; height.value = w.innerHeight; scrollX.value = w.scrollX; scrollY.value = w.scrollY; }); };
+        const schedule = () => { if (!raf) raf = requestAnimationFrame(update); };
+        w.addEventListener('resize', schedule, { passive: true });
+        w.addEventListener('scroll', schedule, { passive: true });
+    }
+    return _viewport;
 }
 
 
