@@ -1,0 +1,1 @@
+{ "name": "aegisjs-site", "private": true, "type": "module", "dependencies": { "marked": "^18.0.0" } }

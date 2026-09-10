@@ -14,3 +14,5 @@ aegis.min.js.map
 aegis.core.js
 aegis.core.min.js
 dist/
+site/dist/
+site/node_modules/
