@@ -41,6 +41,8 @@ island('counter', ({ props, signal, html }) => {
 </script>
 ```
 
+<p align="center"><img src="https://raw.githubusercontent.com/bauratynov/aegis/main/assets/hydrate.gif" width="720" alt="The server-rendered button is visible first; island() hydrates it in place and each click changes one text node"></p>
+
 That is the whole setup. The server HTML is visible before JavaScript runs and indexed by search engines; the island replaces it with a live template and keeps working after any server-driven swap.
 
 - **Server HTML stays the source of truth.** No Node SSR, no client tree that re-renders what the server already sent.
