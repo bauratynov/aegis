@@ -522,7 +522,6 @@ if (existsSync(join(SITE, 'src', 'og.png'))) cpSync(join(SITE, 'src', 'og.png'),
 write('search.json', JSON.stringify(search));
 write('favicon.svg', MARK_FILE);
 write('logo/mark.svg', MARK_FILE);
-if (existsSync(join(SITE, 'src', 'logo'))) cpSync(join(SITE, 'src', 'logo'), join(DIST, 'logo'), { recursive: true });
 write('robots.txt', `User-agent: *\nAllow: /\nSitemap: ${ORIGIN}/sitemap.xml\n`);
 const urls = [['/', TODAY], ['/api/', API_DATE], ['/examples/', RECIPE_DATE], ['/play/', TODAY], ...DOCS.map(d => [`/docs/${d.slug}/`, d.src ? gitDate(d.src) : DOC_DATE]), ...EXAMPLES.map(e => [`/examples/${e.slug}/`, RECIPE_DATE])];
 write('sitemap.xml', `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${urls.map(([u, d]) => `  <url><loc>${ORIGIN}${u}</loc><lastmod>${d}</lastmod></url>`).join('\n')}\n</urlset>\n`);

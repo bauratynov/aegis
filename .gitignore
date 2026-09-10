@@ -20,3 +20,5 @@ DIAMONDS-*.md
 _tmp_*/
 _probe-*.tmp.html
 _aegis_dbg.tmp.js
+_task.xml
+site/src/logo/
