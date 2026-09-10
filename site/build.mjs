@@ -23,6 +23,10 @@ const VERSION = (read(join(ROOT, 'package.json')).match(/"version":\s*"([^"]+)"/
 const BUILD = Date.now().toString(36);   // cache-buster for theme.css / site.js / play.js / aegis-site.js on every build
 const TESTS = (readme.match(/tests-(\d+)/) || [, '1000'])[1];
 const TODAY = new Date().toISOString().slice(0, 10);
+const gitDate = (file) => { try { return execSync(`git log -1 --format=%cs -- "${file}"`, { cwd: ROOT, stdio: 'pipe' }).toString().trim() || TODAY; } catch { return TODAY; } };
+const DOC_DATE = gitDate(existsSync(join(ROOT, 'README.md')) ? 'README.md' : 'aegis.d.ts');   // README lives in the queue until pushed; d.ts moves with it
+const API_DATE = gitDate('aegis.d.ts');
+const RECIPE_DATE = gitDate('recipes');
 
 // ── highlighter (no dependencies) ─────────────────────────────────────────────
 const esc = (s) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -190,7 +194,37 @@ const API_COUNT = apiEntries.length - deprecatedEntries.length;
 const LOGO = `<svg viewBox="0 0 603 450" aria-hidden="true"><g fill="#184C64"><path d="M0 26v62l104 47L0 182v62l160-92v-34L0 26z"/><path d="M296 0h96l211 450h-96L344 96 181 450H85L296 0z"/><circle cx="332" cy="300" r="44"/></g></svg>`;
 const MARK_FILE = LOGO.replace('<svg ', '<svg xmlns="http://www.w3.org/2000/svg" ');
 const NAV = [['Docs', '/docs/introduction/'], ['API', '/api/'], ['Examples', '/examples/'], ['Playground', '/play/']];
-function layout({ title, description, path, main, extraHead = '', scripts = '', noindex = false, mainTag = true }) {
+// SEO: hand-written titles and descriptions for the pages Google will rank; the rest fall back to the page lead
+const SEO = {
+    'introduction': ['What is Aegis? Zero-build reactive UI for server-rendered pages', 'Aegis is a zero-build reactive UI engine: one ES module, no compiler, no npm. Islands, signals and templates wake up the HTML your Django, Rails, Laravel or PHP server already renders.'],
+    'canonical-api': ['The canonical API: the dozen names you actually need', 'island, mount, element, signal, computed, effect, reactive, html, when, list, resource, mutation, wireForm, swap, router — which Aegis export to use for which job, and what it replaces.'],
+    'quick-start': ['Quick start: an island, a todo list and data fetching', 'Add one script tag and write your first Aegis island on a server page, a todo list with list() and keyed rows, and data fetching with resource() and when().'],
+    'installation': ['Installation: direct import, vendored file or npm', 'Import aegis.js straight from a URL, copy one file next to your templates, or use the exports map. No bundler, no build step.'],
+    'reactive-core': ['Reactive core: signals, computeds, effects and reactive objects', 'TC39-aligned signals with glitch-free propagation, lazy computeds, auto-cleaned effects, deep reactive() objects, persisted and linked signals, context and stores.'],
+    'dom': ['DOM templates: html``, events, lists and server HTML', 'Tagged html`` templates parsed once and CSP-safe: @click events, .prop and ?bool bindings, bind:value, keyed list(), show(), swap() and morph for server HTML, islands and lazy loading.'],
+    'data': ['Data: resource(), mutations, cache and streaming', 'One resource() primitive for async data with SWR caching, offline IndexedDB, streaming and SSE; mutations with optimistic updates and rollback; CSRF presets, prefetch and structural sharing.'],
+    'components': ['Components: islands, mount(), custom elements and hydration', 'Register islands on server HTML, mount components with a rich context, define custom elements from the same function, catch errors with errorBoundary and hydrate lazily.'],
+    'forms': ['Forms: wireForm() and form() with validation', 'Progressive forms over a plain <form>: Constraint Validation, schemas, async rules, server 422 errors, wizards, drafts, dirty tracking and accessible error summaries.'],
+    'animation': ['Animation: springs, FLIP, View Transitions and CSS transitions', 'Physics-based spring(), flip() for list reordering, animate() with the View Transitions API and a CSS enter/leave contract shared by show(), list() and transition().'],
+    'routing-navigation': ['Routing: a Navigation API router with loaders and guards', 'Nested routes with layouts, async loaders, guards that run before the URL commits, View Transitions, URLPattern routes, search params as signals, commands and anchor positioning.'],
+    'accessibility': ['Accessibility: focus traps, roving tabindex and live regions', 'trap() with restore and inert, roving() for menus, grids and trees, announce() with a lossless live-region queue, accessible dialogs and forms.'],
+    'css': ['CSS: constructable stylesheets, scoped styles and layers', 'css`` templates adopted once per root, adoptStyles() deduplication, scopedStyle() with @scope and a class-prefix fallback, theme() and media() as signals.'],
+    'performance': ['Performance: virtual scroll, lazy islands and effect lanes', 'virtualScroll() with content-visibility or DOM recycling for 100k rows, lazy() loading, effect lanes per microtask or frame, hydration strategies and event delegation.'],
+    'utilities': ['Utilities: guarded fetch, timers, observers and i18n', 'guardedFetch() with auto-abort, debounced and throttled helpers, scoped interval() and timeout(), observers, i18n with plural rules and nextTick().'],
+    'dev-mode': ['Dev mode: warnings that explain themselves and an in-page inspector', 'Every Aegis warning has a code, a why and a fix with the source position; the DevTools panel shows the component tree, signals, effects and the cache. Zero cost in production.'],
+    'errors': ['Warning codes E001–E052 and S001–S012 with fixes', 'Every Aegis dev warning and security code with what happened, why and how to fix it: leaks, purity, lost reactivity, unsafe URLs, trust zones and more.'],
+    'typescript': ['TypeScript: hand-authored declarations, no build step', 'aegis.d.ts gives full IntelliSense: typed signals and resources, route params inferred from patterns, custom element props and i18n keys. Checked against the runtime on every test run.'],
+    'testing': ['Testing: render, fire, waitFor and mockFetch', 'A dependency-free helper set for any browser runner: render components, fire real DOM events, wait for effects and requests, mock fetch and clean up between tests.'],
+    'for-assistants': ['llms.txt: the rules AI assistants need for Aegis', 'The contract for coding assistants: live vs snapshot values, scopes, ctx helpers, no innerHTML with data, resource() for async, and the canonical island.'],
+    'distribution': ['Distribution: one file, tree-shaking and custom builds', 'aegis.js, aegis.min.js and the core-only build; tree-shaking by named import with a bundler or build.mjs without one; measured sizes per subset.'],
+    'benchmarks': ['Benchmarks: 1,000-row table and the reactive core', 'js-framework-benchmark-style numbers for create, replace, update, select, swap, remove and append, plus deep chains, fan-out and diamonds in the core.'],
+    'background-tabs': ['Background tabs, timers and reduced motion', 'How Aegis timers, polling, transitions and offline resources behave when the tab is hidden or throttled, and how prefers-reduced-motion turns transitions into instant state changes.'],
+    'browser-support': ['Browser support', 'Chromium, Firefox 101+ and Safari 16.4+ in full; every advanced API (Navigation, View Transitions, Anchor Positioning, Background Sync) has a built-in fallback.'],
+    'philosophy': ['Philosophy: zero build, zero dependencies, safety by architecture', 'Why Aegis is one file with no dependencies, why scopes make leaks structurally impossible, and why it builds on emerging browser standards with fallbacks. MIT licensed.'],
+};
+const ld = (obj) => `<script type="application/ld+json">${JSON.stringify(obj).replace(/</g, '\\u003c')}</script>`;
+const crumbs = (items) => ({ '@context': 'https://schema.org', '@type': 'BreadcrumbList', itemListElement: items.map(([name, url], i) => ({ '@type': 'ListItem', position: i + 1, name, item: ORIGIN + url })) });
+function layout({ title, description, path, main, extraHead = '', scripts = '', noindex = false, mainTag = true, jsonld = null }) {
     const section = NAV.find(([, href]) => path.startsWith(href.split('/').slice(0, 2).join('/') + '/'))?.[0];
     return `<!DOCTYPE html>
 <html lang="en" data-theme="light">
@@ -202,6 +236,8 @@ function layout({ title, description, path, main, extraHead = '', scripts = '', 
 ${noindex ? '<meta name="robots" content="noindex">' : `<link rel="canonical" href="${ORIGIN}${path}">`}
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
 <meta property="og:type" content="website"><meta property="og:site_name" content="Aegis"><meta property="og:title" content="${esc(title)}"><meta property="og:description" content="${esc(description)}"><meta property="og:image" content="${ORIGIN}/og.png"><meta property="og:image:width" content="1200"><meta property="og:image:height" content="630"><meta property="og:image:alt" content="Aegis — the reactive UI engine with zero build">${noindex ? '' : `<meta property="og:url" content="${ORIGIN}${path}">`}<meta name="twitter:card" content="summary_large_image">
+<meta name="theme-color" content="#184C64">
+${jsonld ? [].concat(jsonld).map(ld).join('\n') : ''}
 <link rel="preload" href="/fonts/InterVariable.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="/theme.css?v=${BUILD}">
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css" integrity="sha512-SnH5WK+bZxgPHs44uWIX+LLJAJ9/2PkPKZ5QiAj6Ta86w+fsb2TkcmfRyVX3pBnMFcV7oQPJkl9QevSCWr3W6A==" crossorigin="anonymous" referrerpolicy="no-referrer" media="print" onload="this.media='all'">
@@ -249,10 +285,14 @@ DOCS.forEach((d, i) => {
     if (d.slug === 'errors') html = html.replace(/<tr>\n?<td><strong>([ES]\d{3})<\/strong>/g, (m, c) => `<tr id="${c.toLowerCase()}"><td><strong>${c}</strong>`);
     const prev = DOCS[i - 1], next = DOCS[i + 1];
     const lead = cut(plain(src.split('\n').slice(1).join('\n')), 160);
+    const [seoTitle, seoDesc] = SEO[d.slug] || [d.title, lead];
     const main = `<div class="wrap docs">${docsNav(d.slug)}<article class="content">${html}
         <div class="pager">${prev ? `<a href="/docs/${prev.slug}/"><small>Previous</small>← ${esc(prev.title)}</a>` : '<span></span>'}${next ? `<a class="next" href="/docs/${next.slug}/"><small>Next</small>${esc(next.title)} →</a>` : ''}</div>
     </article>${tocOf(hs)}</div>`;
-    write(`docs/${d.slug}/index.html`, layout({ title: `${d.title} · Aegis`, description: lead, path: `/docs/${d.slug}/`, main }));
+    write(`docs/${d.slug}/index.html`, layout({ title: `${seoTitle} · Aegis docs`, description: seoDesc, path: `/docs/${d.slug}/`, main, jsonld: [
+        { '@context': 'https://schema.org', '@type': 'TechArticle', headline: seoTitle, description: seoDesc, url: `${ORIGIN}/docs/${d.slug}/`, dateModified: DOC_DATE, inLanguage: 'en', isPartOf: { '@type': 'WebSite', name: 'Aegis', url: ORIGIN }, about: { '@type': 'SoftwareApplication', name: 'Aegis' } },
+        crumbs([['Aegis', '/'], ['Docs', '/docs/introduction/'], [d.group, `/docs/${DOCS.find(x => x.group === d.group).slug}/`], [d.title, `/docs/${d.slug}/`]]),
+    ] }));
     if (d.slug === 'errors') { search.push({ k: 'docs', t: 'Warning codes', h: 'Warning codes', u: '/docs/errors/', x: cut(plain(src), 220) }); for (const r of ERROR_ROWS) search.push({ k: 'errors', t: 'Warning codes', h: r.code, u: `/docs/errors/#${r.code.toLowerCase()}`, x: cut(plain(r.what + ' — ' + r.fix), 220) }); }
     else addSearch('docs', d.title, `/docs/${d.slug}/`, hs.filter(h => h.depth > 1), src);
 });
@@ -274,7 +314,7 @@ DOCS.forEach((d, i) => {
         ${apiGroups.map(g => `<h2 id="group-${slug(g.name)}">${g.name}<a class="anchor" href="#group-${slug(g.name)}" aria-label="Link to ${g.name}">#</a></h2>${g.items.map(entry).join('')}`).join('')}
         <h2 id="deprecated">Deprecated aliases<a class="anchor" href="#deprecated" aria-label="Link to deprecated aliases">#</a></h2><p>These still work but are marked <code>@deprecated</code> in <code>aegis.d.ts</code>; each line names the replacement.</p><ul>${deprecatedEntries.map(e => `<li id="${e.name}"><code>${esc(e.name)}</code> — ${marked.parseInline((e.doc || '').replace(/^@deprecated\s*/, ''))}</li>`).join('')}</ul>
     </article><div></div></div>`;
-    write('api/index.html', layout({ title: 'API reference · Aegis', description: `All ${API_COUNT} exports of aegis.js with signatures and docs, generated from aegis.d.ts.`, path: '/api/', main, extraHead: '<style>.api-entry{margin:22px 0 30px}.api-entry h3{margin:0 0 6px}.kind{font-weight:400;color:var(--muted);font-size:var(--fs-xs);margin-left:6px}.api-entry pre{margin:8px 0}.api-entry p{max-width:var(--measure)}</style>' }));
+    write('api/index.html', layout({ title: 'API reference: every export of aegis.js · Aegis', description: `All ${API_COUNT} exports of the Aegis reactive UI engine with TypeScript signatures and docs: signals, templates, islands, resource cache, forms, router, accessibility. Generated from aegis.d.ts.`, path: '/api/', main, jsonld: [{ '@context': 'https://schema.org', '@type': 'TechArticle', headline: 'Aegis API reference', url: `${ORIGIN}/api/`, dateModified: API_DATE, inLanguage: 'en', about: { '@type': 'SoftwareApplication', name: 'Aegis' } }, crumbs([['Aegis', '/'], ['API reference', '/api/']])], extraHead: '<style>.api-entry{margin:22px 0 30px}.api-entry h3{margin:0 0 6px}.kind{font-weight:400;color:var(--muted);font-size:var(--fs-xs);margin-left:6px}.api-entry pre{margin:8px 0}.api-entry p{max-width:var(--measure)}</style>' }));
     for (const e of apiEntries) search.push({ k: 'api', t: 'API', h: e.name, u: `/api/#${e.name}`, x: cut(plain(e.doc || e.sigs[0].sig), 200) });
 }
 
@@ -292,10 +332,12 @@ const b64u = (buf) => Buffer.from(buf).toString('base64').replace(/\+/g, '-').re
     rmSync(join(DIST, 'recipes', 'index.html'), { force: true });
     // the recipes are deliberately unstyled in the repo; on the site they get a small base sheet in the palette (copies only)
     const RECIPE_CSS = `<style>body{font:14px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;padding:14px;color:#2B2F36;margin:0;color-scheme:light}input,select,textarea{font:inherit;padding:6px 9px;border:1px solid #CFD8DE;border-radius:6px;margin:2px 0}button{font:inherit;font-weight:600;padding:6px 12px;border:1px solid #123A4D;border-radius:6px;background:#184C64;color:#fff;cursor:pointer}button[value=cancel],button.secondary{background:#fff;color:#184C64}button:disabled{opacity:.5;cursor:default}table{border-collapse:collapse}td,th{padding:4px 8px;border-bottom:1px solid #E1E6EA;text-align:left}ul{padding-left:20px}dialog{border:1px solid #E1E6EA;border-radius:10px;padding:18px}dialog::backdrop{background:rgba(11,26,35,.45)}label{display:block;margin:6px 0}[aria-invalid=true]{border-color:#C8353B}.error,[role=alert]{color:#C8353B;font-size:13px}p{margin:8px 0}</style>`;
-    for (const f of readdirSync(join(DIST, 'recipes'))) if (f.endsWith('.html')) { const p = join(DIST, 'recipes', f); writeFileSync(p, read(p).replace('</head>', RECIPE_CSS + '</head>')); }
+    const NOINDEX = '<meta name="robots" content="noindex">';   // iframe stages and demos: not landing pages
+    for (const f of readdirSync(join(DIST, 'recipes'))) if (f.endsWith('.html')) { const p = join(DIST, 'recipes', f); writeFileSync(p, read(p).replace('</head>', RECIPE_CSS + NOINDEX + '</head>')); }
     cpSync(join(ROOT, 'demo'), join(DIST, 'demo'), { recursive: true });
+    for (const f of readdirSync(join(DIST, 'demo'))) if (f.endsWith('.html')) { const p = join(DIST, 'demo', f); writeFileSync(p, read(p).replace(/<\/head>/i, NOINDEX + '</head>')); }
     for (const f of ['aegis.min.js', 'aegis.min.js.map', 'aegis.core.js', 'aegis.core.min.js', 'aegis.d.ts', 'aegis-devtools.js', 'aegis-test.js', 'aegis-test.d.ts', 'llms.txt', 'ERRORS.md']) if (existsSync(join(ROOT, f))) cpSync(join(ROOT, f), join(DIST, f));
-    write('bench.html', read(join(ROOT, 'bench.html')).replace('<html lang="ru">', '<html lang="en">').replace(/<body>/, '<body><p id="bench-status" style="font:14px system-ui;color:#6B7280">Running 5 rounds… numbers land below and in window.__bench</p>'));
+    write('bench.html', read(join(ROOT, 'bench.html')).replace('<html lang="ru">', '<html lang="en">').replace(/<\/head>/i, NOINDEX + '</head>').replace(/<body>/, '<body><p id="bench-status" style="font:14px system-ui;color:#6B7280">Running 5 rounds… numbers land below and in window.__bench</p>'));
     cpSync(join(ROOT, existsSync(join(ROOT, 'aegis_full.js')) ? 'aegis_full.js' : 'aegis.js'), join(DIST, 'aegis.js'));
     const cards = RECIPES.map(([file, title, sub]) => {
         const src = read(join(ROOT, 'recipes', file + '.html'));
@@ -317,7 +359,7 @@ const b64u = (buf) => Buffer.from(buf).toString('base64').replace(/\+/g, '-').re
             <div class="card"><h3><span class="ic"><i class="fa-solid fa-gauge-high" aria-hidden="true"></i></span>Benchmark</h3><p>A js-framework-benchmark-style table (1 000 rows, <code>list()</code> + <code>html\`\`</code>) plus the reactive core. Numbers land in a <code>&lt;pre&gt;</code> and <code>window.__bench</code>.</p><a class="more" href="/bench.html" target="_blank" rel="noopener">Run it in your browser →</a></div>
             <div class="card"><h3><span class="ic"><i class="fa-solid fa-magnifying-glass" aria-hidden="true"></i></span>DevTools</h3><p>The in-page inspector is itself an Aegis app: component tree, signals with change marks, effects and their dependencies, cache tab. Add <code>?aegis-devtools</code> to any page.</p><a class="more" href="/demo/admin.html?aegis-devtools" target="_blank" rel="noopener">Admin demo with DevTools →</a></div>
         </div></div>`;
-    write('examples/index.html', layout({ title: 'Examples · Aegis', description: 'Runnable recipes: islands, search, forms, modal, tables, an admin app and a benchmark. Each one a single HTML file.', path: '/examples/', main }));
+    write('examples/index.html', layout({ title: 'Examples: runnable Aegis recipes, an admin app and a benchmark · Aegis', description: 'Live Aegis examples to read and edit: an island on server HTML, search with debounce, a progressive form, a modal, a sortable table, plus a full admin app and a benchmark. One HTML file each, no build.', path: '/examples/', main, jsonld: [{ '@context': 'https://schema.org', '@type': 'CollectionPage', name: 'Aegis examples', url: `${ORIGIN}/examples/`, dateModified: RECIPE_DATE, hasPart: RECIPES.map(([file, title, sub]) => ({ '@type': 'SoftwareSourceCode', name: title, description: sub, programmingLanguage: 'JavaScript', codeSampleType: 'full', url: `${ORIGIN}/examples/#${file}` })) }, crumbs([['Aegis', '/'], ['Examples', '/examples/']])] }));
     RECIPES.forEach(([file, title, sub]) => search.push({ k: 'examples', t: 'Examples', h: title, u: '/examples/#' + file, x: sub }));
 }
 
@@ -325,7 +367,7 @@ const b64u = (buf) => Buffer.from(buf).toString('base64').replace(/\+/g, '-').re
 {
     const main = `<div class="play"><div class="bar"><b>Playground</b><select id="preset" title="Preset" aria-label="Preset"></select><button id="run" class="primary">Run <kbd>Ctrl+Enter</kbd></button><button id="share">Share link</button><span id="msg" role="status"></span><span id="status" class="status"></span><span class="grow"></span><span class="hint">Sandboxed frame, dev warnings on. Tab indents, Esc leaves the editor.</span></div>
         <div class="panes"><textarea id="code" spellcheck="false" aria-label="Code"></textarea><div class="out"><iframe id="frame" title="result" sandbox="allow-scripts allow-forms allow-modals"></iframe><pre id="console" aria-live="polite" aria-label="Console"></pre></div></div></div>`;
-    write('play/index.html', layout({ title: 'Playground · Aegis', description: 'Edit and run Aegis code in the browser, share a link. No build, no account.', path: '/play/', main, scripts: `<script type="module" src="/play.js?v=${BUILD}"></script>` }).replace('<footer>', '<footer hidden>'));
+    write('play/index.html', layout({ title: 'Playground: run Aegis code in the browser · Aegis', description: 'Edit and run Aegis code in a sandboxed frame with dev warnings on, switch between presets (counter, island, todos, resource, mutation, form, router, reactive) and share a link. No build, no account.', path: '/play/', main, jsonld: crumbs([['Aegis', '/'], ['Playground', '/play/']]), scripts: `<script type="module" src="/play.js?v=${BUILD}"></script>` }).replace('<footer>', '<footer hidden>'));
 }
 
 // landing
@@ -388,7 +430,10 @@ island('users', ({ props, html, when, list }) => {
 
     <div class="cta-band"><div><h2>Add one script tag. Ship.</h2><p>No npm, no bundler, no config. Works on the pages your server already renders.</p></div><div class="cta"><a class="btn primary" href="/docs/quick-start/">Quick start</a><a class="btn" href="/examples/">Examples</a><a class="btn" href="/docs/for-assistants/">llms.txt</a></div></div>
     </div>`;
-    write('index.html', layout({ title: 'Aegis — zero-build reactive UI engine', description: 'One ES module, no build, no dependencies. Signals, islands, templates, an HTTP-aware cache, forms and a router for server-rendered pages.', path: '/', main }));
+    write('index.html', layout({ title: 'Aegis — zero-build reactive UI engine for server-rendered pages', description: 'A reactive JavaScript UI engine with no build step and no dependencies: signals, islands, html`` templates, an HTTP-aware cache, forms and a router in one ES module. Works with any server stack.', path: '/', main, jsonld: [
+        { '@context': 'https://schema.org', '@type': 'WebSite', name: 'Aegis', alternateName: 'aegisjs', url: ORIGIN, inLanguage: 'en', description: 'Documentation, examples and playground for the Aegis zero-build reactive UI engine.' },
+        { '@context': 'https://schema.org', '@type': 'SoftwareApplication', name: 'Aegis', alternateName: 'aegis.js', applicationCategory: 'DeveloperApplication', applicationSubCategory: 'JavaScript UI library', operatingSystem: 'Any (web browser)', softwareVersion: VERSION, license: 'https://opensource.org/license/mit', url: ORIGIN, downloadUrl: `${ORIGIN}/aegis.js`, programmingLanguage: 'JavaScript', offers: { '@type': 'Offer', price: '0', priceCurrency: 'USD' }, featureList: ['Zero build step', 'No dependencies', 'TC39-style signals', 'Islands on server-rendered HTML', 'html`` templates', 'HTTP-aware SWR cache', 'Forms with Constraint Validation', 'Navigation API router', 'Accessibility helpers'] },
+    ] }));
 }
 
 // static: css, js, fonts, search index, favicon, robots, sitemap, 404
@@ -402,8 +447,8 @@ write('favicon.svg', MARK_FILE);
 write('logo/mark.svg', MARK_FILE);
 if (existsSync(join(SITE, 'src', 'logo'))) cpSync(join(SITE, 'src', 'logo'), join(DIST, 'logo'), { recursive: true });
 write('robots.txt', `User-agent: *\nAllow: /\nSitemap: ${ORIGIN}/sitemap.xml\n`);
-const urls = ['/', '/api/', '/examples/', '/play/', ...DOCS.map(d => `/docs/${d.slug}/`)];
-write('sitemap.xml', `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">${urls.map(u => `<url><loc>${ORIGIN}${u}</loc><lastmod>${TODAY}</lastmod></url>`).join('')}</urlset>`);
+const urls = [['/', TODAY], ['/api/', API_DATE], ['/examples/', RECIPE_DATE], ['/play/', TODAY], ...DOCS.map(d => [`/docs/${d.slug}/`, d.src ? gitDate(d.src) : DOC_DATE])];
+write('sitemap.xml', `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${urls.map(([u, d]) => `  <url><loc>${ORIGIN}${u}</loc><lastmod>${d}</lastmod></url>`).join('\n')}\n</urlset>\n`);
 write('404.html', layout({ title: 'Not found · Aegis', description: 'Page not found', path: '/404', noindex: true, main: `<div class="wrap" style="padding:80px 20px;text-align:center"><h1>404</h1><p style="color:var(--muted)">No route matches this URL, and there is no <code>'*'</code> handler here (E037).</p><a class="btn primary" href="/">Home</a></div>` }));
 
 // site chrome bundle: tree-shaken production build of exactly what site.js imports
