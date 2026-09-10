@@ -538,3 +538,27 @@ test('transaction(): read-set валидируется на commit — конф�
     await assert.rejects(p2, /transaction conflict/);
     assert.equal(conflict[0].name, 'signal');
 });
+
+test('computed.dispose(): значение заморожено — источник меняется, peek()/value не пересчитываются (E045 честен)', () => {
+    const a = signal(1);
+    const c = computed(() => a.value * 10);
+    assert.equal(c.peek(), 10);
+    c.dispose();
+    a.value = 2;
+    assert.equal(c.peek(), 10);
+    assert.equal(c.value, 10);
+    const c2 = computed(() => a.value + 1);   // never read before dispose: stays at its initial (undefined) value
+    c2.dispose();
+    a.value = 3;
+    assert.equal(c2.peek(), undefined);
+});
+
+test('untrack() внутри computed: источник под untrack не является зависимостью — пересчёт только от отслеживаемых', () => {
+    const tracked = signal(1), hidden = signal(10);
+    const c = computed(() => tracked.value + untrack(() => hidden.value));
+    assert.equal(c.value, 11);
+    hidden.value = 20;
+    assert.equal(c.value, 11);      // cached: the untracked read is not a dependency
+    tracked.value = 2;
+    assert.equal(c.value, 22);      // the tracked change re-reads both
+});

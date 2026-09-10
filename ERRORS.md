@@ -8,7 +8,7 @@ Every warning has a code, and each message is printed once per place. Dev mode i
 
 | Code | What | Fix |
 |---|---|---|
-| **E001** | `effect()` created outside a scope — it will never be cleaned up. | Create it inside `component()`/`mount()` setup or `scope.run(() => …)`. |
+| **E001** | `effect()` created outside a scope — it will never be cleaned up. The effect still runs: this is a reported leak, not a prevented one. | Create it inside `component()`/`mount()` setup or `scope.run(() => …)`; `window.__AEGIS_DEV__ = 'strict'` throws here instead of warning. |
 | **E002** | A signal was written inside a `computed()`. | Computeds must be pure — move the write into an effect or an action. |
 | **E003** | `mount(selector)` found no element. | Check the selector or call `mount()` after `DOMContentLoaded`. |
 | **E004** | `list()` keys are missing or duplicated. | Pass a unique key: `list(items, render, { key: 'uuid' })`. |

@@ -5,8 +5,15 @@ All notable changes to Aegis are documented in this file.
 ## [Unreleased]
 
 ### Added
+- `test-core.mjs`: tests for the frozen value of a disposed computed and for the caching semantics of `untrack()` inside a computed.
+- README “Verified by design”: what the node suite proves, what only the browser suite covers, and the limits the tests do not promise (E001 is a reported leak, `untrack()` caches, E027 is a ceiling, contracts are sampled in dev, unhandled effect errors go to `reportError`).
+
+### Changed
+- An effect error with no `onError` / `scope.onError` in an environment without `reportError` and without `window` (node, workers) is logged with `console.error` instead of being rethrown from a timer; in browsers the behaviour is unchanged (uncaught error, page keeps running).
+- The file header no longer claims “bugs impossible by design”; it names what the architecture prevents and what the dev build reports.
 
 ### Fixed
+- `computed.dispose()` now freezes the value as E045 promised: a disposed computed no longer recomputes on `value`/`peek()` when a source changes (the non-live durability check ignored the disposed flag).
 
 ## [0.7.0] — 2026-09-04
 

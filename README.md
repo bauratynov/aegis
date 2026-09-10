@@ -368,6 +368,16 @@ The reactive core is the part of a framework that must be right, so it is the pa
 
 The properties behind the fuzzer: pull-based evaluation without glitches, write backdating inside `batch()`, an earliest-deadline-first scheduler, dispose as a transaction, and provenance ordering of effects (Kahn over writer → reader edges). Run the fuzzer yourself before trusting the README.
 
+The node suite covers the signal graph only. The DOM, templates, islands, lists and morph, the router, forms, the cache and offline are covered by the browser suite: `test.html`, 1 075 assertions in about 50 sections, run in headless Chrome and Firefox by `npm run test:browsers`. A green node run says the core is right; it says nothing about the UI layer.
+
+What the tests do **not** promise, so you do not have to find out yourself:
+
+- An `effect()` created outside any scope is a leak that is reported (E001), not prevented; `window.__AEGIS_DEV__ = 'strict'` makes it throw.
+- `untrack()` inside a computed means that source is not a dependency: the cached value stays until a tracked source changes. Correct, and a trap.
+- An effect cycle is stopped by a round ceiling and reported (E027); it is not silently resolved.
+- Graph contracts run on sampled flushes in dev (`dev.contracts = 'sampled'`); the browser suite runs with `'strict'`.
+- An effect error with no `onError` / `scope.onError` goes to `reportError` (a `window` error event; the page keeps running) or, in node, to `console.error`. Put a boundary where you want one.
+
 ## Testing
 
 `aegis/test` is a dependency-free helper set for any browser runner (the repo's `test.html`, Vitest browser mode, Playwright, Web Test Runner):
@@ -557,7 +567,7 @@ Zero cost in production — warnings are gated behind `window.__AEGIS_DEV__`.
 
 1. **Zero build** — Drop one file, start building. No webpack, no vite, no npm required.
 2. **Zero dependencies** — Everything is self-contained. No supply chain risk.
-3. **Safety by architecture** — Scoped auto-cleanup makes memory leaks structurally impossible.
+3. **Safety by architecture** — Everything created inside a scope dies with it; data never goes through `innerHTML`; attribute sinks are typed at compile time. What the architecture cannot prevent (an effect created outside any scope, a disposed computed still read, an effect cycle) the dev build reports with a code, a why and a fix, and `'strict'` mode turns into an exception.
 4. **Progressive enhancement** — Use as little or as much as you need. Each API is independent.
 5. **Future-ready** — Built on emerging browser standards (TC39 Signals, Navigation API, CSS Anchor Positioning, View Transitions), with fallbacks for today.
 

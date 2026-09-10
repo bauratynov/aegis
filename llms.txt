@@ -14,6 +14,8 @@ Read `aegis.d.ts` for exact types, `ERRORS.md` for warning codes, `test.html` fo
 - Islands: `island(name, ({ props, html }) => html`…`, { types })` + server `<div data-aegis="name" data-x="…">`; the same component function works as a custom element via `element(tag, Component, { props })`. `hydrate(document)` runs automatically after `island()`/`register()`. `register(name, (el, data, ctx) => …)` is the positional form.
 - `data-*` props are strings; declare `{ types: { count: Number, on: Boolean } }` in `register()` to coerce. Big JSON goes in `<script type="application/json">` inside the island → `data.props`.
 - Async work lives in `resource()` / `mutation()` — not in `effect(async …)` (E016).
+- `untrack(() => x.value)` inside a computed or effect means x is NOT a dependency: the result stays cached until a tracked source changes. Use it only for reads that must not re-run the computation.
+- `effect()` outside a scope is a leak, not a crash: dev warns with E001 and the effect keeps running; `window.__AEGIS_DEV__ = 'strict'` throws instead. A disposed `computed()` is frozen at its last value (E045 on read).
 - In `ctx` you get: `el, slot, signal, computed, effect, batch, provide, inject, when, selector, on, delegate, bind, text, attr, cls, style, clsMap, styleMap, html, show, list, interval, timeout, observe, resize, mutate, guardedFetch (pre-bound), debounced, throttled, poll, onDispose`. Everything else — `import` from `./aegis.js`.
 
 ## Canonical island

@@ -1,8 +1,9 @@
 /**
  * AEGIS — Frontend Engine
- * Zero-build, zero-footgun, signal-based reactive UI.
- * Categories of bugs impossible by design.
- * Safety by Architecture — bugs impossible, not just harder to make.
+ * Zero-build, signal-based reactive UI for server-rendered pages.
+ * Safety by architecture: everything created inside a scope dies with it, data never goes through innerHTML,
+ * attribute sinks are typed at compile time. What the architecture cannot prevent, the dev build reports
+ * with a code, a why and a fix (ERRORS.md); 'strict' mode turns those warnings into exceptions.
  *
  * @version 0.7.0
  * @license MIT
@@ -508,7 +509,7 @@ class Computed extends _Src {
     get _disposed() { return (this._f & F_DISPOSED) !== 0; }
     get _live() { return (this._f & F_LIVE) !== 0; }
     /** Нужен пересчёт/проверка: помечен dirty, или неживой и с прошлой проверки была запись на его уровне durability */
-    _stale() { return (this._f & F_DIRTY) !== 0 || (!(this._f & F_LIVE) && this._chk < _epochDur[this._dur]); }
+    _stale() { return !(this._f & F_DISPOSED) && ((this._f & F_DIRTY) !== 0 || (!(this._f & F_LIVE) && this._chk < _epochDur[this._dur])); }   // a disposed computed is frozen (E045): no recompute on read, whatever the sources did
     _activate() { this._f |= F_LIVE; _regObs(this, true); const d = this._deps; if (d) for (let i = 0; i < d.length; i++) _addSub(d[i], this); }
     _deactivate() { this._f &= ~F_LIVE; _regObs(this, false); const d = this._deps; if (d) for (let i = 0; i < d.length; i++) _delSub(d[i], this); }
     get value() {
@@ -992,7 +993,8 @@ function _reportErrors(errors) {
     for (const e of errors) {
         if (_errHandlers.size) { for (const h of _errHandlers) { try { h(e, (e && e.aegis) || null); } catch (x) { console.error('[Aegis] onError handler failed:', x); } } continue; }
         if (typeof reportError === 'function') reportError(e);
-        else setTimeout(() => { throw e; });
+        else if (typeof window === 'undefined') console.error(e);     // node / workers without reportError: log, never kill the process over one effect
+        else setTimeout(() => { throw e; });                           // browsers without reportError: surface it as an uncaught error (window 'error' event), the page keeps running
     }
 }
 /** Ошибка вверх по scope-дереву до первого onError; true — поглощена */
