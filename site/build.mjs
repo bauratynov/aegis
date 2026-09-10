@@ -23,6 +23,7 @@ const VERSION = (read(join(ROOT, 'package.json')).match(/"version":\s*"([^"]+)"/
 const BUILD = Date.now().toString(36);   // cache-buster for theme.css / site.js / play.js / aegis-site.js on every build
 const TESTS = (readme.match(/tests-(\d+)/) || [, '1000'])[1];
 const TODAY = new Date().toISOString().slice(0, 10);
+const THEME_CSS = read(join(SITE, 'src', 'theme.css')).replace(/\/\*[\s\S]*?\*\//g, '').replace(/\n\s*\n/g, '\n');   // inlined into every page: one request less before first paint
 const gitDate = (file) => { try { return execSync(`git log -1 --format=%cs -- "${file}"`, { cwd: ROOT, stdio: 'pipe' }).toString().trim() || TODAY; } catch { return TODAY; } };
 const DOC_DATE = gitDate(existsSync(join(ROOT, 'README.md')) ? 'README.md' : 'aegis.d.ts');   // README lives in the queue until pushed; d.ts moves with it
 const API_DATE = gitDate('aegis.d.ts');
@@ -239,7 +240,8 @@ ${noindex ? '<meta name="robots" content="noindex">' : `<link rel="canonical" hr
 <meta name="theme-color" content="#184C64">
 ${jsonld ? [].concat(jsonld).map(ld).join('\n') : ''}
 <link rel="preload" href="/fonts/InterVariable.woff2" as="font" type="font/woff2" crossorigin>
-<link rel="stylesheet" href="/theme.css?v=${BUILD}">
+<style>${THEME_CSS}</style>
+<link rel="modulepreload" href="/aegis-site.js?v=${BUILD}">
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css" integrity="sha512-SnH5WK+bZxgPHs44uWIX+LLJAJ9/2PkPKZ5QiAj6Ta86w+fsb2TkcmfRyVX3pBnMFcV7oQPJkl9QevSCWr3W6A==" crossorigin="anonymous" referrerpolicy="no-referrer" media="print" onload="this.media='all'">
 <script>try{var t=JSON.parse(localStorage.getItem('aegis:theme'));if(!t)t=matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light';document.documentElement.dataset.theme=t}catch(e){}</script>
 ${extraHead}

@@ -7,7 +7,7 @@
     --accent: #184C64; --accent-strong: #123A4D; --accent-soft: #E3EEF4; --accent-2: #1F7FA6;
     --link: #184C64; --on-accent: #FFFFFF; --brand: #184C64;
     --gold: var(--accent); --gold-2: var(--accent-strong); --gold-soft: var(--accent-soft); --teal: var(--accent-2); --teal-2: var(--link);
-    --text: #2B2F36; --muted: #6B7280; --line: #E1E6EA; --danger: #C8353B; --ok: #24884D; --js: #ACACAC;
+    --text: #2B2F36; --muted: #6B7280; --line: #E1E6EA; --danger: #C8353B; --ok: #24884D; --js: #767B83;
     --code-bg: #12303F; --code-line: transparent; --code-text: #E8EEF2;
     --kw: #8FD3F4; --str: #F3C97C; --cm: #8FA3AF; --fn: #DCE6EC; --tag: #E9A28F; --attr: #B9D6E6; --num: #F3C97C; --tpl: #F3C97C;
     --fs-xs: .75rem; --fs-sm: .8125rem; --fs-md: .875rem; --fs-ui: .9375rem; --fs-base: 1rem; --fs-code: .8125rem;
@@ -111,6 +111,7 @@ ul, ol { padding-left: 1.4em } li { margin: .35em 0 } li > p { margin: .35em 0 }
 .content > p, .content > ul, .content > ol, .content > blockquote, .content > h1, .content > h2, .content > h3, .content > h4 { max-width: var(--measure) }
 .content > pre, .content > .tbl { max-width: none }
 .content p, .content ul, .content ol { margin: 0 0 var(--sp-2) } .content h3 + p { margin-top: 0 } .content h3 code { font-size: .95em; padding: .05em .3em }
+.content a:not(.btn):not(.anchor) { text-decoration: underline; text-decoration-color: color-mix(in srgb, var(--link) 45%, transparent); text-underline-offset: .15em } .content a:hover { text-decoration-color: var(--link) }
 .content .lead { font-size: 1.125rem; line-height: 1.55; color: var(--muted); max-width: var(--measure); margin: 0 0 var(--sp-3) }
 .pager { display: flex; justify-content: space-between; gap: 12px; margin-top: var(--sp-6); padding-top: var(--sp-3); border-top: 1px solid var(--line) }
 .pager a { flex: 1; border: 1px solid var(--line); border-radius: 10px; padding: 10px 14px; color: var(--text); text-decoration: none !important } .pager a:hover { border-color: var(--accent) } .pager a small { display: block; color: var(--muted); font-size: var(--fs-xs) } .pager a.next { text-align: right }
