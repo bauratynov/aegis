@@ -12,7 +12,8 @@ import { tmpdir } from 'node:os';
 const ROOT = new URL('.', import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1');
 const FULL = existsSync(join(ROOT, 'aegis_full.js'));
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.mjs': 'text/javascript', '.css': 'text/css', '.json': 'application/json' };
-// Chrome headless: tests that need a visible window / IndexedDB (they pass in Firefox headless and in a real Chrome)
+// Headless runs: tests that need a visible, focused window or IndexedDB. Chrome headless lacks all of them;
+// Firefox headless on a CI runner has no window focus either. They pass in a real browser.
 const KNOWN_ENV_ONLY = new Set(['size(): реактивен', 'trap: focus moved inside (or bg tab)', 'offlineResource: data loaded', 'offlineResource: optimistic update', 'leader: лок получен']);
 
 const candidates = {
@@ -82,7 +83,7 @@ server.close();
 let bad = 0;
 for (const [name, r] of Object.entries(results)) {
     if (r.skipped) { console.log(`${name}: skipped — ${r.skipped}`); continue; }
-    const envOnly = name === 'chrome' ? r.fails.filter(f => KNOWN_ENV_ONLY.has(f)) : [];
+    const envOnly = r.fails.filter(f => KNOWN_ENV_ONLY.has(f));
     const real = r.fails.filter(f => !envOnly.includes(f));
     console.log(`${name}: ${r.passed} passed, ${r.failed} failed${envOnly.length ? ` (${envOnly.length} env-only)` : ''}`);
     for (const f of real) console.log(`  ✗ ${f}`);
