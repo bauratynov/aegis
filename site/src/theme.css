@@ -183,3 +183,4 @@ footer { border-top: 1px solid var(--line); margin-top: var(--sp-6); padding: va
 @media (max-width: 420px) { .wrap { padding: 0 14px } .top .in { gap: 6px } .icon-btn { width: 34px; height: 34px } }
 [data-cloak] { visibility: hidden }
 .section-sub a, footer a, .card p a, small a { text-decoration: underline; text-decoration-color: color-mix(in srgb, var(--link) 45%, transparent); text-underline-offset: .15em }
+.mnav .side-copy .h5 { margin: 16px 0 6px; font-size: .6875rem; font-weight: 600; letter-spacing: .1em; text-transform: uppercase; color: var(--muted) }
