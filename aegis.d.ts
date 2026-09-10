@@ -97,15 +97,15 @@ export interface WarningInfo {
     snippetText?: string | null; code: string; what: string; why: string; fix: string }
 /** An engine warning as an exception (window.__AEGIS_DEV__ = 'strict') */
 export class AegisWarning extends Error { code: string; what: string; why: string; fix: string }
-/** Subscribe to warnings (dev mode): warnings-as-assertions in tests. Returns unsubscribe */
 /**
  * Effect errors not swallowed by scope.onError / errorBoundary: fn(error, error.aegis). Without handlers — self.reportError(e).
  * The writer of the signal does not get the exception (except with __AEGIS_DEV__ = 'strict'). Returns unsubscribe; inside a scope it is removed automatically.
  */
 export function onError(fn: (error: unknown, info: { effect: string; scope: string; changed: Array<{ name: string; value: string }>; site?: string } | null) => void): () => void;
+/** Subscribe to warnings (dev mode): warnings-as-assertions in tests. Returns unsubscribe */
 export function onWarn(fn: (w: WarningInfo) => void): () => void;
-/** Dev-mode control: dev.enable() (localStorage + reload in production), dev.disable(), dev.resetWarnings() */
 export interface ScopeInspection { scope: string | null; el: Element | null; signals: Array<{ name: string; value: string; /** the signal itself (non-enumerable field) */ readonly ref?: ReadonlySignal<unknown> }>; effects: Array<{ name: string; deps: string[]; scope: string | null; /** source position of the effect() (dev) */ site?: string | null }>; children: number }
+/** Dev-mode control: dev.enable() (localStorage + reload in production), dev.disable(), dev.resetWarnings() */
 export const dev: {
     readonly on: boolean;
     enable(): void;
@@ -758,6 +758,7 @@ export function sse(url: string, opts?: {
     withCredentials?: boolean;
 }): { status: ReadonlySignal<'connecting' | 'open' | 'closed'>; close(): void; source: EventSource };
 
+export interface WatchHandle { (): void; stop(): void; pause(): void; resume(): void }
 /**
  * Watch a signal/computed for changes.
  *
@@ -767,7 +768,6 @@ export function sse(url: string, opts?: {
  * @param opts.debounce — debounce the callback in ms
  * @returns dispose function
  */
-export interface WatchHandle { (): void; stop(): void; pause(): void; resume(): void }
 export function watch<T>(
     source: Signal<T> | ReadonlySignal<T> | (() => T),
     callback: (newVal: T, oldVal: T | undefined, onCleanup: (fn: () => void) => void) => void,
@@ -1057,11 +1057,6 @@ export interface FieldArray<R extends Record<string, any> = Record<string, any>>
     clear(): void;
     nameOf(i: number, sub?: string): string;
 }
-/**
- * An array of fields on top of form()/wireForm(): items[i][sub] with stable row keys and name renumbering.
- *   const items = fieldArray(f, 'items', { row: { qty: 1, sku: '' } });   // form rules: { 'items[].qty': [min(1)] }
- *   list(items.rows, row => html`<input bind:field=${row.field('qty')}>`, r => r.key)
- */
 export interface WizardStep { index: number; keys(): string[]; valid: ReadonlySignal<boolean>; dirty: ReadonlySignal<boolean>; done: ReadonlySignal<boolean> }
 export interface Wizard {
     step: Signal<number>;
@@ -1084,6 +1079,11 @@ export interface Wizard {
 export function wizard(f: FormCore | WireFormResult, opts?: { steps?: string[][]; persist?: string; history?: boolean; focus?: boolean }): Wizard;
 /** A form draft in sessionStorage: changed fields without password/file, restored on creation (dirty stays), cleared on success */
 export function draft(f: FormCore | WireFormResult, key: string, opts?: { storage?: Storage | { getItem(k: string): string | null; setItem(k: string, v: string): void; removeItem(k: string): void }; debounce?: number; ttl?: number; exclude?: (key: string, value: unknown) => boolean; restore?: (values: Record<string, unknown>, apply: () => void) => void }): { restored: boolean; clear(): void; stop(): void; key: string };
+/**
+ * An array of fields on top of form()/wireForm(): items[i][sub] with stable row keys and name renumbering.
+ *   const items = fieldArray(f, 'items', { row: { qty: 1, sku: '' } });   // form rules: { 'items[].qty': [min(1)] }
+ *   list(items.rows, row => html`<input bind:field=${row.field('qty')}>`, r => r.key)
+ */
 export function fieldArray<R extends Record<string, any>>(f: FormCore | WireFormResult, path: string, opts?: { row?: R; rules?: { [K in keyof R]?: RuleLike[] }; name?: (i: number, sub?: string) => string; initial?: Partial<R>[] }): FieldArray<R>;
 export interface WireFormResult {
     /** the <form> itself */
@@ -1257,10 +1257,6 @@ export type ElementProps<P> = { [K in keyof P]: PropValue<P[K] extends PropType 
 /** A custom element from the same component: attributes → ctx.props (reactive) */
 export function element<P extends Record<string, PropType | { type: PropType; default?: unknown; reflect?: boolean }> = {}>(tag: `${string}-${string}`, component: Component<ElementProps<P>>, opts?: { props?: P; shadow?: boolean; styles?: CSSStyleSheet | string; formAssociated?: boolean }): void;
 export type IslandSetup<D = Record<string, unknown>> = (el: HTMLElement, data: D, ctx: ComponentContext<HTMLElement>) => void | object | Node | Promise<void | object | Node>;
-/**
- * Register a component by name; { load } — the island code is loaded with import() on mount
- * (for visible — 400px before the viewport). Without registration data-aegis-src="/js/islands/x.js" works.
- */
 export type PropType = NumberConstructor | BooleanConstructor | StringConstructor | JSON | ObjectConstructor | ArrayConstructor | ((raw: string) => unknown);
 /**
  * Register a component by name; { load } — the island code is loaded with import() on mount.
@@ -1695,9 +1691,6 @@ export function jsonScript<T = unknown>(target: string | Element, root?: Documen
 
 // ── i18n ───────────────────────────────────────────────────────
 
-/**
- * Translation function with reactive dictionary.
- */
 export type PluralForms = Partial<Record<'zero' | 'one' | 'two' | 'few' | 'many' | 'other', string>>;
 export interface I18nOptions {
     /** initial locale (default: <html lang> or 'en') */
@@ -1708,6 +1701,9 @@ export interface I18nOptions {
     /** write t.locale into <html lang> */
     syncLang?: boolean;
 }
+/**
+ * Translation function with reactive dictionary.
+ */
 export interface TranslationFunction<K extends string = string> {
     /** Translate a key, with optional param substitution ({name}) and plural by params.n / params.count */
     (key: K, params?: Record<string, string | number>): string;

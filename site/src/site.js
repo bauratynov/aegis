@@ -1,20 +1,18 @@
 // aegisjs.com — the site chrome is built with Aegis itself (custom tree-shaken build: /aegis-site.js)
-import { signal, computed, island, html, list, persisted } from '/aegis-site.js';
+import { signal, computed, island, mount, html, list, persisted } from '/aegis-site.js';
 
 // ── theme ────────────────────────────────────────────────────────────────────
 island('theme-toggle', ({ html, effect }) => {
     const theme = persisted('aegis:theme', matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
     effect(() => { document.documentElement.dataset.theme = theme.value; });
     const flip = () => { theme.value = theme.value === 'dark' ? 'light' : 'dark'; };
-    return html`<button class="icon-btn" title="Toggle theme" aria-label="Toggle theme" @click=${flip}>${() => theme.value === 'dark'
-        ? html`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M4.9 4.9l1.4 1.4m11.4 11.4 1.4 1.4M2 12h2m16 0h2M4.9 19.1l1.4-1.4m11.4-11.4 1.4-1.4"/></svg>`
-        : html`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8Z"/></svg>`}</button>`;
+    return html`<button class="icon-btn" title="Toggle theme" aria-label="Toggle theme" aria-pressed=${() => String(theme.value === 'dark')} @click=${flip}><i class=${() => 'fa-solid ' + (theme.value === 'dark' ? 'fa-sun' : 'fa-moon')} aria-hidden="true"></i></button>`;
 });
 
 // ── search ───────────────────────────────────────────────────────────────────
 let indexPromise = null;
 const loadIndex = () => indexPromise || (indexPromise = fetch('/search.json').then(r => r.json()).catch(() => []));
-const tokens = (s) => s.toLowerCase().split(/[^a-z0-9а-яё$._]+/i).filter(Boolean);
+const tokens = (s) => s.toLowerCase().split(/[^a-z0-9а-яё$._:@-]+/i).filter(Boolean);
 const score = (e, q) => {
     const h = e.h.toLowerCase(), t = e.t.toLowerCase(), x = e.x.toLowerCase();
     let s = 0;
@@ -23,7 +21,7 @@ const score = (e, q) => {
         if (t.includes(w)) s += 6;
         if (x.includes(w)) s += 4; else if (!h.includes(w) && !t.includes(w)) return 0;
     }
-    return s + (e.k === 'api' ? 2 : 0);
+    return s + (e.k === 'docs' ? 2 : 0);
 };
 const mark = (text, q) => {
     const parts = []; let rest = text, guard = 0;
@@ -36,6 +34,8 @@ const mark = (text, q) => {
     }
     return parts;
 };
+const KIND = { api: 'API', docs: 'Docs', examples: 'Example', errors: 'Code' };
+const isMac = /Mac|iPhone|iPad/.test(navigator.platform);
 
 island('site-search', ({ el, html, on, effect }) => {
     const query = signal(''), open = signal(false), sel = signal(0), index = signal([]), q = signal('');
@@ -44,11 +44,15 @@ island('site-search', ({ el, html, on, effect }) => {
         const words = tokens(q.value); if (!words.length) return [];
         return index.value.map(e => [score(e, words), e]).filter(([s]) => s > 0).sort((a, b) => b[0] - a[0]).slice(0, 12).map(([, e]) => e);
     });
+    const listOpen = computed(() => open.value && !!q.value.trim());
     effect(() => { results.value; sel.value = 0; });
     const go = () => { const r = results.value[sel.value]; if (r) location.href = r.u; };
     const focus = async () => { open.value = true; if (!index.value.length) index.value = await loadIndex(); };
+    const editable = (t) => t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable);
     on(document, 'keydown', (e) => {
-        if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') { e.preventDefault(); const i = document.querySelector('.search input'); i && i.focus(); }
+        const input = el.querySelector('input');
+        if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') { e.preventDefault(); el.classList.add('open'); input.focus(); }
+        else if (e.key === '/' && !editable(e.target) && !e.ctrlKey && !e.metaKey && !e.altKey) { e.preventDefault(); el.classList.add('open'); input.focus(); }
     });
     on(document, 'pointerdown', (e) => { if (!e.target.closest('.search')) { open.value = false; el.classList.remove('open'); } });
     // mobile: the collapsed icon opens a full-width field under the header
@@ -57,15 +61,15 @@ island('site-search', ({ el, html, on, effect }) => {
         if (e.key === 'ArrowDown') { e.preventDefault(); sel.value = Math.min(sel.value + 1, results.value.length - 1); }
         else if (e.key === 'ArrowUp') { e.preventDefault(); sel.value = Math.max(sel.value - 1, 0); }
         else if (e.key === 'Enter') { e.preventDefault(); go(); }
-        else if (e.key === 'Escape') { open.value = false; e.target.blur(); }
+        else if (e.key === 'Escape') { open.value = false; el.classList.remove('open'); e.target.blur(); }
     };
     return html`
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
-        <input type="search" placeholder="Search docs…" aria-label="Search" autocomplete="off" bind:value=${query} @focus=${focus} @input=${focus} @keydown=${key}>
-        <kbd>Ctrl K</kbd>
-        ${() => open.value && q.value.trim() ? html`<div class="res">${() => results.value.length
-            ? list(results, (r, i) => html`<a href=${r.u} class=${{ sel: () => i.value === sel.value }} @pointerenter=${() => { sel.value = i.value; }}><b>${mark(r.h, tokens(q.value))} <span>· ${r.t}</span></b><small>${mark(r.x.slice(0, 140), tokens(q.value))}</small></a>`, { key: 'u' })
-            : html`<div class="none">Nothing found for “${q}”</div>`}</div>` : null}`;
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+        <input type="search" placeholder="Search docs…" aria-label="Search" autocomplete="off" role="combobox" aria-autocomplete="list" aria-controls="search-list" aria-expanded=${() => String(listOpen.value)} aria-activedescendant=${() => listOpen.value && results.value.length ? 'sr-' + sel.value : null} bind:value=${query} @focus=${focus} @input=${focus} @keydown=${key}>
+        <kbd>${isMac ? '⌘ K' : 'Ctrl K'}</kbd>
+        ${() => listOpen.value ? html`<div class="res" id="search-list" role="listbox" aria-label="Search results">${() => results.value.length
+            ? list(results, (r, i) => html`<a href=${r.u} id=${() => 'sr-' + i.value} role="option" aria-selected=${() => String(i.value === sel.value)} class=${{ sel: () => i.value === sel.value }} @pointerenter=${() => { sel.value = i.value; }}><span class="k">${KIND[r.k] || r.k}</span><b>${mark(r.h, tokens(q.value))}</b><small>${r.t} · ${mark(r.x.slice(0, 140), tokens(q.value))}</small></a>`, { key: 'u' })
+            : html`<div class="none" role="status">Nothing found for “${q}”</div>`}<div class="hint"><span><kbd>↑</kbd><kbd>↓</kbd> navigate</span><span><kbd>↵</kbd> open</span><span><kbd>esc</kbd> close</span></div></div>` : null}`;
 });
 
 // ── landing: the README counter, alive ───────────────────────────────────────
@@ -74,45 +78,51 @@ island('counter', ({ props, signal, html }) => {
     return html`<button @click=${() => count.value++}>Clicked ${count} times</button><small>← this is the island from the code above, hydrated from <code>data-start="${props.start}"</code></small>`;
 }, { types: { start: Number } });
 
-// ── plain helpers: copy buttons, sidebar, TOC spy, example tabs ──────────────
-for (const pre of document.querySelectorAll('pre')) {
-    if (pre.closest('.play')) continue;
-    const b = document.createElement('button'); b.className = 'copy'; b.textContent = 'Copy'; b.type = 'button';
-    b.onclick = async () => { try { await navigator.clipboard.writeText(pre.querySelector('code')?.innerText ?? pre.innerText); b.textContent = 'Copied'; b.classList.add('done'); } catch { b.textContent = 'Select & copy'; } setTimeout(() => { b.textContent = 'Copy'; b.classList.remove('done'); }, 1500); };
-    pre.appendChild(b);
-}
-// mobile menu: the site sections (hidden nav) + the docs/API sidebar when the page has one
-const burger = document.querySelector('.burger');
-if (burger) {
-    let menu = null;
-    const build = () => {
-        menu = document.createElement('div'); menu.className = 'mnav';
-        const primary = document.createElement('nav'); primary.className = 'primary';
-        for (const a of document.querySelectorAll('.top nav a')) primary.appendChild(a.cloneNode(true));
-        menu.appendChild(primary);
+// ── page chrome as one component: copy buttons, mobile menu, sidebar, TOC spy — all listeners live in its scope ────
+mount(document.body, ({ on, delegate, signal, effect, html }) => {
+    // copy buttons on every code block (the playground has its own toolbar)
+    for (const pre of document.querySelectorAll('pre')) {
+        if (pre.closest('.play')) continue;
+        const state = signal('Copy');
+        pre.appendChild(html`<button class=${{ copy: true, done: () => state.value === 'Copied' }} type="button" aria-label="Copy code" @click=${async () => {
+            try { await navigator.clipboard.writeText(pre.querySelector('code')?.innerText ?? pre.innerText); state.value = 'Copied'; } catch { state.value = 'Select & copy'; }
+            setTimeout(() => { state.value = 'Copy'; }, 1500);
+        }}>${state}</button>`);
+    }
+    // mobile menu: the site sections (hidden nav) + the docs/API sidebar when the page has one
+    const burger = document.querySelector('.burger');
+    if (burger) {
+        const open = signal(false);
         const side = document.querySelector('.side');
-        if (side) { const s = side.cloneNode(true); s.className = 'side-copy'; menu.appendChild(s); }
+        const menu = html`<nav class=${{ mnav: true, open }} id="mnav" aria-label="Site"><div class="primary">${[...document.querySelectorAll('.top nav a')].map(a => a.cloneNode(true))}</div>${side ? (() => { const s = side.cloneNode(true); s.className = 'side-copy'; return s; })() : null}</nav>`;
         document.body.appendChild(menu);
-    };
-    const set = (open) => { if (!menu) build(); menu.classList.toggle('open', open); burger.setAttribute('aria-expanded', String(open)); document.body.classList.toggle('menu-open', open); burger.querySelector('i')?.classList.toggle('fa-bars', !open); burger.querySelector('i')?.classList.toggle('fa-xmark', open); };
-    burger.addEventListener('click', () => set(!(menu && menu.classList.contains('open'))));
-    document.addEventListener('click', (e) => { if (menu && menu.classList.contains('open') && e.target.closest('.mnav a')) set(false); });
-    document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && menu && menu.classList.contains('open')) set(false); });
-}
-const toc = document.querySelector('.toc');
-if (toc) {
-    const links = [...toc.querySelectorAll('a')], byId = new Map(links.map(a => [a.getAttribute('href').slice(1), a]));
-    const heads = [...document.querySelectorAll('.content h2[id], .content h3[id]')].filter(h => byId.has(h.id));
-    let current = null;
-    const io = new IntersectionObserver(() => {
-        const y = scrollY + 90; let best = null;
-        for (const h of heads) if (h.offsetTop <= y) best = h;
-        if (best && best !== current) { current = best; links.forEach(a => a.classList.remove('on')); byId.get(best.id).classList.add('on'); }
-    }, { rootMargin: '-80px 0px -60% 0px', threshold: [0, 1] });
-    heads.forEach(h => io.observe(h));
-    addEventListener('scroll', () => io.takeRecords(), { passive: true });
-}
-for (const ex of document.querySelectorAll('.ex')) {
-    const tabs = ex.querySelectorAll('.tabs button'), panes = ex.querySelectorAll('[data-pane]');
-    tabs.forEach(t => { t.onclick = () => { tabs.forEach(x => x.classList.toggle('on', x === t)); panes.forEach(p => { p.hidden = p.dataset.pane !== t.dataset.tab; }); }; });
-}
+        effect(() => {
+            const o = open.value;
+            burger.setAttribute('aria-expanded', String(o)); document.body.classList.toggle('menu-open', o);
+            const i = burger.querySelector('i'); if (i) { i.classList.toggle('fa-bars', !o); i.classList.toggle('fa-xmark', o); }
+            if (o) document.querySelector('.mnav .side-copy a.on')?.scrollIntoView({ block: 'center' });
+        });
+        on(burger, 'click', () => { open.value = !open.value; });
+        delegate(document, 'click', '.mnav a', () => { open.value = false; });
+        on(document, 'keydown', (e) => { if (e.key === 'Escape') open.value = false; });
+    }
+    // desktop sidebar: keep the active item in view
+    const side = document.querySelector('.side');
+    if (side) { const a = side.querySelector('a.on'); if (a && side.scrollHeight > side.clientHeight) side.scrollTop = a.offsetTop - side.clientHeight / 2 + a.offsetHeight / 2; }
+    // "On this page" scroll spy
+    const toc = document.querySelector('.toc');
+    if (toc) {
+        const links = [...toc.querySelectorAll('a')], byId = new Map(links.map(a => [a.getAttribute('href').slice(1), a]));
+        const heads = [...document.querySelectorAll('.content h2[id], .content h3[id]')].filter(h => byId.has(h.id));
+        const current = signal(null);
+        on(window, 'scroll', () => { const y = scrollY + 90; let best = null; for (const h of heads) if (h.offsetTop <= y) best = h; current.value = best && best.id; }, { passive: true });
+        effect(() => { const id = current.value; links.forEach(a => { const isOn = a.getAttribute('href') === '#' + id; a.classList.toggle('on', isOn); if (isOn) a.setAttribute('aria-current', 'true'); else a.removeAttribute('aria-current'); }); });
+        dispatchEvent(new Event('scroll'));
+    }
+    // examples: Result / Source tabs
+    delegate(document, 'click', '.ex .tabs button', (e, t) => {
+        const ex = t.closest('.ex');
+        ex.querySelectorAll('.tabs button').forEach(x => { x.classList.toggle('on', x === t); x.setAttribute('aria-selected', String(x === t)); });
+        ex.querySelectorAll('[data-pane]').forEach(p => { p.hidden = p.dataset.pane !== t.dataset.tab; });
+    });
+});

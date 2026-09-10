@@ -14,7 +14,7 @@
 <script type="module">
 import { island, wireForm, required, emailRule, minLen, matches } from '../aegis.js';
 
-island('signup', ({ el }) => {
+island('signup', ({ el, html }) => {
     const f = wireForm(el, {
         schema: {
             email: [required, emailRule],
@@ -22,10 +22,13 @@ island('signup', ({ el }) => {
             repeat: [required, matches('password', 'Passwords differ')],
         },
         mode: 'blur-then-live',   // quiet until the field is left, live after that
+        // mock server (try me@taken.com): a real app passes submit: true and lets the 422 → field errors path do this
+        submit: async (v) => { await new Promise(r => setTimeout(r, 500)); if (v.email.endsWith('@taken.com')) { f.setErrors({ email: 'This email is already registered' }); throw new Error('422'); } },
     });
     // f.errors.email, f.valid, f.submitting are signals; errors are also written into the DOM (aria-invalid, :user-invalid)
+    el.insertAdjacentElement('afterend', html`<p aria-live="polite">${() => f.submitting.value ? 'Creating…' : f.status.value === 'success' ? 'Account created (mock)' : ''}</p>`.firstElementChild);
 });
 </script>
-<style>input:user-invalid { outline: 2px solid crimson }</style>
+<style>input:user-invalid { outline: 2px solid #C8353B }</style>
 </body>
 </html>
