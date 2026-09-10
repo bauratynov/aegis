@@ -1,7 +1,7 @@
 // Сверка экспортов рантайма и aegis.d.ts — ловит забытый экспорт в любую сторону (npm test).
-import { readFileSync } from 'node:fs';
+import { readFileSync, existsSync } from 'node:fs';
 
-const src = readFileSync(new URL('./aegis_full.js', import.meta.url), 'utf8');
+const src = readFileSync(new URL(existsSync(new URL('./aegis_full.js', import.meta.url)) ? './aegis_full.js' : './aegis.js', import.meta.url), 'utf8');
 const dts = readFileSync(new URL('./aegis.d.ts', import.meta.url), 'utf8');
 
 const runtime = new Set([...src.matchAll(/^export (?:async )?(?:function\*? |const |let |class )(\w+)/gm)].map(m => m[1]));

@@ -19,6 +19,7 @@ One ES module, no compiler, no npm. Your server renders the HTML; Aegis wakes up
   <img src="https://img.shields.io/badge/build_step-none-brightgreen" alt="Zero build">
   <img src="https://img.shields.io/badge/dependencies-0-blue" alt="No dependencies">
   <img src="https://img.shields.io/badge/signals%20core-11%20KB%20gzip-orange" alt="Size">
+  <a href="https://github.com/bauratynov/aegis/actions/workflows/ci.yml"><img src="https://github.com/bauratynov/aegis/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <img src="https://img.shields.io/badge/tests-1072%20passing-brightgreen" alt="Tests">
   <img src="https://img.shields.io/badge/license-MIT-green" alt="License">
 </p>
@@ -352,6 +353,21 @@ Run it yourself: serve the folder and open `bench.html` — the numbers are in `
 
 ---
 
+## Verified by design
+
+The reactive core is the part of a framework that must be right, so it is the part with the most adversarial tests. All of them run with `npm test`; nothing needs a browser.
+
+| Check | What it proves | Command |
+|---|---|---|
+| Model-based fuzzer | random graphs of signals, computeds and effects against an oracle: consistency, no glitches, no wasted runs, at most one compute per change, no leaks after dispose; 1 000 seeds, plus a fault fuzzer that throws inside computeds | `node --test test-core.mjs` (uses `fuzz-graph.mjs`) |
+| Scheduler simulation | the deadline scheduler keeps input latency under budget while draining transition and idle work: p98 of a 10 000-event trace | `npm run test:sched` |
+| Prefetch simulation | the intent detector and the network budget: hit rate and wasted bytes on synthetic sessions | `npm run test:prefetch` |
+| Export set and types | every runtime export is declared in `aegis.d.ts` and vice versa; `tsc` over `test-types.ts` | `node check-exports.mjs`, `tsc -p tsconfig.types.json` |
+| Size budgets | tree-shaken subsets stay under their gzip budgets and never pull the cache, forms or IndexedDB into a light build | `npm run test:shake` |
+| Graph contracts | in dev mode the engine checks its own invariants (no dangling subscriptions, scope tree is a tree, ownership is single) on sampled flushes; `dev.contracts = 'strict'` checks every flush in the browser suite | part of `test.html` |
+
+The properties behind the fuzzer: pull-based evaluation without glitches, write backdating inside `batch()`, an earliest-deadline-first scheduler, dispose as a transaction, and provenance ordering of effects (Kahn over writer → reader edges). Run the fuzzer yourself before trusting the README.
+
 ## Testing
 
 `aegis/test` is a dependency-free helper set for any browser runner (the repo's `test.html`, Vitest browser mode, Playwright, Web Test Runner):
@@ -448,8 +464,14 @@ A 15-export admin bundle comes out at 14 KB gzip. Unknown names fail the build i
 
 ```html
 <script type="module">
-import { signal, component, html } from './aegis.js';
+import { signal, island, html } from './aegis.js';
 </script>
+```
+
+Or straight from a CDN, pinned to a tag:
+
+```html
+<script type="importmap">{ "imports": { "aegis": "https://cdn.jsdelivr.net/gh/bauratynov/aegis@v0.7.0/aegis.min.js" } }</script>
 ```
 
 ### Vendored

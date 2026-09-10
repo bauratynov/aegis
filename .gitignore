@@ -2,17 +2,12 @@ _queue/
 _done/
 _push_next.ps1
 _push_log.txt
-aegis_full.js
 DIAMONDS.md
 PLAN.md
 node_modules/
 .DS_Store
 *.log
 DIAMONDS-2.md
-aegis.min.js
-aegis.min.js.map
-aegis.core.js
-aegis.core.min.js
 dist/
 DIAMONDS-*.md
 _tmp_*/

@@ -3,15 +3,34 @@ name: CI
 on:
   push:
     branches: [main]
+    tags: ['v*']
   pull_request:
 
 jobs:
-  core:
-    name: Core tests (node)
+  node:
+    name: Node — core tests, export set, types, simulations, size budgets
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - run: node --test test-core.mjs
+          cache: npm
+      - run: npm ci
+      - run: npm test
+
+  browsers:
+    name: Browsers — test.html in headless Chrome and Firefox
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run test:browsers
+        env:
+          CHROME: /usr/bin/google-chrome
+          FIREFOX: /usr/bin/firefox
