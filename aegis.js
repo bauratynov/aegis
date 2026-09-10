@@ -815,8 +815,15 @@ class Effect {
 }
 Effect.prototype._isComputed = false;
 
+/**
+ * Точка подмены для всего движка. fetcher: null → request() (через _ext, чтобы defaults не тянул сеть в сборку без запросов).
+ * orphanEffects — что делать с effect() вне scope (E001): 'warn' (dev предупреждает, эффект живёт вечно), 'throw' (ошибка
+ * и в проде), 'root' (эффект привязывается к корневому scope приложения — живёт до reset(), но учтён и виден в dev.graph()).
+ */
+export const defaults = { fetcher: null, motion: 'auto', orphanEffects: 'warn' };
+let _orphanRoot = null;   // scope для orphanEffects: 'root'
 export function effect(fn, nameOrOpts) {
-    const owner = _currentScope;
+    let owner = _currentScope;
     let name = typeof nameOrOpts === 'string' ? nameOrOpts : (nameOrOpts && nameOrOpts.name) || null;
     const trace = !!(nameOrOpts && typeof nameOrOpts === 'object' && nameOrOpts.trace);
     const fl = nameOrOpts && typeof nameOrOpts === 'object' ? nameOrOpts.flush : null;
@@ -824,6 +831,10 @@ export function effect(fn, nameOrOpts) {
     const explicitName = !!name;                   // именованные (движок, пользователь с name) — без детектора E019
     if (!name && (!globalThis.AEGIS_PROD && _dev())) name = fn.name || null;   // авто-имя в dev: function search() {…} → "search"
     const site = (!globalThis.AEGIS_PROD && _dev()) ? ((name && /[:@]/.test(name)) ? _curSite : _callSite()) : null;
+    if (!owner && defaults.orphanEffects !== 'warn') {
+        if (defaults.orphanEffects === 'throw') throw new Error(`[Aegis:E001] Effect "${name || 'anonymous'}" created outside a component scope (defaults.orphanEffects = 'throw'). Wrap it in island()/mount()/scope.run().`);
+        owner = _orphanRoot || (_orphanRoot = new Scope(null, 'orphans'));   // 'root'
+    }
     if (!owner) {
         _warn('E001', !globalThis.AEGIS_PROD && {
             site,
@@ -973,6 +984,8 @@ function _scopePath(scope) {
     for (let sc = scope; sc && parts.length < 4; sc = sc.parent) if (sc.name) parts.push(sc.name);
     return parts.join(' ‹ ');
 }
+/** Ближайший элемент компонента вверх по scope-дереву: хост острова/mount() для пометки data-aegis-error */
+function _scopeHost(scope) { for (let sc = scope; sc; sc = sc.parent) if (sc.el) return sc.el; return null; }
 /** Глобальные обработчики ошибок эффектов (после scope.onError, до reportError) */
 const _errHandlers = new Set();
 /**
@@ -991,6 +1004,9 @@ function _reportErrors(errors) {
     if (!errors.length) return;
     if (globalThis.__AEGIS_DEV__ === 'strict') throw errors[0];
     for (const e of errors) {
+        // хост компонента получает data-aegis-error="имя эффекта": CSS показывает запасной вид, остальные острова живут
+        const host = e && e.aegis && e.aegis.host;
+        if (host && host.setAttribute) { try { host.setAttribute('data-aegis-error', e.aegis.effect || ''); } catch (x) { /* detached */ } }
         if (_errHandlers.size) { for (const h of _errHandlers) { try { h(e, (e && e.aegis) || null); } catch (x) { console.error('[Aegis] onError handler failed:', x); } } continue; }
         if (typeof reportError === 'function') reportError(e);
         else if (typeof window === 'undefined') console.error(e);     // node / workers without reportError: log, never kill the process over one effect
@@ -1198,7 +1214,7 @@ function _flush() {
                     } catch (e) {
                         try {
                             if (e && typeof e === 'object' && !e.aegis) {
-                                e.aegis = { effect: obs._name, scope: _scopePath(obs._owner), changed: _changedDeps(obs) };
+                                e.aegis = { effect: obs._name, scope: _scopePath(obs._owner), changed: _changedDeps(obs), host: _scopeHost(obs._owner) };
                                 if (obs._site) e.aegis.site = obs._site.short;
                                 try { e.message += `\n    in effect "${obs._name}"${e.aegis.scope ? ' · ' + e.aegis.scope : ''}${obs._site ? ' · at ' + obs._site.short : ''}${e.aegis.changed.length ? '\n    changed: ' + e.aegis.changed.map(d => d.name + ' → ' + d.value).join(', ') : ''}`; } catch (m) { /* readonly message */ }
                             }
@@ -1948,8 +1964,7 @@ export const api = {
 };
 
 /** Fetcher по умолчанию для resource(): request() + разбор тела. Подменяется через defaults.fetcher */
-/** Точка подмены для всего движка: defaults.fetcher = mock — resource/cache/offline/guardedFetch идут через него */
-export const defaults = { fetcher: null, motion: 'auto' };   // fetcher: null → request() из этой же секции (через _ext, чтобы defaults.motion не тянул сеть в бандл без запросов)
+/** defaults объявлен в ядре (см. effect(): defaults.orphanEffects); fetcher: null → request() из этой секции */   // fetcher: null → request() из этой же секции (через _ext, чтобы defaults.motion не тянул сеть в бандл без запросов)
 /** Актуальный fetcher: подмена defaults.fetcher, иначе request() — если секция запросов есть в сборке */
 function _fetcher() { return defaults.fetcher || _ext.request || (() => { throw new Error('[Aegis] no request layer in this build — import { api } (or request) from aegis, or set defaults.fetcher'); }); }
 

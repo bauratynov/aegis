@@ -4,8 +4,8 @@
 
 <h1 align="center">Aegis</h1>
 
-<p align="center"><b>The reactive UI engine with zero build.</b><br>
-One ES module, no compiler, no npm. Your server renders the HTML; Aegis wakes up the parts that need to be alive.</p>
+<p align="center"><b>Your server renders the page. Aegis makes parts of it alive.</b><br>
+One ES module, no build step, no npm. Django, Laravel, Rails, Go, PHP: keep your templates, add <code>data-aegis</code> where the page has to react.</p>
 
 <p align="center">
   <a href="https://aegisjs.com/play/">🎬 Live playground</a> ·
@@ -20,7 +20,7 @@ One ES module, no compiler, no npm. Your server renders the HTML; Aegis wakes up
   <img src="https://img.shields.io/badge/dependencies-0-blue" alt="No dependencies">
   <img src="https://img.shields.io/badge/signals%20core-11%20KB%20gzip-orange" alt="Size">
   <a href="https://github.com/bauratynov/aegis/actions/workflows/ci.yml"><img src="https://github.com/bauratynov/aegis/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <img src="https://img.shields.io/badge/tests-1072%20passing-brightgreen" alt="Tests">
+  <img src="https://img.shields.io/badge/tests-1074%20passing-brightgreen" alt="Tests">
   <img src="https://img.shields.io/badge/license-MIT-green" alt="License">
 </p>
 
@@ -31,7 +31,7 @@ One ES module, no compiler, no npm. Your server renders the HTML; Aegis wakes up
 </div>
 
 <script type="module">
-import { island } from 'https://aegisjs.com/aegis.js';
+import { island } from 'https://aegisjs.com/0.7.0/aegis.min.js';
 
 island('counter', ({ props, signal, html }) => {
     const count = signal(props.start);
@@ -43,23 +43,40 @@ island('counter', ({ props, signal, html }) => {
 
 That is the whole setup. The server HTML is visible before JavaScript runs and indexed by search engines; the island replaces it with a live template and keeps working after any server-driven swap.
 
+- **Server HTML stays the source of truth.** No Node SSR, no client tree that re-renders what the server already sent.
+- **A form works without JavaScript.** `wireForm()` only improves it: live validation, 422 errors on the right fields.
+- **An island hydrates inside htmx, Turbo or jQuery pages.** Markup inserted later wakes up too.
+- **21 KB gzip for islands + templates, zero dependencies, one file you can read.** Pin a version, add a hash, ship.
+
+Start here: [Getting started](https://aegisjs.com/docs/getting-started/) (a `base.html` for Django, Laravel, Rails and Go) · [from Alpine](https://aegisjs.com/docs/from-alpine/) · [with htmx](https://aegisjs.com/docs/with-htmx/) · [when not to use Aegis](https://aegisjs.com/docs/when-not-to-use/).
+
 ## Why Aegis
 
-You have a server that renders HTML and you want parts of the page to be alive: a search box, a form with validation, a table, a cart. The usual answer is a bundler, a component framework and a second rendering stack. Aegis is the other answer.
+You have a server that renders HTML and you want parts of the page to be alive: a search box, a form with validation, a table, a cart. The usual answer is a bundler, a component framework and a second rendering stack. Aegis is the other answer, and its neighbours are the other libraries that live inside server HTML.
 
-| | Aegis | React + Query + Router | Vue | htmx + Alpine |
-|---|---|---|---|---|
-| Build step | none, one file | Vite/webpack + JSX | Vite or runtime compiler | none |
-| Dependencies | 0 | react, react-dom, @tanstack/react-query, react-router | vue, pinia, vue-router | htmx, alpine |
-| Size, gzip | 11 KB signals · 21 KB islands + templates · 91 KB everything | 45 KB + 13 KB + 20 KB | 34 KB + 5 KB + 8 KB | 14 KB + 15 KB |
-| Server HTML | adopted as is, morph, swap, islands | replaced by the client tree (or SSR with Node) | replaced (or SSR with Node) | swapped as strings |
-| Signals | TC39-style, glitch-free | hooks, re-render per change | `ref`/`computed` | Alpine reactivity |
-| Data layer | `resource()` with SWR cache, ETag, offline, optimistic patch log | TanStack Query | your own or TanStack | none |
-| Forms | Constraint Validation, schemas, 422 mapping, wizards | react-hook-form | vee-validate | none |
-| Router | Navigation API, loaders, guards before commit | react-router | vue-router | none |
-| Dev warnings | 60+ codes with what / why / fix and source position | React DevTools | Vue DevTools | none |
+| | Aegis | Alpine | Petite-Vue | htmx | Stimulus | Lit |
+|---|---|---|---|---|---|---|
+| Build step | none | none | none | none | none (or a bundler) | usually a bundler |
+| Size, gzip | 21 KB islands + templates (4 KB signals, 91 KB everything) | 15 KB | 6 KB | 14 KB | 11 KB | 16 KB |
+| Server HTML | adopted as is; `swap()` morphs fragments; islands survive swaps | directives on the markup | directives on the markup | swapped as strings | controllers on the markup | replaced by shadow DOM |
+| Reactivity | signals, computeds, effects; glitch-free, batched | proxy + directives | proxy + directives | none (server round-trip) | none (imperative) | properties → re-render |
+| Templates | `html``` in JavaScript, parsed once, CSP-safe; keyed `list()` | `x-for` / `x-text` in HTML | `v-for` / `{{ }}` in HTML | HTML from the server | targets in HTML | `html``` (lit-html) |
+| Data | `resource()`: cache, revalidation, ETag, offline, optimistic patches | none | none | requests per attribute | none | none |
+| Forms | Constraint Validation, schemas, 422 mapping, wizards, drafts | none | none | server-side | none | none |
+| Navigation | Navigation API router, `boost()` for server pages, View Transitions | none | none | `hx-boost` | Turbo | none |
+| Dev warnings | 60+ codes: what / why / fix, source position | none | none | none | none | none |
 
-The same todo list is 18 lines in Aegis, 22 in React and 18 in Vue, but the Aegis one needs no build and no dependencies. See it side by side in the [playground](https://aegisjs.com/play/?preset=todos) (tab "vs React / Vue").
+The honest reading of the table: Alpine and Petite-Vue are smaller and fine for a dropdown; htmx is the right call when the server can render every state; Aegis is for the pages where you would otherwise reach for a component framework — a table with search and paging, a form with server errors, a cart, an admin screen — and want to keep the server templates.
+
+**Aegis is not a React replacement.** If you have a single-page application, a React team and a component ecosystem you rely on, stay there. The comparison that matters for Aegis is “bundler + framework + data library on top of a server app” against “one file inside the server app”, and the same todo list is 18 lines in Aegis, 22 in React and 18 in Vue: see it side by side in the [playground](https://aegisjs.com/play/?preset=todos) (tab “vs React / Vue”).
+
+## When not to use Aegis
+
+- **A single-page application with client-side routing for everything.** Aegis has a router, but its home is a server that renders pages; if the server only serves JSON, a SPA framework fits better.
+- **A team that lives in JSX and the React ecosystem.** Storybook, React Native, thousands of components: those are not Aegis, and they are not coming.
+- **A dropdown or a tab strip on a static page.** Alpine or Petite-Vue is smaller and enough.
+- **Every state rendered by the server.** If htmx alone covers the page, add Aegis only for the islands that need client state.
+- **Browsers without ES modules.** Aegis ships as an ES module; there is no ES5 build.
 
 ## What can you build with it
 
@@ -85,7 +102,11 @@ Runnable versions of every example: the [examples catalogue](https://aegisjs.com
 
 ## The canonical API
 
-Aegis exports a lot (about 260 names, most of them small helpers). You need about a dozen; the rest are for specific jobs. Older aliases still work, but they are marked `@deprecated` in `aegis.d.ts` and are not documented here.
+Aegis exports a lot (about 170 names, most of them small helpers). The API has three tiers:
+
+- **Core, ten names, enough for most pages:** `signal`, `computed`, `effect`, `batch`, `html`, `island`, `mount`, `resource`, `wireForm`, `swap`.
+- **Extended:** everything else — helpers for specific jobs (router, forms, cache, motion, accessibility). Same file, same guarantees; a bundler or `build.mjs` leaves out what you do not import.
+- **Deprecated:** older aliases still work and are marked `@deprecated` in `aegis.d.ts` with their replacement; they are removed in 1.0 and not documented here.
 
 | Job | Use | Not |
 |---|---|---|
@@ -349,7 +370,7 @@ The DevTools panel has a **cache** tab with the same data, age bars and invalida
 | create 10,000 | 146.6 (131.5 with `delegateEvents`) | `reactive()` for..of 100k rows | 20 |
 | clear | 12.5 | `reactive()` wrap 100k rows, heap | 17 MB |
 
-Run it yourself: serve the folder and open `bench.html` — the numbers are in `<pre>` and `window.__bench`.
+Run it yourself: serve the folder and open `bench.html` — the numbers are in `<pre>` and `window.__bench`. The same three jobs next to Alpine and Vue, in your browser: [aegisjs.com/bench/](https://aegisjs.com/bench/) (a 10 000-row table, a search filter, an optimistic PATCH).
 
 ---
 
@@ -394,7 +415,7 @@ expect(net.last().method).toBe('DELETE');
 cleanup();                                     // unmount, restore fetch, reset engine singletons
 ```
 
-`waitFor` drains effects, pending resources and mutations between checks, so tests never need `sleep()`. `npm run test:browsers` runs the engine's own suite in headless Chrome and Firefox.
+`waitFor` drains effects, pending resources and mutations between checks, so tests never need `sleep()`. `npm run test:browsers` runs the engine's own suite in headless Chrome and Firefox, `npm run test:webkit` in Playwright WebKit; CI runs all three on every push.
 
 ---
 
@@ -416,12 +437,12 @@ Browsers throttle hidden tabs: `setTimeout`/`setInterval` fire at most once per 
 
 | Browser | Support |
 |---------|---------|
-| Chrome / Edge / Opera / Yandex / Brave | ✅ Full (Chromium) |
-| Firefox 101+ | ✅ Full |
-| Safari 16.4+ | ✅ Full |
-| Safari < 16.4 | ⚠️ Core works, `css()` needs fallback |
+| Chrome / Edge / Opera / Brave / Yandex (Chromium 105+) | full; Navigation API router, View Transitions, `precommitHandler` guards from Chromium 138 |
+| Firefox 101+ | full; the router uses the History API path (no Navigation API), guards run before `pushState` |
+| Safari 16.4+ | full; the router uses the History API path, `css()` needs no fallback |
+| Safari < 16.4 | the reactive core, templates, islands, forms and data work; `css()` needs a fallback |
 
-All advanced APIs (Navigation API, CSS Anchor Positioning, View Transitions, Background Sync) have built-in fallbacks. The reactive core, DOM rendering, components, forms, routing — all work in any browser supporting ES modules.
+The reactive core, DOM rendering, islands, forms, the cache and routing work in any browser with ES modules. Navigation API, CSS Anchor Positioning, View Transitions, `CloseWatcher`, Background Sync and `CompressionStream` are progressive: when a browser lacks one, the same call takes the older path and the behaviour is the same, minus the platform extra (one history entry instead of a pre-commit guard, a keydown listener instead of `CloseWatcher`). The suite runs in headless Chrome, Firefox and WebKit on every push ([CI](https://github.com/bauratynov/aegis/actions/workflows/ci.yml)).
 
 ---
 
@@ -470,7 +491,27 @@ A 15-export admin bundle comes out at 14 KB gzip. Unknown names fail the build i
 
 ## Installation
 
-### Direct (recommended)
+### Pinned, with a hash (recommended)
+
+Every release is served from `https://aegisjs.com/<version>/` and never changes; the import map carries the integrity hash, so the browser refuses a file that does not match:
+
+```html
+<script type="importmap">
+{
+  "imports": { "aegis": "https://aegisjs.com/0.7.0/aegis.min.js" },
+  "integrity": { "https://aegisjs.com/0.7.0/aegis.min.js": "sha384-IlZI8EunTsg50qmYrO6AIH/tIHqkkD1bZZIIln8MQrwlRKLz8NuE+aW5umJBGDgu" }
+}
+</script>
+<script type="module">
+import { island, html } from 'aegis';
+</script>
+```
+
+The same files with hashes for every version: [aegisjs.com/docs/installation](https://aegisjs.com/docs/installation/). `https://aegisjs.com/aegis.js` without a version is the latest release, for experiments only. The files on the site are the files in this repository at the tag; the jsDelivr mirror works too: `https://cdn.jsdelivr.net/gh/bauratynov/aegis@v0.7.0/aegis.min.js`.
+
+### Vendored
+
+Copy `aegis.js` (or `aegis.min.js` + `.map`) into your static folder next to your templates — it is one file with no dependencies. `aegis.core.js` is the signals + scope subset for non-DOM code.
 
 ```html
 <script type="module">
@@ -478,15 +519,15 @@ import { signal, island, html } from './aegis.js';
 </script>
 ```
 
-Or straight from a CDN, pinned to a tag:
+### Only what you use, without a bundler
 
-```html
-<script type="importmap">{ "imports": { "aegis": "https://cdn.jsdelivr.net/gh/bauratynov/aegis@v0.7.0/aegis.min.js" } }</script>
+Three lines: the repo reads the `import { … } from 'aegis'` line of your app and writes one tree-shaken production module.
+
+```sh
+git clone https://github.com/bauratynov/aegis && cd aegis
+node build.mjs --from ../app/static/js/admin.js --out ../app/static/js/aegis.js
+# → one file with exactly the exports admin.js imports (a 15-export admin bundle is 14 KB gzip); unknown names fail here, not in the browser
 ```
-
-### Vendored
-
-Copy `aegis.js` (or `aegis.min.js` + `.map`) into your static folder next to your templates — it is one file with no dependencies. `aegis.core.js` is the signals + scope subset for non-DOM code.
 
 ### npm
 
@@ -530,6 +571,8 @@ Warnings include:
 - `E028` — zombie binding: a node left the document but its effect keeps updating it
 - `E029` / `E030` — the same URL fetched by two `resource()` instances / fetched in a loop
 - `E031`–`E037` — a Promise or object rendered as text, a typo in `@event` (with did-you-mean), Vue/Alpine/mustache syntax inside `html```, a handler that was called instead of passed, `undefined` in a resource URL, `html()` without the tag, a URL no route matches
+
+In production the warnings are silent. Two things are not warnings and stay on: `defaults.orphanEffects = 'throw'` makes an `effect()` outside a scope an error (or `'root'` adopts it into an app-level scope; the default `'warn'` is a dev-only warning and the effect leaks), and an effect error that no `onError` handles marks the component's host with `data-aegis-error="<effect name>"` before it goes to `reportError`, so a CSS rule can show a fallback while the other islands keep running. In CI run the suite with `window.__AEGIS_DEV__ = 'strict'`: every warning becomes a thrown `AegisWarning`.
 
 Every warning says what happened, why, how to fix it, where (`component:div#app ‹ list:row`), which element (clickable in the console) and the source position (`At: /js/app.js:42:15` — the `html``` template, `effect()` or `resource()` call that caused it) with the line of your file and a caret under the exact `${}`:
 

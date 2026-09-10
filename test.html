@@ -3773,6 +3773,17 @@
             window.__AEGIS_DEV__ = true;
             assert('политика ошибок: в strict-режиме ошибка бросается писателю синхронно', strictThrew && viaGlobal.length === 1);
             offE(); sc2.dispose();
+            {   // хост компонента помечается data-aegis-error="имя эффекта"; соседний компонент живёт
+                const host = document.createElement('div'), other = document.createElement('div'); document.body.append(host, other);
+                const t = signal(0), t2 = signal(0); let otherRuns = 0;
+                const swallow = (e) => { e.preventDefault(); }; addEventListener('error', swallow);
+                mount(host, ({ effect }) => { effect(() => { if (t.value) throw new Error('host-boom'); }, 'render'); });
+                mount(other, ({ effect }) => { effect(() => { t2.value; otherRuns++; }, 'other'); });
+                t.value = 1; await sleep(5); t2.value = 1; await sleep(5);
+                assert('политика ошибок: хост компонента получает data-aegis-error="имя эффекта"', host.getAttribute('data-aegis-error') === 'render');
+                assert('политика ошибок: соседний компонент после чужой ошибки продолжает реагировать', otherRuns === 2 && !other.hasAttribute('data-aegis-error'));
+                removeEventListener('error', swallow); destroy(host); destroy(other); host.remove(); other.remove();
+            }
             // mutation: бросающий эффект-рендер не откатывает успешную мутацию
             const sc3 = createScope(); let r3;
             sc3.run(() => { r3 = resource('/core1/m', { cache: true, fetcher: async () => ({ ok: 1 }) }); effect(() => { const v = r3.data.value; if (v && v.boom) v.boom.deep.x; }, 'render2'); });

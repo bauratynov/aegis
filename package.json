@@ -64,6 +64,7 @@
     "test:sched": "node test-sched-sim.mjs",
     "build": "node build.mjs",
     "test:browsers": "node test-browsers.mjs",
+    "test:webkit": "node test-webkit.mjs",
     "prepublishOnly": "npm run build && npm test"
   },
   "devDependencies": {

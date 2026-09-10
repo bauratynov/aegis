@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
     signal, computed, effect, batch, untrack, isSignal, createScope, onDispose, onError, flush, signals,
-    startTransition, deferred, transaction,
+    startTransition, deferred, transaction, defaults,
 } from './aegis.js';
 import { fuzzGraph } from './fuzz-graph.mjs';
 
@@ -561,4 +561,20 @@ test('untrack() внутри computed: источник под untrack не яв
     assert.equal(c.value, 11);      // cached: the untracked read is not a dependency
     tracked.value = 2;
     assert.equal(c.value, 22);      // the tracked change re-reads both
+});
+
+test('defaults.orphanEffects: "throw" бросает на effect() вне scope, "root" привязывает к корневому scope и эффект живёт', () => {
+    const prev = defaults.orphanEffects;
+    try {
+        defaults.orphanEffects = 'throw';
+        assert.throws(() => effect(() => {}), /E001/);
+        defaults.orphanEffects = 'root';
+        const a = signal(1); let runs = 0;
+        const stop = effect(() => { a.value; runs++; });
+        a.value = 2;
+        assert.equal(runs, 2);
+        stop();
+        a.value = 3;
+        assert.equal(runs, 2);
+    } finally { defaults.orphanEffects = prev; }
 });

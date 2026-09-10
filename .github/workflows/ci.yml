@@ -34,3 +34,16 @@ jobs:
         env:
           CHROME: /usr/bin/google-chrome
           FIREFOX: /usr/bin/firefox
+
+  webkit:
+    name: WebKit — test.html in Playwright WebKit (Safari engine)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm i --no-save playwright
+      - run: npx playwright install --with-deps webkit
+      - run: npm run test:webkit

@@ -5,6 +5,9 @@ All notable changes to Aegis are documented in this file.
 ## [Unreleased]
 
 ### Added
+- `defaults.orphanEffects`: what an `effect()` outside a scope does — `'warn'` (dev warning, the default), `'throw'` (an error, in production too) or `'root'` (owned by an app-level scope). `defaults` moved into the core section, so `aegis.core.js` has it too.
+- An unhandled effect error marks the nearest component host with `data-aegis-error="<effect name>"` before it goes to `reportError`, so CSS can show a fallback; `error.aegis.host` carries the element for `onError` handlers. Other islands are not affected.
+- `.github/CODEOWNERS`, `test-webkit.mjs` (test.html in Playwright WebKit) and a third CI job for it.
 - `test-core.mjs`: tests for the frozen value of a disposed computed and for the caching semantics of `untrack()` inside a computed.
 - README “Verified by design”: what the node suite proves, what only the browser suite covers, and the limits the tests do not promise (E001 is a reported leak, `untrack()` caches, E027 is a ceiling, contracts are sampled in dev, unhandled effect errors go to `reportError`).
 

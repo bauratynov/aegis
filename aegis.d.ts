@@ -10,6 +10,12 @@
  *
  * @version 0.7.0
  * @license MIT
+ *
+ * API tiers — where to start:
+ *   Core (10 names, enough for most pages): signal, computed, effect, batch, html, island, mount, resource, wireForm, swap
+ *   Extended: everything else below — helpers for specific jobs (router, forms, cache, motion, a11y). Same file, same guarantees,
+ *             tree-shaken away when you do not import it.
+ *   Deprecated: marked @deprecated; still work, removed in 1.0. The line names the replacement.
  */
 
 // ── Reactive Core ──────────────────────────────────────────────
@@ -562,7 +568,12 @@ export const api: {
 };
 export type Fetcher = (url: string, opts: { signal?: AbortSignal; method?: string; body?: unknown }) => Promise<unknown>;
 /** The single mocking point for the whole engine: defaults.fetcher = mock — resource/cache/offline/guardedFetch go through it */
-export const defaults: { /** null → the engine's request(); mocking: defaults.fetcher = mock */ fetcher: Fetcher | null; motion: 'auto' | 'reduce' | 'none' };
+export const defaults: {
+    /** null → the engine's request(); mocking: defaults.fetcher = mock */ fetcher: Fetcher | null;
+    motion: 'auto' | 'reduce' | 'none';
+    /** effect() outside a scope (E001): 'warn' — dev warns, the effect runs forever (default); 'throw' — an error, in production too; 'root' — owned by an app-level root scope (lives until reset()) */
+    orphanEffects: 'warn' | 'throw' | 'root';
+};
 
 export interface RetryOptions {
     retries?: number;
