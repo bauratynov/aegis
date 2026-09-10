@@ -360,6 +360,7 @@ island('users', ({ props, html, when, list }) => {
 cpSync(join(SITE, 'src', 'theme.css'), join(DIST, 'theme.css'));
 cpSync(join(SITE, 'src', 'site.js'), join(DIST, 'site.js'));
 cpSync(join(SITE, 'src', 'play.js'), join(DIST, 'play.js'));
+if (existsSync(join(SITE, 'src', 'og.png'))) cpSync(join(SITE, 'src', 'og.png'), join(DIST, 'og.png'));
 write('search.json', JSON.stringify(search));
 write('favicon.svg', MARK_FILE);
 write('logo/mark.svg', MARK_FILE);
