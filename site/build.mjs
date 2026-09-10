@@ -16,7 +16,7 @@ const read = (p) => readFileSync(p, 'utf8');
 // markdown normaliser: GitHub tolerates `html\`\`` and `html``` inside code spans; CommonMark needs a longer fence around them
 const normMd = (s) => s
     .replace(/`([^`\n]*?)\\`\\``/g, '``` $1`` ```')
-    .replace(/`([\w.()' ${}=>-]+?)```(?!`)/g, '``` $1`` ```');
+    .replace(/(^|[^`])`([\w$][\w.()' ${}=>-]*?)```(?!`)/g, '$1``` $2`` ```');
 const readme = normMd(existsSync(join(ROOT, 'README.md')) ? read(join(ROOT, 'README.md')) : read(join(ROOT, '_queue', '21_README.md')))
     .replace(/https:\/\/cdn\.jsdelivr\.net\/npm\/aegis-engine\/aegis\.min\.js/g, `${ORIGIN}/aegis.min.js`);
 const VERSION = (read(join(ROOT, 'package.json')).match(/"version":\s*"([^"]+)"/) || [, '0.0.0'])[1];
