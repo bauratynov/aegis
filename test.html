@@ -5215,6 +5215,72 @@
         reset();
     })();
 
+    section('💎 фаза B4 — recipe patching, гибернация островов, ctx.state, paging резидентных островов');
+
+    await (async () => {
+        const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+        // 1. Recipe patching: та же html``-ветка с другими примитивами патчится на месте — узлы и фокус живут
+        const open = signal(true), label = signal('a');
+        const host = document.createElement('div'); document.body.appendChild(host);
+        const sc = createScope();
+        sc.run(() => host.append(html`<div>${() => open.value ? html`<form title=${label.value}><input id="rp-in"><b>${label.value}</b></form>` : null}</div>`));
+        await sleep(0);
+        const form = host.querySelector('form'), inp = host.querySelector('#rp-in');
+        inp.focus();
+        const codes = []; const off = onWarn(w => codes.push(w.code));
+        for (let i = 0; i < 50; i++) label.value = 'v' + i;
+        off();
+        assert('recipe patch: 50 перерисовок того же шаблона — форма и input те же узлы, фокус на месте', host.querySelector('form') === form && host.querySelector('#rp-in') === inp && document.activeElement === inp && form.title === 'v49' && form.querySelector('b').textContent === 'v49');
+        assert('recipe patch: E012 не срабатывает для того же шаблона', !codes.includes('E012'));
+        open.value = false;
+        assert('recipe patch: другой результат (null) — ветка снята', !host.querySelector('form'));
+        open.value = true;
+        assert('recipe patch: возврат ветки — новый экземпляр с актуальным значением', host.querySelector('form') && host.querySelector('form') !== form && host.querySelector('b').textContent === 'v49');
+        sc.dispose(); host.remove();
+
+        // 2. Гибернация острова: data-aegis-hibernate + ctx.state переживает заморозку
+        if (typeof ContentVisibilityAutoStateChangeEvent === 'function') {
+            register('hib-counter', (el, data, ctx) => {
+                const n = ctx.state('n', 0);
+                el.append(html`<button @click=${() => n.value++}>${() => 'n=' + n.value}</button>`);
+                return { n };
+            });
+            const box = document.createElement('div'); box.innerHTML = '<section data-aegis="hib-counter" data-aegis-hibernate></section>'; sandbox.appendChild(box);
+            const isl = box.firstElementChild;
+            hydrate(box);
+            await sleep(0);
+            isl.querySelector('button').click(); isl.querySelector('button').click();
+            assert('hibernate: остров смонтирован и считает', isl.textContent === 'n=2' && isl.dataset.aegisState === 'hydrated');
+            const comps = stats().components;
+            isl.dispatchEvent(new ContentVisibilityAutoStateChangeEvent('contentvisibilityautostatechange', { skipped: true }));
+            assert('hibernate: skipped → destroy со снимком, DOM остался', isl.dataset.aegisState === 'hibernated' && stats().components === comps - 1 && isl.textContent === 'n=2' && stats().islands.hibernations >= 1);
+            isl.dispatchEvent(new ContentVisibilityAutoStateChangeEvent('contentvisibilityautostatechange', { skipped: false }));
+            await sleep(0);
+            assert('hibernate: возврат → remount, ctx.state восстановлен', isl.dataset.aegisState === 'hydrated' && isl.textContent === 'n=2');
+            isl.querySelector('button').click();
+            assert('hibernate: остров живой после оттаивания', isl.textContent === 'n=3');
+            box.remove();
+        }
+
+        // 3. Paging: резидентный набор ограничен max (CLOCK second chance), выгрузка со снимком, page-in восстанавливает ctx.state
+        register('pg-island', (el, data, ctx) => {
+            const v = ctx.state('v', 0); if (!data.resume) v.value = +el.dataset.seed;
+            el.append(html`<i>${() => 'v' + v.value}</i>`);
+            return { snapshot: () => ({ extra: 1 }) };
+        });
+        const box = document.createElement('div'); sandbox.appendChild(box);
+        box.innerHTML = Array.from({ length: 12 }, (_, i) => `<div data-aegis="pg-island" data-seed="${i}">x</div>`).join('');
+        hydrate(box, { resident: { margin: '0px', max: 3 } });
+        const els = [...box.children];
+        const swapped = els.filter(e => e.dataset.aegisState === 'swapped');
+        assert('paging: резидентов ≤ max, остальные выгружены со снимком (CLOCK)', stats().islands.resident <= 3 && swapped.length >= 6 && swapped[0].querySelector('i').textContent === 'v0' && stats().islands.evictions >= 6);
+        const first = els[0];
+        hydrate(first, { load: 'eager', force: true, resident: { margin: '0px', max: 3 } });
+        assert('paging: page-in — remount со снимком, ctx.state восстановлен без дубликатов разметки', first.dataset.aegisState === 'hydrated' && first.querySelectorAll('i').length === 1 && first.querySelector('i').textContent === 'v0');
+        box.remove();
+        reset();
+    })();
+
     section('component() & destroy()');
 
     (() => {

@@ -54,7 +54,7 @@ if (full) {
     const ps = await bundle('signal, computed, effect, batch, createScope', true);
     ok('prod signals only: ≤ 6.5 KB gzip (долг фазы K: бюджеты секций)', ps.gz <= 6.5, ps.gz.toFixed(1) + ' KB');
     const pi = await bundle('island, mount, html, list, show, when, signal, computed, effect, on, bind, hydrate', true);
-    ok('prod islands: ≤ 28 KB gzip', pi.gz <= 28, pi.gz.toFixed(1) + ' KB');
+    ok('prod islands: ≤ 29.5 KB gzip', pi.gz <= 29.5, pi.gz.toFixed(1) + ' KB');
     // прод-бандл работает: сигналы/эффекты живут, предупреждения молчат
     const { writeFileSync, mkdtempSync } = await import('node:fs');
     const { tmpdir } = await import('node:os');
@@ -73,7 +73,7 @@ if (full) {
     const a = await bundle('island, mount, html, list, show, when, signal, computed, effect, on, bind, hydrate');
     const bad = has(a, '_cacheEntry', '_fetchEntry', '_idb', '_MESSAGES', 'router');
     ok('islands + hydrate: кэш не тянется без resource', bad.length === 0, bad.join(','));
-    ok('islands + hydrate: ≤ 38 KB gzip', a.gz <= 38, a.gz.toFixed(1) + ' KB');
+    ok('islands + hydrate: ≤ 39.5 KB gzip', a.gz <= 39.5, a.gz.toFixed(1) + ' KB');
     const c = await bundle('island, mount, html, list, show, when, signal, computed, effect, on, bind, hydrate, resource');
     ok('+ resource: кэш, seedFrom и prefetch подключены (регистрация через _ext)', has(c, '_cacheEntry', 'seedFrom', 'prefetch', '_cacheReady').length === 4);
     ok('+ resource: таблица сообщений форм всё ещё не нужна', !c.decls.has('_MESSAGES'));

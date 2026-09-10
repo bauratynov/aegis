@@ -139,7 +139,7 @@ export function flushSync(): void;
 /** Синхронно выполнить отложенные полосы micro/frame и очередь эффектов */
 export function flush(): void;
 /** Счётчики движка: flushes, effectRuns, maxRounds, slow (top-20 по мс при dev.profile), scopes, effects, components, кэши */
-export function stats(): { flushes: number; effectRuns: number; maxRounds: number; /** раундов, где порядок эффектов пришлось восстановить сортировкой (churn подписок) */ reordered: number; slow: Array<{ name: string; ms: number }>; scopes: number; effects: number; components: number; resourceCache: number; cssCache: number; queued: number; prefetch: { fired: number; used: number; wasted: number; hoverDelay: number } | null; speculation: { inflight: number; queued: number; fired: number; skipped: number; aborted: number } | null };
+export function stats(): { /** резидентные острова, выгрузки (page-out) и гибернации */ islands: { resident: number; evictions: number; hibernations: number } | null; flushes: number; effectRuns: number; maxRounds: number; /** раундов, где порядок эффектов пришлось восстановить сортировкой (churn подписок) */ reordered: number; slow: Array<{ name: string; ms: number }>; scopes: number; effects: number; components: number; resourceCache: number; cssCache: number; queued: number; prefetch: { fired: number; used: number; wasted: number; hoverDelay: number } | null; speculation: { inflight: number; queued: number; fired: number; skipped: number; aborted: number } | null };
 /** Корневой scope для тестов: const [api, dispose] = root(dispose => …) */
 export function root<T>(fn: (dispose: () => void) => T): [T, () => void];
 /** Дождаться сигнала: resolve при первом значении, для которого predicate истинен; reject TimeoutError / при dispose scope */
@@ -1192,6 +1192,8 @@ export interface ComponentContext<E extends Element = HTMLElement> {
     selector: typeof selector;
     /** Pre-bound guardedFetch — already tied to this component's scope */
     guardedFetch: GuardedFetch;
+    /** Состояние, переживающее гибернацию и page-out острова (onSaveInstanceState): сигнал восстанавливается из снимка при повторном mount */
+    state<T>(key: string, init: T): Signal<T>;
     /** то же, короткое имя */
     fetch: GuardedFetch;
     /** scope компонента (для кода после await: scope.run(() => …)) */
@@ -1264,6 +1266,8 @@ export interface HydrateOptions {
     quiet?: boolean;
     /** мс синхронной работы до scheduler.yield(); Infinity — всё синхронно. Default 8 */
     budget?: number;
+    /** Working-set paging visible-островов: margin — как далеко от экрана остров выгружается со снимком (или data-aegis-resident), max — размер резидентного набора (CLOCK) */
+    resident?: { margin?: string; max?: number };
     /** дедлайн для idle-островов, мс. Default 2000 */
     idleTimeout?: number;
 }
