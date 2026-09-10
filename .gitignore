@@ -14,3 +14,6 @@ _tmp_*/
 _probe-*.tmp.html
 _aegis_dbg.tmp.js
 _task.xml
+
+# raw logo sources live outside the engine; the site ships its own SVG mark
+logo/
