@@ -265,9 +265,9 @@ ${scripts}
 }
 const docsNav = (current) => {
     const groups = [...new Set(DOCS.map(d => d.group))];
-    return `<aside class="side"><nav aria-label="Docs">${groups.map(g => `<h5>${g}</h5>${DOCS.filter(d => d.group === g).map(d => `<a href="/docs/${d.slug}/"${d.slug === current ? ' class="on" aria-current="page"' : ''}>${esc(d.title)}</a>`).join('')}`).join('')}<h5>More</h5><a href="/api/">API reference</a><a href="/examples/">Examples</a><a href="/play/">Playground</a></nav></aside>`;
+    return `<aside class="side"><nav aria-label="Docs">${groups.map(g => `<div class="h5">${g}</div>${DOCS.filter(d => d.group === g).map(d => `<a href="/docs/${d.slug}/"${d.slug === current ? ' class="on" aria-current="page"' : ''}>${esc(d.title)}</a>`).join('')}`).join('')}<div class="h5">More</div><a href="/api/">API reference</a><a href="/examples/">Examples</a><a href="/play/">Playground</a></nav></aside>`;
 };
-const tocOf = (hs) => { const items = hs.filter(h => h.depth === 2 || h.depth === 3); const hasH2 = items.some(h => h.depth === 2); return items.length ? `<nav class="toc" aria-label="On this page"><h5>On this page</h5>${items.map(h => `<a href="#${h.id}" class="${h.depth === 3 && hasH2 ? 'h3' : ''}">${esc(h.text)}</a>`).join('')}</nav>` : '<div></div>'; };
+const tocOf = (hs) => { const items = hs.filter(h => h.depth === 2 || h.depth === 3); const hasH2 = items.some(h => h.depth === 2); return items.length ? `<nav class="toc" aria-label="On this page"><div class="h5">On this page</div>${items.map(h => `<a href="#${h.id}" class="${h.depth === 3 && hasH2 ? 'h3' : ''}">${esc(h.text)}</a>`).join('')}</nav>` : '<div></div>'; };
 
 // ── build ─────────────────────────────────────────────────────────────────────
 rmSync(DIST, { recursive: true, force: true }); mkdirSync(DIST, { recursive: true });
@@ -311,7 +311,7 @@ DOCS.forEach((d, i) => {
         const sigs = e.sigs.map((s, i) => `${(lead === '' && s.doc) ? fmtDoc(s.doc) : ''}<pre data-lang="ts"><code>${hlJs(s.sig)}</code></pre>`).join('');
         return `<section class="api-entry" id="${e.name}"><h3><code>${esc(e.name)}</code> <small class="kind">${e.kind}</small><a class="anchor" href="#${e.name}" aria-label="Link to ${esc(e.name)}">#</a></h3>${lead}${sigs}</section>`;
     };
-    const side = `<aside class="side"><nav aria-label="API groups">${apiGroups.map(g => `<h5><a href="#group-${slug(g.name)}">${g.name}</a></h5>${g.items.map(e => `<a href="#${e.name}">${esc(e.name)}</a>`).join('')}`).join('')}<h5>Deprecated</h5><a href="#deprecated">Aliases (${deprecatedEntries.length})</a></nav></aside>`;
+    const side = `<aside class="side"><nav aria-label="API groups">${apiGroups.map(g => `<div class="h5"><a href="#group-${slug(g.name)}">${g.name}</a></div>${g.items.map(e => `<a href="#${e.name}">${esc(e.name)}</a>`).join('')}`).join('')}<div class="h5">Deprecated</div><a href="#deprecated">Aliases (${deprecatedEntries.length})</a></nav></aside>`;
     const main = `<div class="wrap docs">${side}<article class="content"><h1>API reference</h1><p class="lead">Every export of <code>aegis.js</code>, generated from <a href="/aegis.d.ts">aegis.d.ts</a> (the same declarations your editor uses). ${API_COUNT} names in ${apiGroups.length} groups plus ${deprecatedEntries.length} deprecated aliases; the <a href="/docs/canonical-api/">canonical dozen</a> is all most apps need.</p>
         ${apiGroups.map(g => `<h2 id="group-${slug(g.name)}">${g.name}<a class="anchor" href="#group-${slug(g.name)}" aria-label="Link to ${g.name}">#</a></h2>${g.items.map(entry).join('')}`).join('')}
         <h2 id="deprecated">Deprecated aliases<a class="anchor" href="#deprecated" aria-label="Link to deprecated aliases">#</a></h2><p>These still work but are marked <code>@deprecated</code> in <code>aegis.d.ts</code>; each line names the replacement.</p><ul>${deprecatedEntries.map(e => `<li id="${e.name}"><code>${esc(e.name)}</code> — ${marked.parseInline((e.doc || '').replace(/^@deprecated\s*/, ''))}</li>`).join('')}</ul>
