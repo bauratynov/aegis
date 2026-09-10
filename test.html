@@ -50,6 +50,7 @@
     if (REPORT) { const post = (o) => fetch('/__report?partial', { method: 'POST', body: JSON.stringify(o) }).catch(() => {}); addEventListener('error', (e) => post({ error: String(e.message), line: e.lineno, col: e.colno, stack: e.error && e.error.stack })); addEventListener('unhandledrejection', (e) => post({ rejection: String(e.reason && e.reason.message || e.reason), stack: e.reason && e.reason.stack })); }
     defaults.motion = true;   // prefers-reduced-motion ОС не должен влиять на сьют (motion: 'auto' проверяется отдельно)
     dev.overlay = false;      // тосты dev-overlay не нужны в сьюте
+    dev.contracts = 'strict'; // runtime-контракты графа/scope на каждом flush — все ~1000 assert'ов проверяют инварианты
     let passed = 0, failed = 0;
 
     function section(name) {
@@ -4875,6 +4876,61 @@
         root.remove();
 
         assert('announce — функция с init()/clear() (Object.assign, без top-level присваиваний)', typeof announce === 'function' && typeof announce.init === 'function' && typeof announce.clear === 'function');
+        reset();
+    })();
+
+    section('💎 фаза A2 — dispose как транзакция, одно ребро владения, точные оценки стоимости (list = mid − |LIS| + вставки)');
+
+    await (async () => {
+        // 1. Транзакционный dispose в компоненте: cleanup пишет сигнал — соседний эффект того же scope не бежит по разрушенному DOM
+        const s = signal(1); const log = [];
+        const sc = createScope();
+        sc.run(() => {
+            effect(() => { s.value; return () => { s.value = 99; }; }, 'A');
+            effect(() => { log.push('B:' + s.value); }, 'B');
+        });
+        log.length = 0; sc.dispose();
+        assert('dispose — транзакция: эффект B не выполнился поверх записи из cleanup A', log.length === 0);
+
+        // 2. L1: вложенный эффект — одно ребро владения
+        const sc2 = createScope(); let outerNode; const t = signal(0);
+        sc2.run(() => { outerNode = effect(() => { t.value; effect(() => {}); })._node; });
+        assert('L1: у scope один disposer, у запуска один ребёнок', sc2._disposers.size === 1 && outerNode._kids.length === 1);
+        sc2.dispose();
+
+        // 3. Bound-as-oracle: число insertBefore в list() ровно mid − |LIS| + вставки (независимая O(n²) LIS)
+        const lisLen = (a) => { const d = a.map(() => 1); for (let i = 0; i < a.length; i++) for (let j = 0; j < i; j++) if (a[j] < a[i]) d[i] = Math.max(d[i], d[j] + 1); return Math.max(0, ...d); };
+        const expectedMoves = (oldKeys, newKeys) => {
+            let st = 0; while (st < oldKeys.length && st < newKeys.length && oldKeys[st] === newKeys[st]) st++;
+            let eo = oldKeys.length - 1, en = newKeys.length - 1; while (en > st && eo > st && oldKeys[eo] === newKeys[en]) { eo--; en--; }
+            const idx = new Map(oldKeys.slice(st, eo + 1).map((k, i) => [k, i])); const mid = newKeys.slice(st, en + 1);
+            const pos = mid.map(k => idx.has(k) ? idx.get(k) : -1); const inserts = pos.filter(p => p < 0).length;
+            return inserts + (mid.length - inserts - lisLen(pos.filter(p => p >= 0)));
+        };
+        let seed = 7; const rnd = () => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed / 0x7fffffff; };
+        const shuffle = (arr) => { const a = arr.slice(); for (let i = a.length - 1; i > 0; i--) { const j = rnd() * (i + 1) | 0; [a[i], a[j]] = [a[j], a[i]]; } return a; };
+        const ul = document.createElement('ul'); sandbox.appendChild(ul);
+        let moves = 0; const ib = ul.insertBefore; ul.insertBefore = function (n, r) { moves++; return ib.call(this, n, r); };
+        const byId = new Map(); const item = (id) => byId.get(id) || (byId.set(id, { id }), byId.get(id));
+        const items = signal([1, 2, 3, 4, 5, 6, 7, 8].map(item));
+        const sc3 = createScope();
+        sc3.run(() => ul.append(list(items, (it) => html`<li>${it.id}</li>`)));
+        await new Promise(r => setTimeout(r, 0));   // строки списка, смонтированного фрагментом, появляются после отложенного якоря
+        let bad = null, over = 0;
+        for (let k = 0; k < 120 && !bad; k++) {
+            const oldKeys = items.peek().map(i => i.id);
+            const pool = [...new Set([...oldKeys, ...Array.from({ length: 3 }, () => 1 + (rnd() * 12 | 0))])];
+            const next = shuffle(pool).slice(0, 2 + (rnd() * 10 | 0));
+            const before = new Map([...ul.children].map(li => [+li.textContent, li]));
+            moves = 0; items.value = next.map(item);
+            const got = [...ul.children].map(li => +li.textContent), exp = expectedMoves(oldKeys, next);
+            if (moves > exp) over++;
+            if (got.join() !== next.join() || got.some((id, i) => before.has(id) && before.get(id) !== ul.children[i])) bad = { k, oldKeys, next, got };
+            else if (moves > exp) bad = bad || null;
+        }
+        assert('list(): порядок и идентичность узлов на 120 случайных перестановках', !bad, bad ? JSON.stringify(bad) : '');
+        assert('list(): число перемещений не превышает mid − |LIS| + вставки (оптимальность LIS-сверки)', over === 0, over ? over + ' раз(а) больше оптимума' : '');
+        sc3.dispose(); ul.remove();
         reset();
     })();
 

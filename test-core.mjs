@@ -457,3 +457,33 @@ test('provenance-ordered rounds: эффект-читатель идёт посл
     assert.equal(readerRuns, 3);     // ровно один запуск на запись после обучения (первая запись — тоже один: Кан ставит писателя раньше)
     sc.dispose();
 });
+
+// ── фаза A2: транзакционный dispose и одно ребро владения
+test('dispose — транзакция: запись из cleanup не запускает соседний эффект умирающего scope; внешний наблюдатель видит одно пост-состояние', () => {
+    const s = signal(1); const log = [];
+    const outer = createScope();
+    outer.run(() => effect(() => { log.push('out:' + s.value); }));
+    const sc = createScope();
+    sc.run(() => {
+        effect(() => { s.value; return () => { s.value = 99; }; }, 'A');
+        effect(() => { log.push('B:' + s.value); }, 'B');
+    });
+    log.length = 0;
+    sc.dispose();
+    assert.deepEqual(log, ['out:99']);   // B не бежал поверх полуразрушенного состояния; внешний эффект — ровно раз, после транзакции
+    outer.dispose();
+});
+
+test('L1: эффект, созданный в теле запуска, имеет ровно одно ребро владения (в _kids родителя, не в scope)', () => {
+    const s = signal(0); let inner = 0;
+    const sc = createScope();
+    let outerNode;
+    sc.run(() => { outerNode = effect(() => { s.value; effect(() => { inner++; }); })._node; });
+    assert.equal(sc._disposers.size, 1);
+    assert.equal(outerNode._kids.length, 1);
+    s.value = 1; s.value = 2;
+    assert.equal(inner, 3);
+    sc.dispose();                           // scope → внешний эффект → _killKids → внутренний
+    s.value = 3;
+    assert.equal(inner, 3);
+});

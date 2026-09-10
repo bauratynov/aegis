@@ -68,6 +68,8 @@ const dev = {
     graph(root) { return typeof _devTools === 'function' ? _devTools().graph(root) : 'graph LR'; },
     /** dev-overlay: предупреждения всплывают в углу страницы (false — только консоль; localStorage aegis:overlay=0) */
     overlay: true,
+    /** Runtime-контракты графа/scope в dev: 'sampled' (default) | 'strict' (каждый flush — тесты) | false */
+    contracts: 'sampled',
     /** Объяснение кода предупреждения (ERRORS.md) в консоль: Aegis.dev.explain('E019') */
     explain(code) { return import(/* @vite-ignore */ new URL('./aegis-devtools.js', import.meta.url).href).then(m => m.explain(code)); },
     /** Снимок кэша ресурсов: Aegis.dev.cache() → console.table */
@@ -460,8 +462,8 @@ class Computed extends _Src {
     get _live() { return (this._f & F_LIVE) !== 0; }
     /** Нужен пересчёт/проверка: помечен dirty, или неживой и с прошлой проверки была запись на его уровне durability */
     _stale() { return (this._f & F_DIRTY) !== 0 || (!(this._f & F_LIVE) && this._chk < _epochDur[this._dur]); }
-    _activate() { this._f |= F_LIVE; const d = this._deps; if (d) for (let i = 0; i < d.length; i++) _addSub(d[i], this); }
-    _deactivate() { this._f &= ~F_LIVE; const d = this._deps; if (d) for (let i = 0; i < d.length; i++) _delSub(d[i], this); }
+    _activate() { this._f |= F_LIVE; _regObs(this, true); const d = this._deps; if (d) for (let i = 0; i < d.length; i++) _addSub(d[i], this); }
+    _deactivate() { this._f &= ~F_LIVE; _regObs(this, false); const d = this._deps; if (d) for (let i = 0; i < d.length; i++) _delSub(d[i], this); }
     get value() {
         if (this._stale()) this._recompute();
         if ((this._f & F_DISPOSED) && _devCache === true) _deadRead(this);
@@ -485,6 +487,7 @@ class Computed extends _Src {
     dispose() {
         if (this._f & F_DISPOSED) return;
         this._f |= F_DISPOSED;
+        _regObs(this, false);
         _unsubscribe(this);
         if (this.subs) this.subs.clear();
         const u = this._unreg; this._unreg = null;
@@ -567,6 +570,66 @@ function _deadRead(c) {
 function _adopt(dispose) {
     const t = _tracking;
     if (t && !t._isComputed && (t._f & F_OWN)) { (t._kids || (t._kids = [])).push(dispose); if (dispose._node) dispose._node._pe = t; }   // _pe: владелец раньше усыновлённого в раунде
+}
+/** L1: если сейчас идёт запуск эффекта-владельца — усыновить и вернуть true (в scope не регистрировать) */
+function _ownByRun(dispose) {
+    const t = _tracking;
+    if (!(t && !t._isComputed && (t._f & F_OWN))) return false;
+    _adopt(dispose);
+    return true;
+}
+// ---- runtime-контракты графа (dev): реестр живых наблюдателей и проверка инвариантов после flush; в проде складывается
+let _obsReg = null;
+function _regObs(o, on) { if (globalThis.AEGIS_PROD || !_dev()) return; if (on) (_obsReg || (_obsReg = new Set())).add(o); else if (_obsReg) _obsReg.delete(o); }
+/**
+ * Инварианты, которые фаззер проверяет на синтетических графах, здесь проверяются на каждом реальном flush:
+ * подписки ⇔ зависимости, живой computed ⇔ есть подписчики, нет уничтоженных в subs, нет застрявших в очереди,
+ * счётчики глубины в покое. dev.contracts: 'sampled' (default, ~64 проверок на сессию) | 'strict' (каждый flush; тесты) | false
+ */
+function _checkGraph(where) {
+    if (globalThis.AEGIS_PROD || !_obsReg || !_dev()) return;
+    const mode = dev.contracts;
+    if (!mode || (mode !== 'strict' && Math.random() > Math.min(1, 64 / (_stats.flushes + 1)))) return;
+    const bad = [];
+    const idle = !_flushing && !_laneScheduled.micro && !_laneScheduled.frame && _batchDepth === 0;
+    for (const o of _obsReg) {
+        if (o._f & F_DISPOSED) { bad.push(`disposed "${o._name}" still registered`); continue; }
+        if (o._isComputed && !(o._f & F_LIVE)) { bad.push(`inactive computed "${o._name}" registered`); continue; }
+        if ((o._f & F_QUEUED) && idle) bad.push(`"${o._name}" stranded in the queue`);
+        const d = o._deps;
+        if (d) for (let i = 0; i < d.length; i++) {
+            const src = d[i];
+            if (!(src.subs && src.subs.has(o))) bad.push(`"${o._name}" → "${src._name || 'signal'}": missing back-edge`);
+            if (src._isComputed && src._f !== undefined && !(src._f & F_LIVE)) bad.push(`"${o._name}" reads inactive computed "${src._name}"`);
+        }
+        if (o._src && !(o._src.subs && o._src.subs.has(o))) bad.push(`subscriber not in "${o._src._name || 'signal'}".subs`);
+        if (o.subs) for (const x of o.subs) {
+            if (x._f & F_DISPOSED) bad.push(`"${o._name}".subs keeps disposed "${x._name}"`);
+            else if (x._src !== o && !(x._deps && x._deps.includes(o))) bad.push(`"${o._name}".subs has "${x._name}" without a dependency`);
+        }
+    }
+    if (idle && (_batchDepth || _notifyDepth)) bad.push(`depth counters not at rest (${_batchDepth}/${_notifyDepth})`);
+    if (bad.length) _warn('E051', !globalThis.AEGIS_PROD && {
+        what: `reactive-graph invariant broken at ${where}: ${bad[0]}${bad.length > 1 ? ` (+${bad.length - 1} more)` : ''}.`,
+        why: 'Internal graph state is inconsistent — this is an engine bug, not an application bug.',
+        fix: 'Report it with the steps to reproduce; dev.contracts = false silences the check meanwhile.',
+    }, 'inv:' + bad[0].slice(0, 48));
+}
+/** Дерево scope: каждый ребёнок в children живой и указывает на родителя; уничтоженный — без детей и disposers */
+function _checkScopes(sc) {
+    if (globalThis.AEGIS_PROD || !sc || !_dev() || !dev.contracts) return;
+    const bad = [];
+    const walk = (x, depth) => {
+        if (depth > 64) return;
+        if (x.children) for (const c of x.children) {
+            if (c._disposed) bad.push(`disposed child "${c.name}" in "${x.name}".children`);
+            else if (c.parent !== x) bad.push(`"${c.name}".parent is not "${x.name}"`);
+            else walk(c, depth + 1);
+        }
+        if (x._disposed && (x.children || x._disposers.size)) bad.push(`disposed "${x.name}" keeps children/disposers`);
+    };
+    walk(sc, 0);
+    if (bad.length) _warn('E051', !globalThis.AEGIS_PROD && { what: `scope-tree invariant broken: ${bad[0]}${bad.length > 1 ? ` (+${bad.length - 1} more)` : ''}.`, why: 'Internal scope state is inconsistent — this is an engine bug, not an application bug.', fix: 'Report it with the steps to reproduce; dev.contracts = false silences the check meanwhile.' }, 'inv:scope:' + bad[0].slice(0, 40));
 }
 function _killKids(node) {
     const k = node._kids; if (!k) return;
@@ -654,17 +717,17 @@ class Effect {
         try { c(); } catch (e) { console.error(`[Aegis] cleanup error in effect "${this._name}":`, e); }
     }
     _execute() {
-        this._runCleanup();
-        _killKids(this);                             // дети прошлого запуска — до нового
-        if (!(this._f & F_COUNTED)) { this._f |= F_COUNTED; _liveEffects++; }
+        if (_batchDepth++ === 0) _win++;             // записи внутри effect (и в cleanup) откладываются до его завершения; запуск = окно backdating
         const prevT = _tracking, prevS = _currentScope, prevW = _writer;
-        _tracking = this;
-        _writer = this; this._fan = null;            // провенанс: рёбра переучиваются каждым запуском
-        _currentScope = this._owner;  // всё созданное внутри — дети владельца, а не случайного scope
-        this._n = 0;
-        this._rs = ++_runSeq;
-        if (_batchDepth++ === 0) _win++;             // записи внутри effect откладываются до его завершения; запуск = окно backdating
         try {
+            this._runCleanup();
+            _killKids(this);                         // дети прошлого запуска — до нового, под тем же batch: L3 «dispose — транзакция»
+            if (!(this._f & F_COUNTED)) { this._f |= F_COUNTED; _liveEffects++; }
+            _tracking = this;
+            _writer = this; this._fan = null;        // провенанс: рёбра переучиваются каждым запуском
+            _currentScope = this._owner;  // всё созданное внутри — дети владельца, а не случайного scope
+            this._n = 0;
+            this._rs = ++_runSeq;
             const r = this._fn();
             if (this._el && (!globalThis.AEGIS_PROD && _dev())) _zombieCheck(this, this._name);
             if (typeof r === 'function') this._cleanup = r;
@@ -689,12 +752,16 @@ class Effect {
     dispose() {
         if (this._f & F_DISPOSED) return;
         this._f |= F_DISPOSED;
+        _regObs(this, false);
         if (this._f & F_COUNTED) _liveEffects--;
-        _unsubscribe(this);
-        this._runCleanup();
-        _killKids(this);
-        const u = this._unreg; this._unreg = null;
-        if (u) u();
+        if (_batchDepth++ === 0) _win++;             // L3: записи из cleanup не запускают наблюдателей умирающего поддерева
+        try {
+            _unsubscribe(this);
+            this._runCleanup();
+            _killKids(this);
+            const u = this._unreg; this._unreg = null;
+            if (u) u();
+        } finally { _batchDepth--; if (_batchDepth === 0) _flush(); }
     }
 }
 Effect.prototype._isComputed = false;
@@ -720,9 +787,11 @@ export function effect(fn, nameOrOpts) {
     if (nameOrOpts && typeof nameOrOpts === 'object' && nameOrOpts.own === false) node._f &= ~F_OWN;
     const dispose = () => node.dispose();
     dispose._node = node;
-    // Регистрируем до первого запуска: в уже уничтоженном scope effect не стартует
-    node._unreg = owner ? owner.onDispose(dispose) : null;
-    _adopt(dispose);                               // создан в теле другого эффекта — умрёт с его перезапуском
+    _regObs(node, true);
+    // Регистрируем до первого запуска: в уже уничтоженном scope effect не стартует.
+    // L1 «ровно одно ребро владения»: создан в теле запуска эффекта — владелец только запуск (scope достигает его через родителя);
+    // иначе — scope
+    if (!_ownByRun(dispose)) node._unreg = owner ? owner.onDispose(dispose) : null;
     if (!node._disposed) {
         try { node._execute(); } catch (e) { if (!_dispatchError(owner, e)) throw e; }   // первый запуск: onError как у повторных; без обработчика — синхронно в setup (component/errorBoundary ловят)
         // Детектор потерянной реактивности: эффект, не прочитавший ни одного сигнала, больше не запустится
@@ -768,6 +837,7 @@ class Subscriber {
     dispose() {
         if (this._f & F_DISPOSED) return;
         this._f |= F_DISPOSED;
+        _regObs(this, false);
         _delSub(this._src, this);
         const u = this._unreg; this._unreg = null;
         if (u) u();
@@ -780,9 +850,10 @@ function _subscribe(src, fn) {
     const owner = _currentScope;
     const node = new Subscriber(src, fn, owner);
     _addSub(src, node);
+    _regObs(node, true);
     const dispose = () => node.dispose();
-    node._unreg = owner ? owner.onDispose(dispose) : null;
-    _adopt(dispose);
+    dispose._node = node;
+    if (!_ownByRun(dispose)) node._unreg = owner ? owner.onDispose(dispose) : null;   // L1: одно ребро владения
     return dispose;
 }
 
@@ -917,6 +988,7 @@ function _runLane(lane) {
         }
     } finally {
         _laneScheduled[lane] = false;
+        if (!globalThis.AEGIS_PROD && _obsReg) _checkGraph(lane + ' lane');
         if (rounds > 3) _warn('E027', !globalThis.AEGIS_PROD && {
             what: `${lane} lane took ${rounds} rounds — effects keep writing signals other effects depend on.`,
             why: 'Each round is an effect reacting to a write from the previous round (ping-pong).',
@@ -992,6 +1064,7 @@ function _flush() {
         _flushing = false;
         _stats.flushes++;
         _stats.effectRuns += total;
+        if (!globalThis.AEGIS_PROD && _obsReg) _checkGraph('flush');
         if (rounds > _stats.maxRounds) _stats.maxRounds = rounds;
         if (_profiling && total && _profileMark) _profileMark(t0, total, rounds, names);
         if (rounds > 3 && total) _warn('E027', !globalThis.AEGIS_PROD && {
@@ -1072,18 +1145,24 @@ class Scope {
         if (this._disposed) return;
         this._disposed = true;
         _liveScopes--;
-        const kids = this.children;
-        this.children = null;
-        if (kids) for (const child of kids) child.dispose();
-        // Потом свои disposers (удаление из Set во время итерации безопасно)
-        for (const d of this._disposers) {
-            try { d(); } catch (e) { console.error('[Aegis] dispose error:', e); }
-        }
-        this._disposers.clear();
-        // Убрать себя из родителя — O(1)
+        if (_batchDepth++ === 0) _win++;   // L3 «dispose — транзакция»: записи из cleanup не запускают наблюдателей умирающего поддерева; снаружи видно одно пост-состояние
         const p = this.parent;
-        if (p && !p._disposed && p.children) p.children.delete(this);
-        this.parent = null;
+        try {
+            const kids = this.children;
+            this.children = null;
+            if (kids) for (const child of kids) child.dispose();
+            // Потом свои disposers (удаление из Set во время итерации безопасно)
+            for (const d of this._disposers) {
+                try { d(); } catch (e) { console.error('[Aegis] dispose error:', e); }
+            }
+            this._disposers.clear();
+            // Убрать себя из родителя — O(1)
+            if (p && !p._disposed && p.children) p.children.delete(this);
+            this.parent = null;
+        } finally {
+            _batchDepth--;
+            if (_batchDepth === 0) { _flush(); _checkScopes(p); }
+        }
     }
 }
 if (typeof Symbol.dispose === 'symbol') Scope.prototype[Symbol.dispose] = function () { this.dispose(); };   // using scope = createScope()
@@ -1167,14 +1246,13 @@ export function inject(key, fallback) {
 
 /** Зарегистрировать disposer в текущем scope и вернуть функцию, которая делает cleanup и снимает регистрацию */
 function _scoped(cleanup) {
-    let unreg = _currentScope ? _currentScope.onDispose(cleanup) : null;
-    let done = false;
+    let unreg = null, done = false;
     const off = () => {
         if (done) return; done = true;
         cleanup();
         if (unreg) { unreg(); unreg = null; }
     };
-    _adopt(off);
+    if (!_ownByRun(off)) unreg = _currentScope ? _currentScope.onDispose(off) : null;   // L1: одно ребро владения
     return off;
 }
 

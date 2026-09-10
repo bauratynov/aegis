@@ -113,6 +113,8 @@ export const dev: {
     graph(root?: Scope): string;
     /** dev-overlay: предупреждения всплывают в углу страницы; false — только консоль (или localStorage aegis:overlay=0) */
     overlay: boolean;
+    /** Runtime-контракты графа и дерева scope: 'sampled' (default) | 'strict' (каждый flush; тесты) | false */
+    contracts: 'sampled' | 'strict' | false;
     /** Объяснение кода предупреждения из ERRORS.md — печатает в консоль и возвращает текст */
     explain(code: string): Promise<string>;
     /** Снимок кэша ресурсов (то же, что cache.stats().entries) — console.table(Aegis.dev.cache()) */
