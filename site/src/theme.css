@@ -46,7 +46,7 @@ pre code { background: none; border: 0; padding: 0; font-size: inherit }
 pre[data-lang]:not([data-lang=""])::before { content: attr(data-lang); position: absolute; top: 9px; right: 72px; font: 10px/16px var(--sans); letter-spacing: .08em; text-transform: uppercase; color: var(--cm); opacity: .7 }
 @media (max-width: 800px) { pre[data-lang]::before { display: none } }
 .kw { color: var(--kw) } .str, .num, .tpl { color: var(--str) } .cm { color: var(--cm); font-style: italic } .fn { color: var(--fn) } .tag { color: var(--tag) } .attr { color: var(--attr) } .tpl .fn { color: var(--kw); font-weight: 600 }
-.copy { position: absolute; top: 8px; right: 8px; background: rgba(255,255,255,.08); color: #cfd6e6; border: 1px solid rgba(255,255,255,.15); border-radius: 6px; font: var(--fs-xs) var(--sans); padding: 3px 8px; cursor: pointer; opacity: 0; transition: opacity .15s }
+.copy { position: absolute; top: 8px; right: 8px; background: color-mix(in srgb, var(--code-bg) 88%, #fff); color: #cfd6e6; border: 1px solid rgba(255,255,255,.15); border-radius: 6px; font: var(--fs-xs) var(--sans); padding: 3px 8px; cursor: pointer; opacity: 0; transition: opacity .15s }
 pre:hover .copy, .copy:focus-visible { opacity: 1 } .copy.done { color: var(--kw) }
 @media (hover: none) { .copy { opacity: .75 } }
 h1, h2, h3, h4 { font-weight: 600; letter-spacing: -.015em; scroll-margin-top: 76px; text-wrap: balance }
