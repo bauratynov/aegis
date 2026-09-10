@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { execSync } from 'node:child_process';
 import { gzipSync } from 'node:zlib';
 import { marked } from 'marked';
+import { EXAMPLES, CATEGORIES } from './examples.mjs';
 
 const SITE = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(SITE, '..');
@@ -379,7 +380,39 @@ const b64u = (buf) => Buffer.from(buf).toString('base64').replace(/\+/g, '-').re
                 <aside class="ex-notes"><h4>What to notice</h4><ul>${info.notice.map(x => `<li>${x}</li>`).join('')}</ul><p class="try"><i class="fa-solid fa-hand-pointer" aria-hidden="true"></i> ${info.try}</p><div class="chips">${info.api.map(a => `<a href="/api/#${a}"><code>${a}</code></a>`).join('')}</div></aside>
             </div></figure>`;
     }).join('');
-    const main = `<div class="wrap"><h1 style="margin-top:36px">Examples</h1><p class="lead" style="color:var(--muted);max-width:720px">Every recipe is one self-contained HTML file that imports <code>aegis.js</code> directly, no build. Each card runs live: read what to notice, try the interaction, then open the source or continue in the playground.</p>
+    // ── the catalogue: one page per example, an editor on each ──────────────
+    const exNav = (current) => `<aside class="side"><nav aria-label="Examples">${CATEGORIES.map(c => `<div class="h5">${c}</div>${EXAMPLES.filter(e => e.category === c).map(e => `<a href="/examples/${e.slug}/"${e.slug === current ? ' class="on" aria-current="page"' : ''}>${esc(e.title)}</a>`).join('')}`).join('')}<div class="h5">More</div><a href="/examples/">All examples</a><a href="/play/">Playground</a><a href="/demo/admin.html" target="_blank" rel="noopener">Admin demo</a></nav></aside>`;
+    EXAMPLES.forEach((e, i) => {
+        const prev = EXAMPLES[i - 1], next = EXAMPLES[i + 1];
+        const data = JSON.stringify({ js: e.js, html: e.html, mock: e.mock !== false }).replace(/</g, '\\u003c');
+        const packed = b64u(gzipSync(Buffer.from(JSON.stringify({ js: e.js, html: e.html }), 'utf8')));
+        const main = `<div class="wrap docs ex-page">${exNav(e.slug)}<article class="content">
+            <p class="crumb"><a href="/examples/">Examples</a> · ${esc(e.category)}</p>
+            <h1>${esc(e.title)}</h1>
+            <p class="lead">${esc(e.summary)}</p>
+            <p>${e.why}</p>
+            <div class="live" id="live">
+                <div class="live-bar"><div class="ftabs" role="tablist"><button class="ftab on" role="tab" aria-selected="true" data-file="js"><i class="fa-brands fa-js" aria-hidden="true"></i> app.js</button><button class="ftab" role="tab" aria-selected="false" data-file="html"><i class="fa-brands fa-html5" aria-hidden="true"></i> index.html</button></div><div class="grow"></div><span id="status" class="status"></span><button id="reset" class="mini" hidden><i class="fa-solid fa-rotate-left" aria-hidden="true"></i> Reset</button><button id="run" class="mini primary"><i class="fa-solid fa-play" aria-hidden="true"></i> Run <kbd>Ctrl+Enter</kbd></button><a id="open-play" class="mini" href="/play/#code=${packed}"><i class="fa-solid fa-pen-to-square" aria-hidden="true"></i> Playground</a></div>
+                <div class="live-panes">
+                    <div class="pane-editor"><div id="editor"></div></div>
+                    <div class="out"><div class="ftabs"><button class="otab on" data-out="result"><i class="fa-solid fa-display" aria-hidden="true"></i> Result</button><button class="otab" data-out="requests"><i class="fa-solid fa-server" aria-hidden="true"></i> Server requests</button><button class="otab" data-out="console"><i class="fa-solid fa-terminal" aria-hidden="true"></i> Console</button></div>
+                        <div class="outpane" data-outpane="result"><iframe id="frame" title="Result of ${esc(e.title)}" sandbox="allow-scripts allow-forms allow-modals"></iframe></div>
+                        <div class="outpane" data-outpane="requests" hidden><div id="requests" class="requests" aria-live="polite"></div></div>
+                        <div class="outpane" data-outpane="console" hidden><pre id="console" aria-label="Console"></pre></div>
+                    </div>
+                </div>
+            </div>
+            <script type="application/json" id="ex-data">${data}</script>
+            <div class="ex-notes inline"><h4>What to notice</h4><ul>${e.notice.map(x => `<li>${x}</li>`).join('')}</ul><p class="try"><i class="fa-solid fa-hand-pointer" aria-hidden="true"></i> ${e.try}</p><div class="chips">${e.api.map(a => `<a href="/api/#${a}"><code>${a}</code></a>`).join('')}</div></div>
+            <div class="pager">${prev ? `<a href="/examples/${prev.slug}/"><small>Previous</small>← ${esc(prev.title)}</a>` : '<span></span>'}${next ? `<a class="next" href="/examples/${next.slug}/"><small>Next</small>${esc(next.title)} →</a>` : ''}</div>
+        </article><div></div></div>`;
+        write(`examples/${e.slug}/index.html`, layout({ title: `${e.title}: ${e.summary.replace(/\.$/, '')} · Aegis examples`, description: cut(plain(e.why.replace(/<[^>]+>/g, '')), 158), path: `/examples/${e.slug}/`, main, extraHead: `<link rel="modulepreload" href="/cm.js?v=${BUILD}"><link rel="modulepreload" href="/runner.js?v=${BUILD}">`, scripts: `<script type="module" src="/example.js?v=${BUILD}"></script>`, jsonld: [{ '@context': 'https://schema.org', '@type': 'TechArticle', headline: e.title, description: e.summary, url: `${ORIGIN}/examples/${e.slug}/`, dateModified: RECIPE_DATE, inLanguage: 'en', about: { '@type': 'SoftwareApplication', name: 'Aegis' } }, crumbs([['Aegis', '/'], ['Examples', '/examples/'], [e.title, `/examples/${e.slug}/`]])] }));
+        search.push({ k: 'examples', t: 'Examples', h: e.title, u: `/examples/${e.slug}/`, x: cut(plain(e.summary + ' ' + e.why.replace(/<[^>]+>/g, '')), 200) });
+    });
+    const catalogue = CATEGORIES.map(c => `<h2 class="section-title small">${c}</h2><div class="grid3 ex-cards">${EXAMPLES.filter(e => e.category === c).map(e => `<a class="card ex-card" href="/examples/${e.slug}/"><h3>${esc(e.title)}</h3><p>${esc(e.summary)}</p><div class="chips">${e.api.slice(0, 3).map(a => `<code>${a}</code>`).join('')}</div></a>`).join('')}</div>`).join('');
+    const main = `<div class="wrap"><h1 style="margin-top:36px">Examples</h1><p class="lead" style="color:var(--muted);max-width:720px">${EXAMPLES.length} patterns, each on its own page with an editable <code>app.js</code> and <code>index.html</code>, a live result on a mock server, the server requests it makes and what to notice. Change the code and it re-runs.</p>
+        ${catalogue}
+        <h2 class="section-title">Single-file recipes</h2><p class="section-sub">The same idea as one self-contained HTML file each, straight from the repository: read the source, open it in a new tab, or continue in the playground.</p>
         <div class="ex-grid">${cards}</div>
         <h2 class="section-title">Bigger things</h2>
         <div class="grid3">
@@ -397,7 +430,11 @@ const b64u = (buf) => Buffer.from(buf).toString('base64').replace(/\+/g, '-').re
         <div class="panes">
             <section class="pane-editor" aria-label="Editor"><div class="ftabs" role="tablist"><button class="ftab on" role="tab" aria-selected="true" data-file="js"><i class="fa-brands fa-js" aria-hidden="true"></i> app.js</button><button class="ftab" role="tab" aria-selected="false" data-file="html"><i class="fa-brands fa-html5" aria-hidden="true"></i> index.html</button></div><div id="editor"></div></section>
             <div id="resizer" class="resizer" role="separator" aria-orientation="vertical" aria-label="Resize panes"></div>
-            <section class="out" aria-label="Result"><div class="ftabs"><span class="ftab on"><i class="fa-solid fa-display" aria-hidden="true"></i> Result</span></div><iframe id="frame" title="result" sandbox="allow-scripts allow-forms allow-modals"></iframe><div class="ftabs"><span class="ftab on"><i class="fa-solid fa-terminal" aria-hidden="true"></i> Console</span></div><pre id="console" aria-live="polite" aria-label="Console"></pre></section>
+            <section class="out" aria-label="Result"><div class="ftabs"><button class="otab on" data-out="result"><i class="fa-solid fa-display" aria-hidden="true"></i> Result</button><button class="otab" data-out="requests"><i class="fa-solid fa-server" aria-hidden="true"></i> Server requests</button><button class="otab" data-out="compare"><i class="fa-solid fa-scale-balanced" aria-hidden="true"></i> vs React / Vue</button></div>
+                <div class="outpane" data-outpane="result"><iframe id="frame" title="result" sandbox="allow-scripts allow-forms allow-modals"></iframe></div>
+                <div class="outpane" data-outpane="requests" hidden><div id="requests" class="requests" aria-live="polite"></div></div>
+                <div class="outpane" data-outpane="compare" hidden><div id="compare" class="compare"></div></div>
+                <div class="ftabs"><span class="ftab on"><i class="fa-solid fa-terminal" aria-hidden="true"></i> Console</span></div><pre id="console" aria-live="polite" aria-label="Console"></pre></section>
         </div></div>`;
     write('play/index.html', layout({ title: 'Playground: run Aegis code in the browser · Aegis', description: 'Edit and run Aegis code in a sandboxed frame with dev warnings on, switch between presets (counter, island, todos, resource, mutation, form, router, reactive) and share a link. No build, no account.', path: '/play/', main, jsonld: crumbs([['Aegis', '/'], ['Playground', '/play/']]), extraHead: `<link rel="modulepreload" href="/cm.js?v=${BUILD}">`, scripts: `<script type="module" src="/play.js?v=${BUILD}"></script>` }).replace('<footer>', '<footer hidden>'));
 }
@@ -472,7 +509,11 @@ island('users', ({ props, html, when, list }) => {
 cpSync(join(SITE, 'src', 'theme.css'), join(DIST, 'theme.css'));
 cpSync(join(SITE, 'src', 'recipe.css'), join(DIST, 'recipe.css'));
 write('site.js', read(join(SITE, 'src', 'site.js')).replace("from '/aegis-site.js'", `from '/aegis-site.js?v=${BUILD}'`));
-write('play.js', read(join(SITE, 'src', 'play.js')).replace("from '/cm.js'", `from '/cm.js?v=${BUILD}'`));
+const ver = (s) => s.replace("from '/cm.js'", `from '/cm.js?v=${BUILD}'`).replace("from '/runner.js'", `from '/runner.js?v=${BUILD}'`);
+write('play.js', ver(read(join(SITE, 'src', 'play.js'))));
+write('example.js', ver(read(join(SITE, 'src', 'example.js'))));
+write('runner.js', read(join(SITE, 'src', 'runner.js')));
+write('mock-server.js', read(join(SITE, 'src', 'mock-server.js')));
 // CodeMirror bundle for the playground (self-hosted, loaded only on /play/)
 try { execSync(`node "${join(ROOT, 'node_modules', 'esbuild', 'bin', 'esbuild')}" "${join(SITE, 'src', 'cm-entry.js')}" --bundle --format=esm --minify --outfile="${join(DIST, 'cm.js')}"`, { stdio: 'pipe' }); }
 catch (e) { console.error('cm.js build failed:', String(e.stderr || e.message).slice(0, 400)); process.exit(1); }
@@ -483,7 +524,7 @@ write('favicon.svg', MARK_FILE);
 write('logo/mark.svg', MARK_FILE);
 if (existsSync(join(SITE, 'src', 'logo'))) cpSync(join(SITE, 'src', 'logo'), join(DIST, 'logo'), { recursive: true });
 write('robots.txt', `User-agent: *\nAllow: /\nSitemap: ${ORIGIN}/sitemap.xml\n`);
-const urls = [['/', TODAY], ['/api/', API_DATE], ['/examples/', RECIPE_DATE], ['/play/', TODAY], ...DOCS.map(d => [`/docs/${d.slug}/`, d.src ? gitDate(d.src) : DOC_DATE])];
+const urls = [['/', TODAY], ['/api/', API_DATE], ['/examples/', RECIPE_DATE], ['/play/', TODAY], ...DOCS.map(d => [`/docs/${d.slug}/`, d.src ? gitDate(d.src) : DOC_DATE]), ...EXAMPLES.map(e => [`/examples/${e.slug}/`, RECIPE_DATE])];
 write('sitemap.xml', `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${urls.map(([u, d]) => `  <url><loc>${ORIGIN}${u}</loc><lastmod>${d}</lastmod></url>`).join('\n')}\n</urlset>\n`);
 write('404.html', layout({ title: 'Not found · Aegis', description: 'Page not found', path: '/404', noindex: true, main: `<div class="wrap" style="padding:80px 20px;text-align:center"><h1>404</h1><p style="color:var(--muted)">No route matches this URL, and there is no <code>'*'</code> handler here (E037).</p><a class="btn primary" href="/">Home</a></div>` }));
 
