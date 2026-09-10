@@ -5163,6 +5163,58 @@
         reset();
     })();
 
+    section('💎 фаза B3 — morph: якоря Heckel + LIS, минимальные перемещения, оракул isEqualNode');
+
+    await (async () => {
+        const mk = (htmlStr) => { const t = document.createElement('template'); t.innerHTML = htmlStr; return t.content.firstElementChild; };
+        const lis = (n, f) => Array.from({ length: n }, (_, i) => f(i)).join('');
+        // 1. Вставка одного <li> в начало 1000 без id: 999 узлов сохранены, ни одной записи текста/атрибутов в старые строки
+        const host = mk('<ul>' + lis(1000, i => `<li class="r">row ${i}</li>`) + '</ul>'); sandbox.appendChild(host);
+        const before = [...host.children];
+        const target = mk('<ul><li class="r">new</li>' + lis(1000, i => `<li class="r">row ${i}</li>`) + '</ul>');
+        let textWrites = 0; const desc = Object.getOwnPropertyDescriptor(CharacterData.prototype, 'data');
+        Object.defineProperty(CharacterData.prototype, 'data', { configurable: true, get: desc.get, set(v) { textWrites++; desc.set.call(this, v); } });
+        let attrWrites = 0; const sa = Element.prototype.setAttribute; Element.prototype.setAttribute = function (n, v) { attrWrites++; return sa.call(this, n, v); };
+        await swap(host, target.outerHTML, { mode: 'morph' });
+        Object.defineProperty(CharacterData.prototype, 'data', desc); Element.prototype.setAttribute = sa;
+        const after = [...host.children];
+        assert('morph: вставка в начало 1000 — все старые узлы сохранены и ни одной записи в них', after.length === 1001 && before.every((n, i) => after[i + 1] === n) && after[0].textContent === 'new' && textWrites === 0 && attrWrites === 0);
+        host.remove();
+
+        // 2. Перемещение строки 99 → 0 в таблице с id: одна мутация-перемещение, DOM порядок верный
+        const tbl = mk('<table><tbody>' + lis(100, i => `<tr id="r${i}"><td>${i}</td></tr>`) + '</tbody></table>'); sandbox.appendChild(tbl);
+        const tb = tbl.tBodies[0]; const rows = [...tb.rows];
+        const mo = new MutationObserver(() => {}); mo.observe(tb, { childList: true });
+        const order = [99, ...Array.from({ length: 99 }, (_, i) => i)];
+        await swap(tbl, '<table><tbody>' + order.map(i => `<tr id="r${i}"><td>${i}</td></tr>`).join('') + '</tbody></table>', { mode: 'morph' });
+        const recs = mo.takeRecords(); mo.disconnect();
+        const moved = recs.reduce((a, r) => a + r.addedNodes.length, 0);
+        assert('morph: строка 99 → 0 — одно перемещение (LIS), идентичность всех строк сохранена', moved <= 1 && tb.rows[0] === rows[99] && tb.rows[1] === rows[0] && tb.rows.length === 100);
+        tbl.remove();
+
+        // 3. Radio: приоритет исправлен — checked не затирается, если поле в фокусе
+        const form = mk('<form><input type="radio" name="g" id="ra" checked><input type="radio" name="g" id="rb"></form>'); document.body.appendChild(form);   // #sandbox display:none — фокус там невозможен
+        form.querySelector('#rb').focus(); form.querySelector('#rb').checked = true;
+        await swap(form, '<form><input type="radio" name="g" id="ra" checked><input type="radio" name="g" id="rb"></form>', { mode: 'morph' });
+        assert('morph: активный radio не перезаписан серверной разметкой', form.querySelector('#rb').checked === true);
+        form.remove();
+
+        // 4. Оракул: случайные деревья — после morph from.isEqualNode(to) при любом качестве сопоставления
+        let seed = 11; const rnd = () => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed / 0x7fffffff; };
+        const tags = ['p', 'div', 'span', 'li'];
+        const gen = (depth) => { let out = ''; const n = 1 + (rnd() * 6 | 0); for (let i = 0; i < n; i++) { const t = tags[rnd() * tags.length | 0]; const id = rnd() < 0.3 ? ` id="i${rnd() * 8 | 0}"` : ''; out += depth < 2 && rnd() < 0.4 ? `<${t}${id}>${gen(depth + 1)}</${t}>` : `<${t}${id}>${'t' + (rnd() * 5 | 0)}</${t}>`; } return out; };
+        let bad = null;
+        for (let k = 0; k < 60 && !bad; k++) {
+            const a = mk('<div>' + gen(0) + '</div>'), b = mk('<div>' + gen(0) + '</div>');
+            sandbox.appendChild(a);
+            await swap(a, b.outerHTML, { mode: 'morph' });
+            if (!a.isEqualNode(b)) bad = { k, got: a.outerHTML.slice(0, 120), want: b.outerHTML.slice(0, 120) };
+            a.remove();
+        }
+        assert('morph: оракул isEqualNode на 60 случайных парах деревьев', !bad, bad ? JSON.stringify(bad) : '');
+        reset();
+    })();
+
     section('component() & destroy()');
 
     (() => {
