@@ -524,7 +524,7 @@ export const api: {
 };
 export type Fetcher = (url: string, opts: { signal?: AbortSignal; method?: string; body?: unknown }) => Promise<unknown>;
 /** Точка подмены для всего движка: defaults.fetcher = mock — resource/cache/offline/guardedFetch идут через него */
-export const defaults: { fetcher: Fetcher; motion: 'auto' | 'reduce' | 'none' };
+export const defaults: { /** null → request() из движка; подмена: defaults.fetcher = mock */ fetcher: Fetcher | null; motion: 'auto' | 'reduce' | 'none' };
 
 export interface RetryOptions {
     retries?: number;

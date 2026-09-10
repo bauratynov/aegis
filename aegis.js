@@ -20,6 +20,7 @@
  * __AEGIS_DEV__ = 'strict' — каждое предупреждение бросает AegisWarning (тесты).
  */
 let _devCache;
+/** Dev-режим. Вызовы обёрнуты в (!globalThis.AEGIS_PROD && _dev()) — прод-сборка с define сворачивает их в false и выкидывает dev-ветки */
 function _dev() {
     if (_devCache !== undefined) return _devCache;
     const g = globalThis;
@@ -45,8 +46,14 @@ function _dev() {
  * сюда свои функции при первом реальном использовании (например, _cacheEntry), а лёгкая проверяет наличие.
  */
 const _ext = {};
+/**
+ * Регистрация, привязанная к тяжёлой функции: const _t = _reg('x', x) с аннотацией @__PURE__ выполняется при загрузке
+ * (ctx.fetch работает до первого вызова api()), но бандлер выкидывает её вместе с x, если x не нужен —
+ * при условии, что _t упомянут внутри x (параметр по умолчанию).
+ */
+function _reg(...pairs) { for (let i = 0; i < pairs.length; i += 2) _ext[pairs[i]] = pairs[i + 1]; return pairs[1]; }
 const dev = {
-    get on() { return _dev(); },
+    get on() { return (!globalThis.AEGIS_PROD && _dev()); },
     enable() { try { localStorage.setItem('aegis:dev', '1'); } catch (e) { /* */ } _devCache = undefined; globalThis.__AEGIS_DEV__ = true; _devCache = true; },
     disable() { try { localStorage.removeItem('aegis:dev'); } catch (e) { /* */ } globalThis.__AEGIS_DEV__ = false; _devCache = false; },
     /** сбросить дедуп предупреждений (тесты) */
@@ -102,7 +109,7 @@ export function onWarn(fn) {
 // Позиция в исходнике (dev): первый кадр стека вне aegis*.js — «At: /js/app.js:42:15». Chrome «at fn (url:l:c)», Firefox «fn@url:l:c».
 let _curSite = null;   // позиция html``-шаблона, который сейчас разбирается/инстанцируется (наследуется его эффектами и предупреждениями)
 function _callSite() {
-    if (!_dev()) return null;
+    if (!(!globalThis.AEGIS_PROD && _dev())) return null;
     const lim = Error.stackTraceLimit;
     Error.stackTraceLimit = 16;
     const stack = new Error().stack || '';
@@ -125,8 +132,14 @@ function _snippet(at, strings, index, token) {
     return _devtoolsModule().then(m => m && typeof m.snippet === 'function' ? m.snippet(at, strings, index, token) : null).catch(() => null);
 }
 
-function _warn(code, { what, why, fix, el, site, token }, onceKey) {
-    if (!_dev()) return;
+/**
+ * Dev-тексты предупреждений (what / why / fix). Прод-сборка вырезает их целиком: бандлер с define { AEGIS_PROD: 'true' }
+ * (node build.mjs --from app.js делает это по умолчанию, --dev оставляет) сворачивает _DT в false, и объекты
+ * в _warn('Exx', !globalThis.AEGIS_PROD && { … }) исчезают вместе с текстами. Без define (zero-build) тексты на месте.
+ */
+function _warn(code, details, onceKey) {
+    if (!(!globalThis.AEGIS_PROD && _dev()) || !details) return;
+    const { what, why, fix, el, site, token } = details;
     const key = code + '|' + (onceKey ?? what);
     if (_seenWarnings.has(key)) return;
     _seenWarnings.add(key);
@@ -313,14 +326,14 @@ class Signal {
     }
     set value(v) {
         if (_tracking && _tracking._isComputed) {
-            _warn('E002', {
+            _warn('E002', !globalThis.AEGIS_PROD && {
                 what: `Signal "${this._name || '?'}" written inside computed "${_tracking._name || '?'}".`,
                 why: 'Computeds must be pure — writing signals causes infinite loops or glitches.',
                 fix: 'Move the write into an effect() or a method/action.',
             });
         }
         if (this._eq(this._value, v)) {
-            if (_devCache === true && v !== null && typeof v === 'object' && v === this._value && !(this._name && this._name.includes(':'))) _warn('E047', {
+            if (_devCache === true && v !== null && typeof v === 'object' && v === this._value && !(this._name && this._name.includes(':'))) _warn('E047', !globalThis.AEGIS_PROD && {
                 what: `signal "${this._name || '?'}": the same object reference was written back — nothing happens.`,
                 why: 'Signals compare by identity (Object.is); mutations inside the object (push / splice / prop =) are invisible.',
                 fix: 'sig.update(a => [...a, x]) or sig.value = { ...o, k: v }; hold the object in reactive(), or use signal(v, { equals: false }).',
@@ -503,7 +516,7 @@ export function computed(fn, nameOrOpts) {
 }
 /** dev: чтение уничтоженного computed — значение заморожено (E045) */
 function _deadRead(c) {
-    _warn('E045', {
+    _warn('E045', !globalThis.AEGIS_PROD && {
         what: `computed "${c._name || '?'}" read after dispose() — its value is frozen at ${_short(c._value)}${_tracking ? ` (read by "${_tracking._name}")` : ''}.`,
         why: 'A disposed computed never recomputes; the reader keeps showing the last value while the sources change.',
         fix: 'Do not dispose a computed that is still read; computed() needs no dispose at all — it is unsubscribed while nobody observes it.',
@@ -580,11 +593,11 @@ class Effect {
         _batchDepth++;                 // записи внутри effect откладываются до его завершения
         try {
             const r = this._fn();
-            if (this._el && _dev()) _zombieCheck(this, this._name);
+            if (this._el && (!globalThis.AEGIS_PROD && _dev())) _zombieCheck(this, this._name);
             if (typeof r === 'function') this._cleanup = r;
             else if (r && typeof r.then === 'function' && !this._warnedAsync) {
                 this._warnedAsync = true;
-                _warn('E016', {
+                _warn('E016', !globalThis.AEGIS_PROD && {
                     site: this._site,
                     what: `effect "${this._name}" returned a Promise.`,
                     why: 'Signals read after the first await are not tracked, and the cleanup return value is lost.',
@@ -618,10 +631,10 @@ export function effect(fn, nameOrOpts) {
     const trace = !!(nameOrOpts && typeof nameOrOpts === 'object' && nameOrOpts.trace);
     const lane = nameOrOpts && typeof nameOrOpts === 'object' && (nameOrOpts.flush === 'micro' || nameOrOpts.flush === 'frame') ? nameOrOpts.flush : null;
     const explicitName = !!name;                   // именованные (движок, пользователь с name) — без детектора E019
-    if (!name && _dev()) name = fn.name || null;   // авто-имя в dev: function search() {…} → "search"
-    const site = _dev() ? ((name && /[:@]/.test(name)) ? _curSite : _callSite()) : null;
+    if (!name && (!globalThis.AEGIS_PROD && _dev())) name = fn.name || null;   // авто-имя в dev: function search() {…} → "search"
+    const site = (!globalThis.AEGIS_PROD && _dev()) ? ((name && /[:@]/.test(name)) ? _curSite : _callSite()) : null;
     if (!owner) {
-        _warn('E001', {
+        _warn('E001', !globalThis.AEGIS_PROD && {
             site,
             what: `Effect "${name || 'anonymous'}" created outside a component scope — it will never be cleaned up.`,
             why: 'Effects created outside a scope leak subscribers forever, causing memory growth.',
@@ -639,8 +652,8 @@ export function effect(fn, nameOrOpts) {
     if (!node._disposed) {
         try { node._execute(); } catch (e) { if (!_dispatchError(owner, e)) throw e; }   // первый запуск: onError как у повторных; без обработчика — синхронно в setup (component/errorBoundary ловят)
         // Детектор потерянной реактивности: эффект, не прочитавший ни одного сигнала, больше не запустится
-        if (_dev() && !explicitName && !node._disposed && (!node._deps || node._deps.length === 0)) {
-            _warn('E019', {
+        if ((!globalThis.AEGIS_PROD && _dev()) && !explicitName && !node._disposed && (!node._deps || node._deps.length === 0)) {
+            _warn('E019', !globalThis.AEGIS_PROD && {
                 site: node._site,
                 what: `Effect "${node._name}" read no signals — it ran once and will never run again.`,
                 why: 'Effects re-run only when a signal read synchronously inside them changes (reads after await are not tracked).',
@@ -819,7 +832,7 @@ function _runLane(lane) {
         }
     } finally {
         _laneScheduled[lane] = false;
-        if (rounds > 3) _warn('E027', {
+        if (rounds > 3) _warn('E027', !globalThis.AEGIS_PROD && {
             what: `${lane} lane took ${rounds} rounds — effects keep writing signals other effects depend on.`,
             why: 'Each round is an effect reacting to a write from the previous round (ping-pong).',
             fix: 'Replace the effect with a computed(), or write all values in one batch().',
@@ -896,7 +909,7 @@ function _flush() {
         _stats.effectRuns += total;
         if (rounds > _stats.maxRounds) _stats.maxRounds = rounds;
         if (_profiling && total && _profileMark) _profileMark(t0, total, rounds, names);
-        if (rounds > 3 && total) _warn('E027', {
+        if (rounds > 3 && total) _warn('E027', !globalThis.AEGIS_PROD && {
             what: `Flush took ${rounds} rounds — effects keep writing signals other effects depend on.`,
             why: 'Each round is an effect reacting to a write from the previous round (ping-pong).',
             fix: 'Replace the effect with a computed(), or write all values in one batch().',
@@ -925,7 +938,7 @@ class Scope {
         this.dispose = this.dispose.bind(this); // можно передавать как callback: t.after(scope.dispose)
         if (parent) {
             if (parent._disposed) {
-                _warn('E005', {
+                _warn('E005', !globalThis.AEGIS_PROD && {
                     what: 'Scope created inside an already disposed scope.',
                     why: 'The parent will never dispose it — its effects and listeners leak.',
                     fix: 'Create scopes only while the parent is alive, or dispose this one manually.',
@@ -940,7 +953,7 @@ class Scope {
     /** Выполнить функцию в контексте этого scope */
     run(fn) {
         if (this._disposed) {
-            _warn('E005', {
+            _warn('E005', !globalThis.AEGIS_PROD && {
                 what: 'scope.run() called on a disposed scope.',
                 why: 'Effects created here are disposed immediately and never run again.',
                 fix: 'Do not reuse a disposed scope — create a new one.',
@@ -1011,7 +1024,7 @@ export function root(fn) {
 /** Зарегистрировать cleanup в текущем scope. Возвращает unregister */
 export function onDispose(fn) {
     if (_currentScope) return _currentScope.onDispose(fn);
-    _warn('E017', {
+    _warn('E017', !globalThis.AEGIS_PROD && {
         what: 'onDispose() called outside a scope — the cleanup will never run.',
         why: 'Cleanups are owned by the scope that is active when they are registered.',
         fix: 'Call it inside component()/mount() setup or scope.run(() => …).',
@@ -1058,7 +1071,7 @@ export function inject(key, fallback) {
     }
     if (_globalCtx.has(k)) return _globalCtx.get(k);
     if (arguments.length < 2 && !(key && 'default' in key)) {
-        _warn('E022', {
+        _warn('E022', !globalThis.AEGIS_PROD && {
             what: `inject(${String(key && key.id ? key.id.description : key)}) — nothing provided.`,
             why: 'No provide() for this key in the scope chain, DOM ancestors or globally.',
             fix: 'Call provide(key, value) in a parent setup, or pass a fallback: inject(key, fallback). Lazy parent island? Use data-aegis-load="eager".',

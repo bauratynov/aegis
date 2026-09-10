@@ -9,12 +9,15 @@ const full = src === 'aegis_full.js';
 let fails = 0;
 const ok = (name, cond, extra = '') => { console.log((cond ? 'ok   ' : 'FAIL ') + name + (extra ? '  ' + extra : '')); if (!cond) fails++; };
 
-async function bundle(names) {
-    const r = await build({ stdin: { contents: `export { ${names} } from './${src}';`, resolveDir: '.', loader: 'js' }, write: false, bundle: true, minify: false, format: 'esm', target: ['es2022'], legalComments: 'none' });
+async function bundle(names, prod = false) {
+    const define = prod ? { 'globalThis.AEGIS_PROD': 'true' } : {};
+    // читаемый вариант с minifySyntax: define сворачивается, имена остаются — по нему считаем декларации
+    const r = await build({ stdin: { contents: `export { ${names} } from './${src}';`, resolveDir: '.', loader: 'js' }, write: false, bundle: true, minifySyntax: prod, format: 'esm', target: ['es2022'], legalComments: 'none', define });
     const js = Buffer.from(r.outputFiles[0].contents).toString();
-    const min = await build({ stdin: { contents: js, resolveDir: '.', loader: 'js' }, write: false, bundle: false, minify: true, format: 'esm', target: ['es2022'], legalComments: 'none' });
+    const min = await build({ stdin: { contents: `export { ${names} } from './${src}';`, resolveDir: '.', loader: 'js' }, write: false, bundle: true, minify: true, format: 'esm', target: ['es2022'], legalComments: 'none', define });
+    const minJs = Buffer.from(min.outputFiles[0].contents).toString();
     const decls = new Set([...js.matchAll(/^(?:async\s+)?(?:function\*?|class|var|const|let)\s+([\w$]+)/gm)].map(m => m[1]));
-    return { js, decls, gz: gzipSync(Buffer.from(min.outputFiles[0].contents), { level: 9 }).length / 1024 };
+    return { js, minJs, decls, gz: gzipSync(Buffer.from(minJs), { level: 9 }).length / 1024 };
 }
 const has = (b, ...names) => names.filter(n => b.decls.has(n));
 
@@ -29,8 +32,41 @@ if (full) {
     const b = await bundle('signal, effect, computed, component, mount, html, text, attr, cls, show, list, bind, on, debounced, batch');
     const bad = has(b, '_cacheEntry', '_fetchEntry', '_idb', '_offlineStore', '_MESSAGES', '_makeValidator', 'wireForm', 'router', '_ghostAdd', '_persistWrite', 'seedFrom', 'prefetch', '_netBudget');
     ok('admin 15 exports: нет кэша / IDB / форм / роутера', bad.length === 0, bad.join(','));
-    ok('admin 15 exports: a11y-строки есть без таблицы форм', b.decls.has('_MSG_A11Y') && b.decls.has('_msg') && !b.decls.has('_fmsg'));
-    ok('admin 15 exports: ≤ 30 KB gzip', b.gz <= 30, b.gz.toFixed(1) + ' KB');
+    ok('admin 15 exports: без when() нет и announce / a11y-строк', !b.decls.has('_MSG_A11Y') && !b.decls.has('announce') && !b.decls.has('_fmsg'));
+    ok('admin 15 exports: request-слой не тянется через ctx.fetch / defaults.fetcher', has(b, 'request', 'HttpError', 'guardedFetch', 'withRetry').length === 0, has(b, 'request', 'HttpError', 'guardedFetch', 'withRetry').join(','));
+    ok('admin 15 exports: транзишены и reducedMotion не тянутся без transition()', has(b, '_runTransition', 'reducedMotion', 'media').length === 0);
+    ok('admin 15 exports: ≤ 30 KB gzip (dev)', b.gz <= 30, b.gz.toFixed(1) + ' KB');
+    const w = await bundle('signal, component, when');
+    ok('+ when: a11y-строки и announce подключаются, таблица форм — нет', w.decls.has('_MSG_A11Y') && w.decls.has('announce') && !w.decls.has('_fmsg'));
+    // привязанная регистрация (@__PURE__ _reg): попадает в бандл только вместе со своей функцией
+    const t = await bundle('signal, component, transition');
+    ok('+ transition: раннер зарегистрирован для show/list', t.decls.has('_runTransition') && /_reg\("runTransition"|_reg\('runTransition'/.test(t.js));
+    const a = await bundle('signal, component, api');
+    ok('+ api: request и guardedFetch зарегистрированы для ctx.fetch', a.decls.has('guardedFetch') && /_reg\(\s*["']guardedFetch["']/.test(a.js));
+    ok('component без api: регистрация guardedFetch выкинута', !/["']guardedFetch["']\s*,\s*guardedFetch/.test(b.js));
+}
+// 2b. прод-сборка: define globalThis.AEGIS_PROD=true вырезает dev-тексты и dev-ветки
+if (full) {
+    const p = await bundle('signal, effect, computed, component, mount, html, text, attr, cls, show, list, bind, on, debounced, batch', true);
+    ok('prod admin: ни одного what/why/fix', !/\b(?:what|why|fix):\s*["'`]/.test(p.minJs), String((p.minJs.match(/\bwhat:/g) || []).length));
+    ok('prod admin: dev-инспекторы выкинуты (_lev, _nearest, _snippet, _zombieCheck, _inspectScope)', has(p, '_lev', '_nearest', '_snippet', '_zombieCheck', '_inspectScope').length === 0, has(p, '_lev', '_nearest', '_snippet', '_zombieCheck', '_inspectScope').join(','));
+    ok('prod admin: ≤ 17 KB gzip', p.gz <= 17, p.gz.toFixed(1) + ' KB');
+    const ps = await bundle('signal, computed, effect, batch, createScope', true);
+    ok('prod signals only: ≤ 5.5 KB gzip', ps.gz <= 5.5, ps.gz.toFixed(1) + ' KB');
+    const pi = await bundle('island, mount, html, list, show, when, signal, computed, effect, on, bind, hydrate', true);
+    ok('prod islands: ≤ 24 KB gzip', pi.gz <= 24, pi.gz.toFixed(1) + ' KB');
+    // прод-бандл работает: сигналы/эффекты живут, предупреждения молчат
+    const { writeFileSync, mkdtempSync } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+    const dir = mkdtempSync(join(tmpdir(), 'aegis-prod-'));
+    const file = join(dir, 'aegis.prod.mjs');
+    writeFileSync(file, ps.minJs);
+    const m = await import('file://' + file.replace(/\\/g, '/'));
+    const s = m.signal(1), c = m.computed(() => s.value * 2); let seen = 0;
+    m.effect(() => { void c.value; seen++; });
+    s.value = 5;
+    ok('prod signals: бандл импортируется и работает', c.value === 10 && seen === 2, `c=${c.value} runs=${seen}`);
 }
 // 3. islands + hydrate: кэш подключается только вместе с resource
 if (full) {
