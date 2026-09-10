@@ -14,11 +14,8 @@ aegis.min.js.map
 aegis.core.js
 aegis.core.min.js
 dist/
-site/dist/
-site/node_modules/
 DIAMONDS-*.md
 _tmp_*/
 _probe-*.tmp.html
 _aegis_dbg.tmp.js
 _task.xml
-site/src/logo/
