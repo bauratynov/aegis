@@ -5390,6 +5390,76 @@
         reset();
     })();
 
+    section('💎 фаза C2 — платформа: URLPattern-маршруты, precommitHandler, CloseWatcher, popover-порталы, команды «--», gzip-персист');
+
+    await (async () => {
+        const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+        const hasIDB = typeof indexedDB !== 'undefined' && !/HeadlessChrome/.test(navigator.userAgent);
+        // 1. URLPattern: расширенная грамматика маршрутов (:id(\d+), {/:lang}?) при наличии API; базовая — везде
+        if (typeof URLPattern === 'function') {
+            const rt = document.createElement('div'); sandbox.appendChild(rt);
+            const hits = [];
+            const r = router({
+                '/u/:id([0-9]+)': (params) => { hits.push('num:' + params.id); return html`<i>u</i>`; },
+                '/u/:name': (params) => { hits.push('name:' + params.name); return html`<i>n</i>`; },
+                '/docs{/:lang}?': (params) => { hits.push('docs:' + (params.lang || '-')); return html`<i>d</i>`; },
+                '*': () => html`<i>404</i>`,
+            }, { root: rt, hash: true });
+            await r.navigate('/u/42'); await sleep(10);
+            await r.navigate('/u/ann'); await sleep(10);
+            await r.navigate('/docs'); await sleep(10);
+            await r.navigate('/docs/ru'); await sleep(10);
+            assert('URLPattern: :id([0-9]+) отличает число от имени (\\d в URLPattern — escape), {/:lang}? — опциональный сегмент', hits.join() === 'num:42,name:ann,docs:-,docs:ru');
+            r.dispose(); rt.remove(); location.hash = '';
+        }
+
+        // 2. Команды: "--name" по спеке, commandfor — цель, встроенные команды не ловятся как кастомные
+        if (typeof CommandEvent === 'function') {
+            const host = document.createElement('div'); host.innerHTML = '<button command="--open" commandfor="cd-target">go</button><div id="cd-target"></div>'; sandbox.appendChild(host);
+            let got = null;
+            const cmd = command(host, { open: (src, target) => { got = target && target.id; } });
+            const btn = host.querySelector('button'), tgt = host.querySelector('#cd-target');
+            tgt.dispatchEvent(new CommandEvent('command', { command: '--open', source: btn, bubbles: true, cancelable: true }));
+            assert('command: событие "--open" вызывает handler open с целью commandfor', got === 'cd-target');
+            cmd.dispose && cmd.dispose(); host.remove();
+        }
+
+        // 3. Popover-портал: top layer, сигнал open, light-dismiss
+        if ('popover' in HTMLElement.prototype) {
+            const { container, dispose, open } = portal(document.body, () => html`<p>pop</p>`, { popover: 'auto' });
+            await sleep(0);
+            assert('portal({ popover }): контейнер в top layer (:popover-open), open = true', container.matches(':popover-open') && open.value === true);
+            container.hidePopover();
+            await sleep(0);
+            assert('portal({ popover }): hidePopover → open = false', open.value === false);
+            dispose();
+        }
+
+        // 4. CloseWatcher: Esc через платформенный стек close-requests
+        if (typeof CloseWatcher === 'function') {
+            const box = document.createElement('div'); box.innerHTML = '<button>a</button>'; document.body.appendChild(box);
+            let released = 0;
+            const rel = trap(box, { escape: () => { released++; } });
+            const cw = new CloseWatcher(); cw.requestClose();   // последний созданный watcher закрывается первым — наш trap ещё жив
+            await sleep(0);
+            const alive = released === 0;
+            rel(); box.remove();
+            assert('CloseWatcher: чужой close-request не закрывает ловушку (стек платформы), ловушка снята release()', alive);
+        }
+
+        // 5. gzip-персист: большая запись сжимается, читается назад эквивалентно
+        if (hasIDB && typeof CompressionStream === 'function') {
+            const big = Array.from({ length: 800 }, (_, i) => ({ id: i, name: 'user ' + i, email: `u${i}@example.com`, status: i % 3 ? 'active' : 'off' }));
+            const sc = createScope(); let res;
+            sc.run(() => { res = resource('/c2/big', { cache: { persist: { version: 7 } }, staleTime: 60000, fetcher: async () => big }); });
+            await settled();
+            const rec = await Promise.race([cache.persisted('/c2/big'), new Promise(r => setTimeout(() => r(null), 3000))]);
+            assert('gzip-персист: запись сжата (n < JSON/4) и читается как исходные данные', !!rec && rec.z === 1 && rec.n < JSON.stringify(big).length / 4 && Array.isArray(rec.data) && rec.data.length === 800 && rec.data[799].email === 'u799@example.com');
+            sc.dispose();
+        }
+        reset();
+    })();
+
     section('component() & destroy()');
 
     (() => {

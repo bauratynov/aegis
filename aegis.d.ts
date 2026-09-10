@@ -1330,8 +1330,10 @@ export function errorBoundary<R = void>(
  */
 export function portal(
     target: Element,
-    contentFn: (() => DocumentFragment | Element) | DocumentFragment | Element
-): { container: HTMLDivElement; dispose(): void };
+    contentFn: (() => DocumentFragment | Element) | DocumentFragment | Element,
+    /** popover: 'auto' | 'manual' | true — контейнер в top layer (light-dismiss, :popover-open); anchor + placement — CSS anchor positioning */
+    opts?: { popover?: 'auto' | 'manual' | boolean; anchor?: Element; placement?: string }
+): { container: HTMLDivElement; dispose(): void; /** открыт ли popover-портал (toggle) */ open: ReadonlySignal<boolean> };
 
 /**
  * CSS enter/leave transition driven by a reactive condition.
@@ -1393,7 +1395,8 @@ export interface TrapOptions {
     /** фокус, ушедший наружу (программно, из виджета), возвращается внутрь; default true */
     recapture?: boolean;
     /** Escape: true — release(), функция — свой обработчик */
-    escape?: boolean | ((e: KeyboardEvent) => void);
+    /** true — Esc/Android back/AT close request через CloseWatcher (стек платформы; <dialog>/popover не закрываются вместе с ловушкой); 'key' — только keydown; функция — свой обработчик */
+    escape?: boolean | 'key' | ((e: Event) => void);
     /** клик вне контейнера (и вне allow) */
     outside?: boolean | ((e: PointerEvent) => void);
     /** inert для фона */
