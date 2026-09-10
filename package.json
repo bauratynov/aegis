@@ -18,14 +18,14 @@
     "build.mjs"
   ],
   "license": "MIT",
-  "author": "atynov",
+  "author": "Baurzhan Atinov <bauratynov@gmail.com>",
   "repository": {
     "type": "git",
-    "url": "https://github.com/atynov/aegis.git"
+    "url": "git+https://github.com/bauratynov/aegis.git"
   },
-  "homepage": "https://github.com/atynov/aegis",
+  "homepage": "https://aegisjs.com",
   "bugs": {
-    "url": "https://github.com/atynov/aegis/issues"
+    "url": "https://github.com/bauratynov/aegis/issues"
   },
   "keywords": [
     "signals",
@@ -39,7 +39,19 @@
     "custom-elements",
     "router",
     "forms",
-    "offline-first"
+    "offline-first",
+    "islands",
+    "no-build",
+    "server-rendered",
+    "hydration",
+    "html-templates",
+    "swr",
+    "cache",
+    "vanilla-js",
+    "django",
+    "rails",
+    "laravel",
+    "htmx-alternative"
   ],
   "engines": {
     "node": ">=14"
