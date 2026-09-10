@@ -394,3 +394,66 @@ test('_endTrack: сдвиг порядка 2000 зависимостей — л�
     sc.dispose();
     assert.ok(sigs.every(s => !s.subs || s.subs.size === 0));
 });
+
+// ── фаза A1: представление ядра
+test('backdating: запись «туда и обратно» внутри batch не перезапускает эффект (версия — функция значения)', () => {
+    const s = signal(1); let runs = 0;
+    const sc = createScope();
+    sc.run(() => effect(() => { s.value; runs++; }));
+    runs = 0;
+    batch(() => { s.value = 2; s.value = 3; s.value = 1; });
+    assert.equal(runs, 0);
+    batch(() => { s.value = 2; s.value = 1; s.value = 2; });   // конечное значение отличается — ровно один запуск
+    assert.equal(runs, 1);
+    const w = signal(1, { equals: false }); let r2 = 0;
+    sc.run(() => effect(() => { w.value; r2++; }));
+    r2 = 0; batch(() => { w.value = 1; w.value = 1; });            // equals:false — backdating не применяется
+    assert.equal(r2, 1);
+    sc.dispose();
+});
+
+test('durability: computed без источников — константа; производная от high-сигнала не перепроверяется после low-записей', () => {
+    let k = 0; const c = computed(() => { k++; return 42; });
+    const noise = signal(0);
+    c.value; noise.value = 1; c.value; noise.value = 2; c.value;
+    assert.equal(k, 1);
+    const locale = signal('en', { durability: 'high' }); const query = signal('');
+    let evals = 0; const label = computed(() => { evals++; return locale.value + '!'; });
+    label.value;
+    for (let i = 0; i < 50; i++) { query.value = 'q' + i; label.value; }
+    assert.equal(evals, 1);
+    locale.value = 'ru';
+    assert.equal(label.value, 'ru!');
+    assert.equal(evals, 2);
+    const mixed = computed(() => locale.value + query.value);   // минимум по источникам — low: перепроверяется как обычно
+    mixed.value; query.value = 'z';
+    assert.equal(mixed.value, 'ruz');
+});
+
+test('run-stamped deps: чередующиеся чтения a,b,a,b,a дают 2 слота зависимостей', () => {
+    const a = signal(1), b = signal(2); let node;
+    const sc = createScope();
+    sc.run(() => { node = effect(() => { a.value; b.value; a.value; b.value; a.value; })._node; });
+    assert.equal(node._deps.length, 2);
+    let runs = 0;
+    sc.run(() => effect(() => { a.value; b.value; a.value; runs++; }));
+    a.value = 5;
+    assert.equal(runs, 2);
+    sc.dispose();
+});
+
+test('provenance-ordered rounds: эффект-читатель идёт после эффекта-писателя — один запуск на запись, а не stale + correct', () => {
+    const x = signal(0), y = signal(0); let readerRuns = 0, seen = [];
+    const sc = createScope();
+    sc.run(() => {
+        effect(() => { readerRuns++; seen.push(y.value); }, 'reader');   // создан раньше писателя
+        effect(() => { y.value = x.value * 2; }, 'writer');
+    });
+    readerRuns = 0; seen = [];
+    x.value = 1;                     // первый раунд учит ребро writer → reader
+    x.value = 2;
+    x.value = 3;
+    assert.deepEqual(seen.slice(-2), [4, 6]);
+    assert.equal(readerRuns, 3);     // ровно один запуск на запись после обучения (первая запись — тоже один: Кан ставит писателя раньше)
+    sc.dispose();
+});

@@ -73,6 +73,7 @@ export function genGraph(api, seed, { nSig = 4, nComp = 6, nEff = 4, poison = nu
         }
         const observers = [...comps.map(c => c.node).filter(c => c._live), ...effs.filter(e => e.alive).map(e => e.dispose._node)];
         for (const x of observers) for (const src of x._deps || []) if (!src.subs || !src.subs.has(x)) viol.push(`I5 ${x._name} → ${src._name} missing in subs`);
+        for (const x of observers) if (x._deps && new Set(x._deps).size !== x._deps.length) viol.push(`I15 ${x._name} has duplicate deps (${x._deps.length} slots)`);   // k-е чтение источника в одном запуске не создаёт слот
         // I8: computed живой (подписан на источники) ⇔ у него есть подписчики; неживой не сидит ни в одном subs
         for (const c of comps) { const observed = !!(c.node.subs && c.node.subs.size); if (observed !== !!c.node._live) viol.push(`I8 ${c.id} live=${c.node._live} observed=${observed}`); if (!c.node._live) for (const n of nodes) if (n.node.subs && n.node.subs.has(c.node)) viol.push(`I8 unobserved ${c.id} still in ${n.id}.subs`); }
     };
@@ -96,6 +97,7 @@ export function genGraph(api, seed, { nSig = 4, nComp = 6, nEff = 4, poison = nu
             if (e.throws) { const i = bt.indexOf(ERR); if (i >= 0) { bt = bt.slice(0, i + 1); at = at.slice(0, i + 1); } }   // бросающий эффект прервался на первой ошибке — подписан только на прочитанное
             const b = bt.join(), a = at.join();
             if (b !== a && e.runsInFlush !== 1 && op < 0.6) viol.push(`I2 ${e.id} tuple changed, runs=${e.runsInFlush}`);
+            if (b === a && e.runsInFlush === 1 && op < 0.6 && !e.throws && !b.includes('<error>')) viol.push(`I10 ${e.id} ran with unchanged tuple [${b}]`);   // необходимость запуска: версии — функция значения (backdating в окне batch)
         }
         for (const [id, n] of calls) if (n > 1) viol.push(`I4 ${id} computed ${n}×`);
         checkGraph();

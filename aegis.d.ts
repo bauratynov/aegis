@@ -42,6 +42,8 @@ export interface SignalOptions<T> {
     unwatched?(): void;
     name?: string;
     equals?: false | ((a: T, b: T) => boolean);
+    /** Как часто пишется: 'high' — конфиг/локаль/тема, 'medium' — сессия, 'low' (default) — всё остальное. Производные неживые computed перепроверяются только после записей своего уровня (Salsa durability) */
+    durability?: 'low' | 'medium' | 'high';
 }
 export interface ComputedOptions<T> extends SignalOptions<T> {
     /** computed((prev) => …, { initial }) — предыдущее значение первым аргументом */

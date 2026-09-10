@@ -199,9 +199,17 @@ let _tracking = null;        // текущий observer для auto-track
 let _batchDepth = 0;         // глубина batch() (тело effect и обработчики on() — тоже неявный batch)
 let _notifyDepth = 0;        // вложенность _notify — flush только на выходе из внешнего
 let _flushing = false;       // идёт flush — вложенные записи только пополняют очередь
-let _queue = [];             // отложенные observers (effects, subscribers), см. _queued
+let _qa = [], _qb = [];      // очередь эффектов: два буфера, раунд меняет их местами (без аллокаций на flush)
+let _qSorted = true, _qLastOrd = 0, _qEdges = false;   // отсортированность по _ord и наличие выученных рёбер — считаются при enqueue
 let _epoch = 0;              // глобальный счётчик версий
+const _epochDur = [0, 0, 0, 0];   // эпоха последней записи сигнала с durability ≥ d (Salsa): неживой computed сверяется только со своим уровнем; [3] = ⊤ (константы)
+let _win = 0;                // окно backdating: внешний batch / запуск эффекта / раунд flush — запись «туда и обратно» внутри окна не меняет версию
+let _runSeq = 0;             // штамп запуска observer'а: k-е чтение того же источника в одном запуске — O(1) без мутаций графа
+let _writer = null;          // эффект, выполняющийся сейчас: его записи становятся выученными рёбрами writer → observer для порядка раунда
 const _MAX_ROUNDS = 100;     // раундов flush до признания цикла бесконечным
+// флаги observer'ов — одно Smi-слово вместо девяти булевых полей (один hidden class, один and+branch)
+const F_COMPUTED = 1, F_DIRTY = 2, F_COMPUTING = 4, F_DISPOSED = 8, F_LIVE = 16, F_QUEUED = 32, F_COUNTED = 64, F_TRACE = 128, F_OWN = 256, F_ASYNC = 512;
+const _DUR = { low: 0, medium: 1, high: 2 };
 
 const SIGNAL = /*#__PURE__*/ Symbol('aegis.signal');
 
@@ -229,10 +237,12 @@ function _delSub(src, obs) {
     if (src._isComputed) { if (src._live) src._deactivate(); } else if (src._u) src._u();
 }
 
-/** Подписать текущий observer на источник; k-е чтение того же источника — без мутаций графа */
+/** Подписать текущий observer на источник; k-е чтение того же источника в одном запуске — O(1) по штампу, без мутаций графа */
 function _track(src) {
     const obs = _tracking;
     if (!obs) return;
+    if (src._ms === obs._rs && src._mo === obs._ord) return;   // уже прочитан в этом запуске (штамп + порядковый номер читателя — без удержания объекта)
+    src._ms = obs._rs; src._mo = obs._ord;
     const deps = obs._deps || (obs._deps = []);
     const vers = obs._vers || (obs._vers = []);
     const i = obs._n;
@@ -241,11 +251,11 @@ function _track(src) {
         obs._n = i + 1;
         return;
     }
-    if (i > 0 && deps[i - 1] === src) return;         // повторное чтение подряд — no-op
+    for (let j = i > 8 ? i - 8 : 0; j < i; j++) if (deps[j] === src) return;   // штамп перебит вложенным пересчётом (c читает s, потом d, которое тоже читает s): короткий скан назад, O(1) на новый источник
     if (i < deps.length) (obs._evict || (obs._evict = [])).push(deps[i]); // вытеснили другой источник
     deps[i] = src;
     vers[i] = src.version();
-    if (!obs._isComputed || obs._live) _addSub(src, obs);   // неживой computed только запоминает dep — подпишется, когда на него подпишутся
+    if (!obs._isComputed || (obs._f & F_LIVE)) _addSub(src, obs);   // неживой computed только запоминает dep — подпишется, когда на него подпишутся
     obs._n = i + 1;
 }
 
@@ -303,22 +313,40 @@ function _short(v) {
 function _depsChanged(obs) {
     const deps = obs._deps, vers = obs._vers;
     for (let i = 0; i < deps.length; i++) {
-        if (deps[i].version() !== vers[i]) return true;
+        const src = deps[i];
+        if (src._f === undefined) { if (src.version() !== vers[i]) return true; continue; }   // адаптер (lens, store, list:index) — через метод
+        if ((src._f & F_COMPUTED) && src._stale()) src._recompute();
+        if (src._version !== vers[i]) return true;
     }
     return false;
 }
 
 // ---- Signal ------------------------------------------------------------------
 
-class Signal {
-    constructor(value, name, eq, w, u) {
+/** Общая форма источника: Signal и Computed наследуют её, чтобы deps[i]._version / .subs были мономорфны */
+class _Src {
+    constructor(name) {
+        this.subs = null;
+        this._version = 0;
+        this._name = name;
+        this._w = null;            // watched(): появился первый подписчик
+        this._u = null;            // unwatched(): ушёл последний
+        this._traceSet = false;
+        this._dur = 0;             // durability: 0 low · 1 medium · 2 high (computed — минимум по источникам, 3 = константа)
+        this._ms = 0; this._mo = 0;   // штамп последнего чтения и порядковый номер читателя (_track)
+    }
+    version() { return this._version; }
+}
+class Signal extends _Src {
+    constructor(value, name, eq, w, u, dur) {
+        super(name);
         this._value = value;
         this._version = ++_epoch;
-        this._name = name;
         this._eq = eq;
-        this.subs = null;
-        if (w) this._w = w;        // watched(): появился первый подписчик
-        if (u) this._u = u;        // unwatched(): ушёл последний
+        this._w = w || null;
+        this._u = u || null;
+        this._dur = dur | 0;
+        this._bw = 0; this._bv = undefined; this._bver = 0;   // окно backdating: значение и версия на входе в окно
     }
     get value() {
         if (_tracking) _track(this); else if (_devCache === true) _noteUntracked(this);
@@ -341,12 +369,17 @@ class Signal {
             return;
         }
         if (this._traceSet) { console.groupCollapsed(`▸ [Aegis] signal "${this._name || '?'}" set ${_short(this._value)} → ${_short(v)}`); console.trace(); console.groupEnd(); }
-        this._value = v;
-        this._version = ++_epoch;
+        const e = ++_epoch;
+        if ((_batchDepth > 0 || _flushing) && this._eq !== _alwaysFalse) {
+            // value-anchored versions (Salsa backdating для входов): вернулись к значению на входе в окно — версия тоже прежняя,
+            // и наблюдатели с той версией не перезапускаются (batch — транзакция: наблюдаемо только конечное состояние)
+            if (this._bw !== _win) { this._bw = _win; this._bv = this._value; this._bver = this._version; }
+            this._value = v;
+            this._version = this._eq(v, this._bv) ? this._bver : e;
+        } else { this._value = v; this._version = e; }
+        for (let d = 0; d <= this._dur; d++) _epochDur[d] = e;
         if (this.subs) _notify(this.subs);
     }
-    /** Текущая версия (для bailout зависимых) */
-    version() { return this._version; }
     /** Прочитать без подписки */
     peek() { return this._value; }
     /** Ручная подписка: fn(value) при каждом реальном изменении (возвращает unsubscribe) */
@@ -389,7 +422,7 @@ export function signals(obj, { prefix } = {}) {
 }
 export function signal(initial, nameOrOpts) {
     const o = nameOrOpts && typeof nameOrOpts === 'object' ? nameOrOpts : null;
-    return new Signal(initial, _nm(nameOrOpts), _eqOf(nameOrOpts), o && o.watched, o && o.unwatched);
+    return new Signal(initial, _nm(nameOrOpts), _eqOf(nameOrOpts), o && o.watched, o && o.unwatched, o && _DUR[o.durability]);   // durability: 'low' | 'medium' | 'high' — конфиг/локаль/тема пишутся редко, их производные не перепроверяются после каждой записи
 }
 
 /** Отладка: печатать стек каждой записи в сигнал (trace(sig)) или причину перезапуска эффекта (effect(fn, { trace: true })) */
@@ -405,33 +438,33 @@ export function isSignal(v) {
 
 // ---- Computed ----------------------------------------------------------------
 
-class Computed {
+class Computed extends _Src {
     constructor(fn, name, eq, initial) {
+        super(name);
+        this._ord = ++_ordSeq;
         this._fn = fn;
         this._value = initial;
-        this._version = 0;
-        this._name = name;
         this._eq = eq;
-        this._dirty = true;
-        this._computing = false;    // circular dependency guard
-        this._disposed = false;
-        this.subs = null;
+        this._f = F_COMPUTED | F_DIRTY;
         this._deps = null;
         this._vers = null;
         this._n = 0;
         this._evict = null;
         this._unreg = null;
         this._err = null;          // { e } — кэшированное исключение: перебрасывается при чтении, пока не изменится зависимость
-        this._live = false;        // подписан на источники только пока есть свои подписчики (TC39 watched / Preact)
         this._chk = -1;            // _epoch последней проверки: неживому push не приходит — сверяем версии при чтении
+        this._rs = 0;              // штамп текущего запуска (_track)
     }
-    /** Нужен пересчёт/проверка: помечен dirty, или неживой и с прошлой проверки в системе была запись */
-    _stale() { return this._dirty || (!this._live && this._chk !== _epoch); }
-    _activate() { this._live = true; const d = this._deps; if (d) for (let i = 0; i < d.length; i++) _addSub(d[i], this); }
-    _deactivate() { this._live = false; const d = this._deps; if (d) for (let i = 0; i < d.length; i++) _delSub(d[i], this); }
+    get _dirty() { return (this._f & F_DIRTY) !== 0; }
+    get _disposed() { return (this._f & F_DISPOSED) !== 0; }
+    get _live() { return (this._f & F_LIVE) !== 0; }
+    /** Нужен пересчёт/проверка: помечен dirty, или неживой и с прошлой проверки была запись на его уровне durability */
+    _stale() { return (this._f & F_DIRTY) !== 0 || (!(this._f & F_LIVE) && this._chk < _epochDur[this._dur]); }
+    _activate() { this._f |= F_LIVE; const d = this._deps; if (d) for (let i = 0; i < d.length; i++) _addSub(d[i], this); }
+    _deactivate() { this._f &= ~F_LIVE; const d = this._deps; if (d) for (let i = 0; i < d.length; i++) _delSub(d[i], this); }
     get value() {
         if (this._stale()) this._recompute();
-        if (this._disposed && _devCache === true) _deadRead(this);
+        if ((this._f & F_DISPOSED) && _devCache === true) _deadRead(this);
         if (_tracking) _track(this); else if (_devCache === true) _noteUntracked(this);   // подписка ДО броска: читатель узнает о выздоровлении
         if (this._err) throw this._err.e;
         return this._value;
@@ -439,7 +472,7 @@ class Computed {
     /** Прочитать без подписки (зависимости самого computed переподписываются как обычно) */
     peek() {
         if (this._stale()) this._recompute();
-        if (this._disposed && _devCache === true) _deadRead(this);
+        if ((this._f & F_DISPOSED) && _devCache === true) _deadRead(this);
         if (this._err) throw this._err.e;
         return this._value;
     }
@@ -450,8 +483,8 @@ class Computed {
     }
     subscribe(fn) { return _subscribe(this, fn); }
     dispose() {
-        if (this._disposed) return;
-        this._disposed = true;
+        if (this._f & F_DISPOSED) return;
+        this._f |= F_DISPOSED;
         _unsubscribe(this);
         if (this.subs) this.subs.clear();
         const u = this._unreg; this._unreg = null;
@@ -459,26 +492,27 @@ class Computed {
     }
     /** push-фаза: пометить dirty и передать дальше */
     _run() {
-        if (this._dirty || this._disposed) return;
-        this._dirty = true;
+        if (this._f & (F_DIRTY | F_DISPOSED)) return;
+        this._f |= F_DIRTY;
         if (this.subs) _notify(this.subs);
     }
     _recompute() {
-        if (this._computing) {         // цикл — тоже кэшированная ошибка, граф не рвётся
+        if (this._f & F_COMPUTING) {         // цикл — тоже кэшированная ошибка, граф не рвётся
             this._err = { e: new Error(`[Aegis] Circular dependency in computed "${this._name || '?'}"`) };
             this._version = ++_epoch;
             return;
         }
-        this._computing = true;
+        this._f |= F_COMPUTING;
         const prev = _tracking;
         try {
             // Bailout: помечен dirty, но ни одна зависимость не изменила версию
             // (например, upstream computed пересчитался в то же значение)
             if (this._deps && this._deps.length > 0 && !_depsChanged(this)) {
-                this._dirty = false; this._chk = _epoch;
+                this._f &= ~F_DIRTY; this._chk = _epoch;
                 return;
             }
             this._n = 0;
+            this._rs = ++_runSeq;
             _tracking = this;
             let v, err = null;
             try {
@@ -494,14 +528,18 @@ class Computed {
                 this._value = v;
                 this._version = ++_epoch;
             }
-            this._dirty = false; this._chk = _epoch;
+            // durability = минимум по источникам (meet в цепочке); без источников — ⊤: константа никогда не перепроверяется; после ошибки — 0
+            const d = this._deps; let m = 3;
+            if (d) for (let i = 0; i < d.length; i++) { const k = d[i]._dur | 0; if (k < m) m = k; }
+            this._dur = err ? 0 : m;
+            this._f &= ~F_DIRTY; this._chk = _epoch;
         } finally {
             _tracking = prev;
-            this._computing = false;
+            this._f &= ~F_COMPUTING;
         }
     }
     toJSON() { return this.peek(); }
-    toString() { return `Computed(${this._name || '?'}: ${this._dirty ? '<stale>' : this._err ? '<error>' : this._value})`; }
+    toString() { return `Computed(${this._name || '?'}: ${(this._f & F_DIRTY) ? '<stale>' : this._err ? '<error>' : this._value})`; }
 }
 Computed.prototype[SIGNAL] = true;
 Computed.prototype._isComputed = true;
@@ -528,7 +566,7 @@ function _deadRead(c) {
 /** Усыновить disposer текущим запуском эффекта: effect/on/interval/subscribe/createScope в теле эффекта живут до его перезапуска (Solid/Svelte 5) */
 function _adopt(dispose) {
     const t = _tracking;
-    if (t && !t._isComputed && t._own !== false) (t._kids || (t._kids = [])).push(dispose);
+    if (t && !t._isComputed && (t._f & F_OWN)) { (t._kids || (t._kids = [])).push(dispose); if (dispose._node) dispose._node._pe = t; }   // _pe: владелец раньше усыновлённого в раунде
 }
 function _killKids(node) {
     const k = node._kids; if (!k) return;
@@ -537,10 +575,38 @@ function _killKids(node) {
 }
 let _ordSeq = 0;                                   // порядок создания observers: родитель всегда раньше своих детей
 const _byOrd = (a, b) => a._ord - b._ord;
-/** O(n) проверка монотонности; сортировка только при нарушении (churn подписок переставил Set) */
-function _ordered(round) {
-    for (let i = 1; i < round.length; i++) if (round[i]._ord < round[i - 1]._ord) { _stats.reordered++; return round.sort(_byOrd); }
-    return round;
+function _insertByOrd(arr, o) { let i = arr.length; while (i > 0 && arr[i - 1]._ord > o._ord) i--; arr.splice(i, 0, o); }
+/**
+ * Порядок раунда. Быстрый путь — порядок создания (родитель раньше детей). Если в раунде есть эффекты с выученными
+ * рёбрами (writer → observer: эффект W записал сигнал, который читает R), раунд сортируется по Кану с приоритетом _ord:
+ * R идёт после W и не запускается дважды (stale → correct). Остаток после Кана = цикл записей в этом раунде — E027 сразу,
+ * с именами, а не после 100 раундов. Рёбра переучиваются каждым запуском; корректность от них не зависит (pull решает, что бежит).
+ */
+function _ordered(round, sorted) {
+    let mono = sorted === true, edges = _qEdges;
+    if (sorted === undefined) { mono = true; edges = false; for (let i = 0; i < round.length; i++) { if (i && round[i]._ord < round[i - 1]._ord) mono = false; if (round[i]._fan) edges = true; } }
+    if (!edges) { if (!mono) { _stats.reordered++; round.sort(_byOrd); } return round; }
+    const inR = new Set(round), indeg = new Map(), out = new Map();
+    for (let i = 0; i < round.length; i++) indeg.set(round[i], 0);
+    const link = (a, b) => { if (a !== b && inR.has(a) && inR.has(b)) { let l = out.get(a); if (!l) out.set(a, l = []); l.push(b); indeg.set(b, indeg.get(b) + 1); } };
+    for (const o of round) {
+        if (o._fan) for (const t of o._fan) {
+            if (t === o) _warn('E027', !globalThis.AEGIS_PROD && { site: o._site, what: `effect "${o._name}" writes a signal it reads — it re-runs itself every flush.`, why: 'The write invalidates the effect that made it; the loop only stops at the equality cut-off or the round limit.', fix: 'Read the signal with peek() or untrack(), or move the derivation into a computed().' }, 'self:' + o._name);
+            link(o, t);
+        }
+        if (o._pe) link(o._pe, o);
+    }
+    const ready = [], res = [];
+    for (const o of round) if (!indeg.get(o)) ready.push(o);
+    ready.sort(_byOrd);
+    while (ready.length) { const o = ready.shift(); res.push(o); const l = out.get(o); if (l) for (const t of l) { const n = indeg.get(t) - 1; indeg.set(t, n); if (n === 0) _insertByOrd(ready, t); } }
+    if (res.length < round.length) {
+        const done = new Set(res), cyc = round.filter(o => !done.has(o));
+        _warn('E027', !globalThis.AEGIS_PROD && { what: `effect cycle: ${cyc.map(o => o._name).join(' → ')} → ${cyc[0] && cyc[0]._name} — each writes a signal the next one reads.`, why: 'The round cannot be ordered; effects keep invalidating each other until the equality cut-off or the round limit.', fix: 'Break the loop: derive one side with computed(), or write both values in one batch() outside the effects.' }, 'cycle:' + cyc.map(o => o._name).join('>'));
+        cyc.sort(_byOrd); for (const o of cyc) res.push(o);
+    }
+    _stats.reordered++;
+    return res;
 }
 
 class Effect {
@@ -549,26 +615,31 @@ class Effect {
         this._fn = fn;
         this._name = name || 'effect';
         this._owner = owner;        // scope, под которым выполняется КАЖДЫЙ запуск
-        this._trace = !!trace;
         this._lane = lane || null;  // 'micro' | 'frame' — отложенная полоса; null — синхронно
+        this._f = (trace ? F_TRACE : 0) | F_OWN;   // F_OWN: дети запуска умирают с его перезапуском (effect(fn, { own: false }) снимает)
         this._el = null;            // DOM-узел привязки (dev-детектор зомби-эффектов)
         this._seen = false; this._detached = 0; this._warnedZombie = false;
         this._cleanup = null;
-        this._disposed = false;
-        this._queued = false;
         this._deps = null;
         this._vers = null;
         this._n = 0;
         this._evict = null;
         this._unreg = null;
         this._kids = null;          // disposers детей текущего запуска (effect/on/interval/subscribe/createScope в теле)
-        this._own = true;           // effect(fn, { own: false }) — дети живут до dispose владельца (старое поведение)
+        this._site = null;
+        this._rs = 0;               // штамп запуска (_track)
+        this._fan = null;           // выученные рёбра: observers, поставленные в очередь записями этого запуска
+        this._pe = null;            // эффект-владелец (усыновивший запуск) — раньше в раунде
     }
+    get _disposed() { return (this._f & F_DISPOSED) !== 0; }
+    get _queued() { return (this._f & F_QUEUED) !== 0; }
+    set _queued(v) { if (v) this._f |= F_QUEUED; else this._f &= ~F_QUEUED; }
+    get _own() { return (this._f & F_OWN) !== 0; }
     _run() {
-        if (this._disposed) return;
+        if (this._f & F_DISPOSED) return;
         // pull-фаза: запускаться только если зависимости реально изменились
         if (this._deps && this._deps.length > 0 && !_depsChanged(this)) return;
-        if (this._trace && this._deps) {
+        if ((this._f & F_TRACE) && this._deps) {
             const changed = _changedDeps(this);
             console.groupCollapsed(`▸ [Aegis] effect "${this._name}" — changed: ${changed.map(d => `${d.name} → ${d.value}`).join(', ') || '(first run)'}`);
             console.trace();
@@ -585,18 +656,20 @@ class Effect {
     _execute() {
         this._runCleanup();
         _killKids(this);                             // дети прошлого запуска — до нового
-        if (!this._counted) { this._counted = true; _liveEffects++; }
-        const prevT = _tracking, prevS = _currentScope;
+        if (!(this._f & F_COUNTED)) { this._f |= F_COUNTED; _liveEffects++; }
+        const prevT = _tracking, prevS = _currentScope, prevW = _writer;
         _tracking = this;
+        _writer = this; this._fan = null;            // провенанс: рёбра переучиваются каждым запуском
         _currentScope = this._owner;  // всё созданное внутри — дети владельца, а не случайного scope
         this._n = 0;
-        _batchDepth++;                 // записи внутри effect откладываются до его завершения
+        this._rs = ++_runSeq;
+        if (_batchDepth++ === 0) _win++;             // записи внутри effect откладываются до его завершения; запуск = окно backdating
         try {
             const r = this._fn();
             if (this._el && (!globalThis.AEGIS_PROD && _dev())) _zombieCheck(this, this._name);
             if (typeof r === 'function') this._cleanup = r;
-            else if (r && typeof r.then === 'function' && !this._warnedAsync) {
-                this._warnedAsync = true;
+            else if (r && typeof r.then === 'function' && !(this._f & F_ASYNC)) {
+                this._f |= F_ASYNC;
                 _warn('E016', !globalThis.AEGIS_PROD && {
                     site: this._site,
                     what: `effect "${this._name}" returned a Promise.`,
@@ -606,6 +679,7 @@ class Effect {
             }
         } finally {
             _tracking = prevT;
+            _writer = prevW;
             _currentScope = prevS;
             _endTrack(this);           // и после ошибки: прочитанные deps остаются, эффект переживёт throw
             _batchDepth--;
@@ -613,9 +687,9 @@ class Effect {
         }
     }
     dispose() {
-        if (this._disposed) return;
-        this._disposed = true;
-        if (this._counted) _liveEffects--;
+        if (this._f & F_DISPOSED) return;
+        this._f |= F_DISPOSED;
+        if (this._f & F_COUNTED) _liveEffects--;
         _unsubscribe(this);
         this._runCleanup();
         _killKids(this);
@@ -643,7 +717,7 @@ export function effect(fn, nameOrOpts) {
     }
     const node = new Effect(fn, name, owner, trace, lane);
     node._site = site;
-    if (nameOrOpts && typeof nameOrOpts === 'object' && nameOrOpts.own === false) node._own = false;
+    if (nameOrOpts && typeof nameOrOpts === 'object' && nameOrOpts.own === false) node._f &= ~F_OWN;
     const dispose = () => node.dispose();
     dispose._node = node;
     // Регистрируем до первого запуска: в уже уничтоженном scope effect не стартует
@@ -674,12 +748,15 @@ class Subscriber {
         this._owner = owner;
         this._last = src.version();
         this._name = 'subscriber';
-        this._disposed = false;
-        this._queued = false;
+        this._f = 0;
         this._unreg = null;
+        this._fan = null; this._pe = null;
     }
+    get _disposed() { return (this._f & F_DISPOSED) !== 0; }
+    get _queued() { return (this._f & F_QUEUED) !== 0; }
+    set _queued(v) { if (v) this._f |= F_QUEUED; else this._f &= ~F_QUEUED; }
     _run() {
-        if (this._disposed) return;
+        if (this._f & F_DISPOSED) return;
         const v = this._src.version();
         if (v === this._last) return;
         this._last = v;
@@ -689,8 +766,8 @@ class Subscriber {
         finally { _currentScope = prevS; }
     }
     dispose() {
-        if (this._disposed) return;
-        this._disposed = true;
+        if (this._f & F_DISPOSED) return;
+        this._f |= F_DISPOSED;
         _delSub(this._src, this);
         const u = this._unreg; this._unreg = null;
         if (u) u();
@@ -716,7 +793,7 @@ function _subscribe(src, fn) {
  * вызовут effects только один раз после завершения. Возвращает результат fn.
  */
 export function batch(fn) {
-    _batchDepth++;
+    if (_batchDepth++ === 0) _win++;
     try {
         return fn();
     } finally {
@@ -743,14 +820,22 @@ export function runWithOwner(scope, fn) {
 
 // ---- propagation -------------------------------------------------------------
 
+/** Поставить observer в очередь: сортированность и наличие рёбер считаются здесь, а не сканом в раунде */
+function _enqueue(obs) {
+    obs._f |= F_QUEUED;
+    if (obs._ord < _qLastOrd) _qSorted = false;
+    _qLastOrd = obs._ord;
+    _qa.push(obs);
+    if (_writer) { (_writer._fan || (_writer._fan = new Set())).add(obs); _qEdges = true; }
+}
 function _notify(subs) {
     _notifyDepth++;
     try {
         for (const obs of subs) {                      // без копии: в push-фазе subs не пополняется
-            if (obs._disposed) { subs.delete(obs); continue; }
+            if (obs._f & F_DISPOSED) { subs.delete(obs); continue; }
             if (obs._isComputed) obs._run();           // push: dirty по цепочке
             else if (obs._lane) _enqueueLane(obs);       // отложенная полоса: microtask / кадр
-            else if (!obs._queued) { obs._queued = true; _queue.push(obs); } // effects никогда не запускаются inline
+            else if (!(obs._f & F_QUEUED)) _enqueue(obs); // effects никогда не запускаются inline
         }
     } finally {
         _notifyDepth--;
@@ -823,7 +908,7 @@ function _runLane(lane) {
                 for (const o of list) o._queued = false;
                 throw new Error(`[Aegis] Infinite reactive loop in "${lane}" lane — effect writes a signal it depends on (${list.map(o => o._name).join(', ')})`);
             }
-            const list = _ordered(_lanes[lane]); _lanes[lane] = [];
+            const list = _ordered(_lanes[lane], undefined); _lanes[lane] = [];
             for (const obs of list) {
                 obs._queued = false;
                 if (obs._disposed) continue;
@@ -854,31 +939,30 @@ const _stats = { flushes: 0, effectRuns: 0, maxRounds: 0, slow: [], reordered: 0
 let _liveEffects = 0, _liveScopes = 0;
 
 function _flush() {
-    if (_flushing || _batchDepth > 0 || _queue.length === 0) return;
+    if (_flushing || _batchDepth > 0 || _qa.length === 0) return;
     _flushing = true;
-    let rounds = 0;
-    const errors = [];
+    let rounds = 0, errors = null, total = 0;
     const t0 = _profiling ? performance.now() : 0;
-    let total = 0;
     const names = _profiling ? [] : null;
     try {
         // Записи из effects попадают в очередь и обрабатываются следующим раундом
-        while (_queue.length > 0) {
+        while (_qa.length > 0) {
             if (++rounds > _MAX_ROUNDS) {
-                const names = _queue.map(o => o._name).join(', ');
-                for (const o of _queue) o._queued = false;
-                _queue = [];
-                throw new Error(`[Aegis] Infinite reactive loop — effect writes a signal it depends on (${names})`);
+                const list = _qa.map(o => o._name).join(', ');
+                for (const o of _qa) o._f &= ~F_QUEUED;
+                _qa.length = 0; _qSorted = true; _qLastOrd = 0; _qEdges = false;
+                throw new Error(`[Aegis] Infinite reactive loop — effect writes a signal it depends on (${list})`);
             }
-            const round = _ordered(_queue);              // порядок создания: родитель раньше детей, уничтоженные им — пропускаются
-            _queue = [];
+            _win++;                                          // раунд — окно backdating
+            const round = _ordered(_qa, _qSorted);          // порядок создания, либо Кан по выученным рёбрам
+            _qa = _qb; _qb = round; _qa.length = 0; _qSorted = true; _qLastOrd = 0; _qEdges = false;   // swap: буфер раунда переиспользуется
             total += round.length;
             let i = 0;
             try {
                 for (; i < round.length; i++) {
                     const obs = round[i];
-                    obs._queued = false;
-                    if (obs._disposed) continue;
+                    obs._f &= ~F_QUEUED;
+                    if (obs._f & F_DISPOSED) continue;
                     if (names && names.length < 30) names.push(obs._name);
                     try {
                         if (_profiling) {
@@ -896,11 +980,12 @@ function _flush() {
                             }
                         } catch (x) { /* декоратор никогда не бросает */ }
                         if (_dispatchError(obs._owner, e)) continue;   // поглощена scope.onError / errorBoundary
-                        errors.push(e);                                 // остальные эффекты раунда продолжают; отчёт — после flush
+                        (errors || (errors = [])).push(e);             // остальные эффекты раунда продолжают; отчёт — после flush
                     }
                 }
             } finally {
-                for (let j = i + 1; j < round.length; j++) { const o = round[j]; if (o._disposed) o._queued = false; else _queue.push(o); }   // недобежавший хвост — в следующий раунд, а не вечный _queued=true
+                for (let j = i + 1; j < round.length; j++) { const o = round[j]; if (o._f & F_DISPOSED) o._f &= ~F_QUEUED; else { o._f &= ~F_QUEUED; _enqueue(o); } }   // недобежавший хвост — в следующий раунд, а не вечный _queued=true
+                round.length = 0;
             }
         }
     } finally {
@@ -915,7 +1000,7 @@ function _flush() {
             fix: 'Replace the effect with a computed(), or write all values in one batch().',
         }, 'rounds');
     }
-    _reportErrors(errors);   // scope.onError не было: onError() → reportError; в 'strict' — синхронно писателю
+    if (errors) _reportErrors(errors);   // scope.onError не было: onError() → reportError; в 'strict' — синхронно писателю
 }
 
 
