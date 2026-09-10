@@ -20,7 +20,7 @@
 .logo .js { color: var(--js); font-weight: 400 }
 * { box-sizing: border-box }
 html { scroll-behavior: smooth; scroll-padding-top: 76px }
-body { margin: 0; background: var(--paper); color: var(--text); font: 16px/1.6 var(--sans); -webkit-font-smoothing: antialiased }
+body { margin: 0; background: var(--paper); color: var(--text); font: 16px/1.6 var(--sans); -webkit-font-smoothing: antialiased; overflow-x: clip }
 a { color: var(--teal-2); text-decoration: none } a:hover { text-decoration: underline }
 :root[data-theme="dark"] a { color: var(--teal) }
 code, kbd, pre { font-family: var(--mono); font-size: .92em }
@@ -65,7 +65,7 @@ ul, ol { padding-left: 1.4em } li { margin: .25em 0 } li > p { margin: .3em 0 }
 
 /* layouts */
 .wrap { max-width: 1320px; margin: 0 auto; padding: 0 20px }
-.docs { display: grid; grid-template-columns: 250px minmax(0, 1fr) 210px; gap: 40px; padding-top: 28px }
+.docs { display: grid; grid-template-columns: 250px minmax(0, 1fr) 210px; gap: 40px; padding-top: 28px } .docs > * { min-width: 0 }
 .side { position: sticky; top: 76px; align-self: start; max-height: calc(100vh - 90px); overflow: auto; font-size: 14px; padding-right: 8px }
 .side h5 { margin: 18px 0 6px; font-size: 11.5px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted) } .side h5:first-child { margin-top: 4px }
 .side a { display: block; padding: 5px 10px; color: var(--text); border-radius: 6px; text-decoration: none !important } .side a:hover { background: var(--surface-2) } .side a.on { background: var(--gold-soft); color: var(--gold-2); font-weight: 600 }
@@ -80,7 +80,7 @@ ul, ol { padding-left: 1.4em } li { margin: .25em 0 } li > p { margin: .3em 0 }
 footer { border-top: 1px solid var(--line); margin-top: 40px; padding: 28px 0; color: var(--muted); font-size: 14px } footer .wrap { display: flex; gap: 24px; flex-wrap: wrap; justify-content: space-between }
 
 /* landing */
-.hero { padding: 72px 0 40px; display: grid; grid-template-columns: 1.1fr 1fr; gap: 48px; align-items: center }
+.hero { padding: 72px 0 40px; display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr); gap: 48px; align-items: center } .hero > div { min-width: 0 }
 .hero h1 { font-size: clamp(2.2rem, 5vw, 3.6rem); line-height: 1.08; letter-spacing: -.03em; margin: 0 0 18px } .hero h1 em { font-style: normal; color: var(--gold-2); background: linear-gradient(90deg, var(--gold-2), var(--gold)); -webkit-background-clip: text; background-clip: text; color: transparent }
 .hero p.lead { font-size: 1.2rem; color: var(--muted); margin: 0 0 26px; max-width: 560px }
 .hero .cta { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 18px }
@@ -100,7 +100,7 @@ footer { border-top: 1px solid var(--line); margin-top: 40px; padding: 28px 0; c
 .cta-band { background: var(--ink); color: #E6EAF2; border-radius: 16px; padding: 40px; margin: 40px 0; display: flex; justify-content: space-between; align-items: center; gap: 24px; flex-wrap: wrap } .cta-band h2 { border: 0; margin: 0 0 6px; padding: 0; color: #fff } .cta-band p { margin: 0; color: #98A2B3 }
 
 /* examples */
-.ex-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(380px, 1fr)); gap: 20px; margin: 20px 0 48px }
+.ex-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(380px, 100%), 1fr)); gap: 20px; margin: 20px 0 48px }
 .ex { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; overflow: hidden } .ex header { display: flex; justify-content: space-between; align-items: center; padding: 10px 14px; border-bottom: 1px solid var(--line) } .ex header b { font-size: 15px } .ex header span { font-size: 13px; color: var(--muted) } .ex iframe { width: 100%; height: 300px; border: 0; background: #fff } .ex .tabs { display: flex; gap: 2px; padding: 6px 8px; border-top: 1px solid var(--line); background: var(--surface-2) } .ex .tabs button { font: 500 13px var(--sans); border: 0; background: none; color: var(--muted); padding: 4px 10px; border-radius: 6px; cursor: pointer } .ex .tabs button.on { background: var(--surface); color: var(--text); box-shadow: var(--shadow) } .ex pre { margin: 0; border-radius: 0; max-height: 360px; font-size: 12.5px } .ex [hidden] { display: none !important }
 
 /* playground */
@@ -108,10 +108,31 @@ footer { border-top: 1px solid var(--line); margin-top: 40px; padding: 28px 0; c
 .play main { display: grid; grid-template-columns: 1fr 1fr; min-height: 0 } .play textarea { width: 100%; height: 100%; border: 0; border-right: 1px solid var(--line); background: var(--code-bg); color: var(--code-text); padding: 14px 16px; font: 13.5px/1.55 var(--mono); resize: none; outline: none; tab-size: 4 }
 .play .out { display: grid; grid-template-rows: 1fr auto; min-height: 0; background: #fff } .play iframe { width: 100%; height: 100%; border: 0 } .play pre { margin: 0; border-radius: 0; max-height: 30vh; border-top: 1px solid var(--line); font-size: 12.5px; background: var(--surface); color: var(--text) } .play pre .warn { color: var(--gold-2) } .play pre .error { color: var(--danger) }
 
-@media (max-width: 1080px) { .docs { grid-template-columns: 240px minmax(0, 1fr) } .toc { display: none } .hero { grid-template-columns: 1fr } }
+/* ── responsive ─────────────────────────────────────────────────────────── */
+@media (max-width: 1080px) { .docs { grid-template-columns: 240px minmax(0, 1fr) } .toc { display: none } .hero { grid-template-columns: minmax(0, 1fr); gap: 32px } }
 @media (max-width: 800px) {
-    .docs { grid-template-columns: 1fr } .side { display: none; position: fixed; top: 60px; left: 0; right: 0; bottom: 0; background: var(--paper); padding: 16px 20px; max-height: none; z-index: 40 } .side.open { display: block }
-    .burger { display: inline-flex } .top nav { display: none } .search { width: 40px } .search input { padding-left: 30px } .search kbd { display: none } .search .res { left: auto; right: -80px; min-width: 300px }
-    .play main { grid-template-columns: 1fr; grid-template-rows: 1fr 1fr } .play textarea { border-right: 0; border-bottom: 1px solid var(--line) } .hero { padding-top: 40px }
+    html { scroll-padding-top: 68px }
+    .top .in { height: 56px; gap: 10px; padding: 0 14px } .logo { font-size: 17px } .logo svg { width: 24px; height: 24px }
+    .burger { display: inline-flex } .top nav { display: none }
+    /* search collapses to an icon; tapping it opens a full-width field under the header */
+    .search { width: 36px; height: 36px; flex: none } .search > svg { pointer-events: none } .search input { position: absolute; left: 0; top: 0; width: 36px; height: 36px; opacity: 0; padding: 0; cursor: pointer }
+    .search.open { position: static } .search.open input { opacity: 1; cursor: text; position: fixed; left: 12px; right: 12px; top: 62px; width: auto; height: 42px; padding: 0 14px; z-index: 61; box-shadow: var(--shadow) }
+    .search.open > svg { display: none } .search kbd { display: none } .search .res { position: fixed; left: 12px; right: 12px; top: 110px; min-width: 0; max-height: calc(100vh - 130px) }
+    .docs { grid-template-columns: minmax(0, 1fr); gap: 0; padding-top: 18px }
+    .side { display: none; position: fixed; top: 56px; left: 0; right: 0; bottom: 0; background: var(--paper); padding: 12px 18px 40px; max-height: none; z-index: 40; overflow: auto } .side.open { display: block } .side a { padding: 9px 10px; font-size: 15px }
+    h1 { font-size: 1.7rem } h2 { font-size: 1.3rem } pre { font-size: 12.5px; padding: 12px 14px; border-radius: 8px; margin: 12px -2px }
+    .copy { opacity: 1 }
+    .hero { padding: 28px 0 8px } .hero h1 { font-size: clamp(1.9rem, 8.5vw, 2.6rem) } .hero p.lead { font-size: 1.05rem } .hero .install { white-space: normal; font-size: 12.5px; max-width: 100% } .hero .cta .btn { flex: 1 1 auto; justify-content: center }
+    .demo pre { font-size: 11.5px } .demo .live { padding: 12px }
+    .stats { gap: 18px 28px; margin: 12px 0 32px } .stats div b { font-size: 1.35rem }
+    .section-title { font-size: 1.35rem; margin-top: 32px } .grid3, .rules { grid-template-columns: 1fr; gap: 12px; margin-bottom: 32px }
+    .cta-band { padding: 24px 20px; margin: 28px 0 } .cta-band h2 { font-size: 1.25rem }
+    table { font-size: .9em } th, td { padding: 6px 8px }
+    .pager { flex-direction: column } .pager a.next { text-align: left }
+    .ex-grid { grid-template-columns: 1fr } .ex iframe { height: 260px }
+    .play { height: auto; min-height: calc(100vh - 57px) } .play .bar { padding: 8px 12px; gap: 8px } .play .bar > span:last-child, .play .bar .grow { display: none }
+    .play main { grid-template-columns: 1fr; grid-template-rows: minmax(260px, 45vh) minmax(260px, 1fr) } .play textarea { border-right: 0; border-bottom: 1px solid var(--line); font-size: 12.5px }
+    footer .wrap { flex-direction: column; gap: 8px; font-size: 13px }
 }
+@media (max-width: 420px) { .wrap { padding: 0 14px } .top .in { gap: 6px } .icon-btn { width: 34px; height: 34px } }
 [data-cloak] { visibility: hidden }

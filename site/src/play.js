@@ -89,7 +89,7 @@ for (const l of ['log', 'warn', 'error', 'info']) { const o = console[l].bind(co
 addEventListener('error', (e) => send('error', [e.message]));
 addEventListener('unhandledrejection', (e) => send('error', [String(e.reason && e.reason.message || e.reason)]));
 <\/script>
-<style>body{font:14px system-ui,sans-serif;padding:14px;color:#1A2233} input,button{font:inherit;padding:6px 10px;border:1px solid #E6E3DA;border-radius:6px} button{background:#E8B42E;border-color:#C99A18;cursor:pointer} td{padding:4px 8px}</style></head>
+<style>body{font:14px system-ui,sans-serif;padding:14px;color:#1A2233} input,button{font:inherit;padding:6px 10px;border:1px solid #E6E3DA;border-radius:6px} button{background:#184C64;border-color:#123A4D;color:#fff;font-weight:600;cursor:pointer} td{padding:4px 8px}</style></head>
 <body><div id="app"></div>
 <script type="module">${src.replace(/<\/script/g, '<\\/script')}<\/script></body></html>`;
 };

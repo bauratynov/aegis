@@ -14,7 +14,8 @@ const ORIGIN = 'https://aegisjs.com';
 const GH = 'https://github.com/bauratynov/aegis';
 const read = (p) => readFileSync(p, 'utf8');
 const readme = (existsSync(join(ROOT, 'README.md')) ? read(join(ROOT, 'README.md')) : read(join(ROOT, '_queue', '21_README.md')))
-    .replace(/`([^`\n]*?)\\`\\``/g, '``` $1`` ```');   // GitHub renders `html\`\`` as html``; CommonMark needs a longer backtick fence around it
+    .replace(/`([^`\n]*?)\\`\\``/g, '``` $1`` ```')   // GitHub renders `html\`\`` as html``; CommonMark needs a longer backtick fence around it
+    .replace(/`html```(?!`)/g, '``` html`` ```');       // the unescaped form `html``` in the mental-model rules
 const VERSION = (read(join(ROOT, 'package.json')).match(/"version":\s*"([^"]+)"/) || [, '0.0.0'])[1];
 const BUILD = Date.now().toString(36);   // cache-buster for theme.css / site.js / play.js on every build
 const TESTS = (readme.match(/tests-(\d+)/) || [, '1000'])[1];
@@ -89,7 +90,8 @@ marked.use({
         html({ text }) { return esc(text); },
     },
 });
-const md = (src) => { headings = []; const out = marked.parse(src); return { html: out, headings: headings.slice() }; };
+const EMOJI = /[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}\u{2B50}\u{2B06}\u{FE0F}]\s?/gu;
+const md = (src) => { headings = []; const out = marked.parse(src.replace(EMOJI, '')); return { html: out, headings: headings.slice() }; };
 const plain = (src) => src.replace(/```[\s\S]*?```/g, ' ').replace(/[`*_>#|]/g, '').replace(/\[([^\]]*)\]\([^)]*\)/g, '$1').replace(/\s+/g, ' ').trim();
 
 // ── README → chapters ─────────────────────────────────────────────────────────
@@ -182,19 +184,20 @@ function layout({ title, description, path, main, nav = '', wide = false, extraH
 <link rel="canonical" href="${ORIGIN}${path}">
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
 <meta property="og:title" content="${esc(title)}"><meta property="og:description" content="${esc(description)}"><meta property="og:image" content="${ORIGIN}/og.png"><meta property="og:url" content="${ORIGIN}${path}"><meta name="twitter:card" content="summary_large_image">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css" integrity="sha512-SnH5WK+bZxgPHs44uWIX+LLJAJ9/2PkPKZ5QiAj6Ta86w+fsb2TkcmfRyVX3pBnMFcV7oQPJkl9QevSCWr3W6A==" crossorigin="anonymous" referrerpolicy="no-referrer">
 <link rel="stylesheet" href="/theme.css?v=${BUILD}">
 <script>try{var t=JSON.parse(localStorage.getItem('aegis:theme'));if(!t)t=matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light';document.documentElement.dataset.theme=t}catch(e){}</script>
 ${extraHead}
 </head>
 <body>
 <header class="top"><div class="in">
-    <button class="icon-btn burger" aria-label="Menu"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7h16M4 12h16M4 17h16"/></svg></button>
+    <button class="icon-btn burger" aria-label="Menu" aria-expanded="false"><i class="fa-solid fa-bars" aria-hidden="true"></i></button>
     <a class="logo" href="/">${LOGO}<span>aegis<span class="js">js</span></span></a>
     <nav>${NAV.map(([n, h]) => `<a href="${h}"${n === section ? ' class="on"' : ''}>${n}</a>`).join('')}</nav>
     <div class="grow"></div>
     <div class="search" data-aegis="site-search"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg><input type="search" placeholder="Search docs…" aria-label="Search"><kbd>Ctrl K</kbd></div>
     <span data-aegis="theme-toggle"></span>
-    <a class="icon-btn" href="${GH}" title="GitHub" aria-label="GitHub"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 .5A11.5 11.5 0 0 0 8.4 22.9c.6.1.8-.3.8-.6v-2.1c-3.2.7-3.9-1.4-3.9-1.4-.5-1.3-1.3-1.7-1.3-1.7-1-.7.1-.7.1-.7 1.2.1 1.8 1.2 1.8 1.2 1 1.8 2.7 1.3 3.4 1 .1-.8.4-1.3.7-1.6-2.6-.3-5.3-1.3-5.3-5.7 0-1.3.5-2.3 1.2-3.1-.1-.3-.5-1.5.1-3.1 0 0 1-.3 3.2 1.2a11 11 0 0 1 5.8 0c2.2-1.5 3.2-1.2 3.2-1.2.6 1.6.2 2.8.1 3.1.8.8 1.2 1.8 1.2 3.1 0 4.4-2.7 5.4-5.3 5.7.4.4.8 1.1.8 2.2v3.2c0 .3.2.7.8.6A11.5 11.5 0 0 0 12 .5Z"/></svg></a>
+    <a class="icon-btn" href="${GH}" title="GitHub" aria-label="GitHub"><i class="fa-brands fa-github" aria-hidden="true"></i></a>
 </div></header>
 ${main}
 <footer><div class="wrap"><span>© ${new Date().getFullYear()} Aegis · MIT · v${VERSION} · ${TESTS} tests passing in Chrome and Firefox</span><span><a href="${GH}">GitHub</a> · <a href="/llms.txt">llms.txt</a> · <a href="/aegis.d.ts">aegis.d.ts</a> · <a href="/bench.html">bench</a> · built with Aegis, no build step for you</span></div></footer>
@@ -275,9 +278,9 @@ const RECIPES = [
         <div class="ex-grid">${cards}</div>
         <h2 class="section-title">Bigger things</h2>
         <div class="grid3">
-            <div class="card"><h3><span class="ic">▦</span>Admin app</h3><p>Hash router, table with search and paging, optimistic mutations, forms with server errors, a 50 000-line virtual log, offline settings, theme and i18n on a mock server. One file.</p><a class="more" href="/demo/admin.html" target="_blank" rel="noopener">Open the demo →</a></div>
-            <div class="card"><h3><span class="ic">⏱</span>Benchmark</h3><p>A js-framework-benchmark-style table (1 000 rows, <code>list()</code> + <code>html\`\`</code>) plus the reactive core. Numbers land in a <code>&lt;pre&gt;</code> and <code>window.__bench</code>.</p><a class="more" href="/bench.html" target="_blank" rel="noopener">Run it in your browser →</a></div>
-            <div class="card"><h3><span class="ic">🔍</span>DevTools</h3><p>The in-page inspector is itself an Aegis app: component tree, signals with change marks, effects and their dependencies, cache tab. Add <code>?aegis-devtools</code> to any page.</p><a class="more" href="/demo/admin.html?aegis-devtools" target="_blank" rel="noopener">Admin demo with DevTools →</a></div>
+            <div class="card"><h3><span class="ic"><i class="fa-solid fa-table-columns" aria-hidden="true"></i></span>Admin app</h3><p>Hash router, table with search and paging, optimistic mutations, forms with server errors, a 50 000-line virtual log, offline settings, theme and i18n on a mock server. One file.</p><a class="more" href="/demo/admin.html" target="_blank" rel="noopener">Open the demo →</a></div>
+            <div class="card"><h3><span class="ic"><i class="fa-solid fa-gauge-high" aria-hidden="true"></i></span>Benchmark</h3><p>A js-framework-benchmark-style table (1 000 rows, <code>list()</code> + <code>html\`\`</code>) plus the reactive core. Numbers land in a <code>&lt;pre&gt;</code> and <code>window.__bench</code>.</p><a class="more" href="/bench.html" target="_blank" rel="noopener">Run it in your browser →</a></div>
+            <div class="card"><h3><span class="ic"><i class="fa-solid fa-magnifying-glass" aria-hidden="true"></i></span>DevTools</h3><p>The in-page inspector is itself an Aegis app: component tree, signals with change marks, effects and their dependencies, cache tab. Add <code>?aegis-devtools</code> to any page.</p><a class="more" href="/demo/admin.html?aegis-devtools" target="_blank" rel="noopener">Admin demo with DevTools →</a></div>
         </div></div>`;
     write('examples/index.html', layout({ title: 'Examples · Aegis', description: 'Runnable recipes: islands, search, forms, modal, tables, an admin app and a benchmark. Each one a single HTML file.', path: '/examples/', main }));
     RECIPES.forEach(([file, title, sub]) => search.push({ k: 'examples', t: 'Examples', h: title, u: '/examples/', x: sub }));
@@ -321,12 +324,12 @@ const RECIPES = [
 
     <h2 class="section-title">What you get in the one file</h2><p class="section-sub">Each part is independent. Import what you use; a bundler tree-shakes the rest, and <code>build.mjs</code> does the same without one.</p>
     <div class="grid3">
-        <div class="card"><h3><span class="ic">⚡</span>Signals</h3><p>TC39-aligned signals, computeds and effects with glitch-free propagation, scopes that clean up after themselves, deep <code>reactive()</code> objects.</p><a class="more" href="/docs/reactive-core/">Reactive core →</a></div>
-        <div class="card"><h3><span class="ic">🏝</span>Islands</h3><p><code>&lt;div data-aegis="chart"&gt;</code> on a server page comes alive with typed props, lazy loading on visibility, JSON props, morph-safe swaps.</p><a class="more" href="/docs/components/">Components →</a></div>
-        <div class="card"><h3><span class="ic">📝</span>Templates</h3><p><code>html\`\`</code> parsed once by a real tokenizer, CSP-safe, with <code>@click</code>, <code>.prop</code>, <code>?bool</code>, <code>bind:value</code> and keyed <code>list()</code>.</p><a class="more" href="/docs/dom/">DOM →</a></div>
-        <div class="card"><h3><span class="ic">🗄</span>Data &amp; cache</h3><p>One <code>resource()</code> for SWR, offline and streaming; mutations with optimistic patch logs; ETag, persistence, cross-tab sync, a circuit breaker.</p><a class="more" href="/docs/data/">Data →</a></div>
-        <div class="card"><h3><span class="ic">🧾</span>Forms</h3><p><code>wireForm()</code> upgrades a plain <code>&lt;form&gt;</code>: Constraint Validation, schemas, async rules, 422 mapping, wizards, drafts, accessible errors.</p><a class="more" href="/docs/forms/">Forms →</a></div>
-        <div class="card"><h3><span class="ic">🧭</span>Router &amp; a11y</h3><p>Navigation API router with loaders, guards before the URL commits, View Transitions; focus traps, roving tabindex, live regions.</p><a class="more" href="/docs/routing-navigation/">Routing →</a></div>
+        <div class="card"><h3><span class="ic"><i class="fa-solid fa-bolt" aria-hidden="true"></i></span>Signals</h3><p>TC39-aligned signals, computeds and effects with glitch-free propagation, scopes that clean up after themselves, deep <code>reactive()</code> objects.</p><a class="more" href="/docs/reactive-core/">Reactive core →</a></div>
+        <div class="card"><h3><span class="ic"><i class="fa-solid fa-layer-group" aria-hidden="true"></i></span>Islands</h3><p><code>&lt;div data-aegis="chart"&gt;</code> on a server page comes alive with typed props, lazy loading on visibility, JSON props, morph-safe swaps.</p><a class="more" href="/docs/components/">Components →</a></div>
+        <div class="card"><h3><span class="ic"><i class="fa-solid fa-code" aria-hidden="true"></i></span>Templates</h3><p><code>html\`\`</code> parsed once by a real tokenizer, CSP-safe, with <code>@click</code>, <code>.prop</code>, <code>?bool</code>, <code>bind:value</code> and keyed <code>list()</code>.</p><a class="more" href="/docs/dom/">DOM →</a></div>
+        <div class="card"><h3><span class="ic"><i class="fa-solid fa-database" aria-hidden="true"></i></span>Data &amp; cache</h3><p>One <code>resource()</code> for SWR, offline and streaming; mutations with optimistic patch logs; ETag, persistence, cross-tab sync, a circuit breaker.</p><a class="more" href="/docs/data/">Data →</a></div>
+        <div class="card"><h3><span class="ic"><i class="fa-solid fa-list-check" aria-hidden="true"></i></span>Forms</h3><p><code>wireForm()</code> upgrades a plain <code>&lt;form&gt;</code>: Constraint Validation, schemas, async rules, 422 mapping, wizards, drafts, accessible errors.</p><a class="more" href="/docs/forms/">Forms →</a></div>
+        <div class="card"><h3><span class="ic"><i class="fa-solid fa-route" aria-hidden="true"></i></span>Router &amp; a11y</h3><p>Navigation API router with loaders, guards before the URL commits, View Transitions; focus traps, roving tabindex, live regions.</p><a class="more" href="/docs/routing-navigation/">Routing →</a></div>
     </div>
 
     <h2 class="section-title">The canonical dozen</h2><p class="section-sub">Aegis exports a lot. You need about twelve names; the table says which.</p>

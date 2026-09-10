@@ -37,7 +37,7 @@ const mark = (text, q) => {
     return parts;
 };
 
-island('site-search', ({ html, on, effect }) => {
+island('site-search', ({ el, html, on, effect }) => {
     const query = signal(''), open = signal(false), sel = signal(0), index = signal([]), q = signal('');
     effect(() => { const v = query.value; const t = setTimeout(() => { q.value = v; }, 80); return () => clearTimeout(t); });
     const results = computed(() => {
@@ -50,7 +50,9 @@ island('site-search', ({ html, on, effect }) => {
     on(document, 'keydown', (e) => {
         if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') { e.preventDefault(); const i = document.querySelector('.search input'); i && i.focus(); }
     });
-    on(document, 'pointerdown', (e) => { if (!e.target.closest('.search')) open.value = false; });
+    on(document, 'pointerdown', (e) => { if (!e.target.closest('.search')) { open.value = false; el.classList.remove('open'); } });
+    // mobile: the collapsed icon opens a full-width field under the header
+    on(el, 'click', (e) => { if (matchMedia('(max-width: 800px)').matches && !el.classList.contains('open')) { e.preventDefault(); el.classList.add('open'); requestAnimationFrame(() => el.querySelector('input').focus()); } });
     const key = (e) => {
         if (e.key === 'ArrowDown') { e.preventDefault(); sel.value = Math.min(sel.value + 1, results.value.length - 1); }
         else if (e.key === 'ArrowUp') { e.preventDefault(); sel.value = Math.max(sel.value - 1, 0); }
