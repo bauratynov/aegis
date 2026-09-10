@@ -65,3 +65,6 @@ export function fakeClock(start?: number): { now(): number; /** advance, garbage
 export function cleanup(): void;
 /** Run fn in a throwaway scope (signals/effects without a component) and dispose it afterwards */
 export function withScope<T>(fn: () => T | Promise<T>): Promise<T>;
+
+/** Детерминированный планировщик: виртуальное время, очереди micro/frame/idle/yield как списки, трасса запусков; INP-оракул для синтетического события */
+export function fakeScheduler(opts?: { cost?: (name: string) => number }): { now(): number; tick(ms: number): void; micro(): void; frame(): void; idle(): void; yields(): void; input(): void; trace: Array<[number, string, string]>; inp(t0: number): number; restore(): void };

@@ -42,7 +42,7 @@
         defineElement, anchor, router, command, virtualScroll,
         offlineResource,
         lazy, nextTick, i18n, uncloak, injectStyles,
-        VERSION, mount, cache, withRetry, leader, predictor, speculate, prefetchOn, onError, lens, signals, fieldArray, min, wizard, draft, live, busy, tabbables } from './aegis.js';
+        VERSION, mount, cache, withRetry, leader, predictor, speculate, prefetchOn, onError, lens, signals, fieldArray, min, wizard, draft, live, busy, tabbables, startTransition, deferred, transaction } from './aegis.js';
 
     const results = document.getElementById('results');
     const sandbox = document.getElementById('sandbox');
@@ -4931,6 +4931,64 @@
         assert('list(): порядок и идентичность узлов на 120 случайных перестановках', !bad, bad ? JSON.stringify(bad) : '');
         assert('list(): число перемещений не превышает mid − |LIS| + вставки (оптимальность LIS-сверки)', over === 0, over ? over + ' раз(а) больше оптимума' : '');
         sc3.dispose(); ul.remove();
+        reset();
+    })();
+
+    section('💎 фаза A3 — планировщик: классы дедлайнов, startTransition/deferred, nextTick ждёт все полосы, transaction()');
+
+    await (async () => {
+        const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+        // 1. startTransition: список не перерисовывается синхронно, pending, старый UI виден, latest-wins
+        const q = signal(''); const rows = signal([{ id: 1, n: 'apple' }, { id: 2, n: 'banana' }, { id: 3, n: 'cherry' }]);
+        const ul = document.createElement('ul'); sandbox.appendChild(ul);
+        let renders = 0;
+        const sc = createScope();
+        sc.run(() => ul.append(list(computed(() => { renders++; return rows.value.filter(r => r.n.includes(q.value)); }), (r) => html`<li>${r.n}</li>`)));
+        await sleep(0);
+        const before = ul.children.length;
+        renders = 0;
+        startTransition(() => { q.value = 'an'; });
+        assert('startTransition: синхронно список не тронут, pending = true', ul.children.length === before && startTransition.pending.value === true && renders === 0);
+        startTransition(() => { q.value = 'ban'; });
+        await nextTick();
+        assert('startTransition: после nextTick — один рендер с последним значением, pending = false', ul.children.length === 1 && ul.textContent === 'banana' && startTransition.pending.value === false);
+        sc.dispose(); ul.remove();
+
+        // 2. deferred(): ввод срочно, тень — в transition-полосе
+        const src = signal('a'); let dq; const seen = [];
+        const sc2 = createScope();
+        sc2.run(() => { dq = deferred(src); effect(() => { seen.push(src.value + '/' + dq.value); }); });
+        seen.length = 0; src.value = 'b';
+        assert('deferred: срочная привязка видит новое значение, тень — старое', seen.join() === 'b/a');
+        await nextTick();
+        assert('deferred: тень догоняет в transition-полосе', seen.join() === 'b/a,b/b');
+        sc2.dispose();
+
+        // 3. nextTick ждёт frame-полосу
+        const f = signal(0); const el = document.createElement('div'); sandbox.appendChild(el);
+        const sc3 = createScope();
+        sc3.run(() => effect(() => { el.textContent = 'f' + f.value; }, { flush: 'frame', name: 'frameEff' }));
+        f.value = 1;
+        assert('frame-полоса: до кадра DOM старый', el.textContent === 'f0');
+        await nextTick();
+        assert('nextTick: ждёт frame-полосу — DOM обновлён', el.textContent === 'f1');
+        sc3.dispose(); el.remove();
+
+        // 4. Обработчик on(): дешёвая работа остаётся синхронной (бюджет 40 мс не исчерпан), stats().sliced не растёт
+        const btn = document.createElement('button'); sandbox.appendChild(btn);
+        const s4 = signal(0); let ran = 0; const sc4 = createScope();
+        sc4.run(() => { for (let i = 0; i < 50; i++) effect(() => { s4.value; ran++; }); on(btn, 'click', () => { s4.value++; }); });
+        ran = 0; const slicedBefore = stats().sliced;
+        btn.click();
+        assert('on(): дешёвые эффекты под вводом выполняются синхронно, без срезов', ran === 50 && stats().sliced === slicedBefore);
+        sc4.dispose(); btn.remove();
+
+        // 5. transaction(): конфликт read-set → повтор с актуальным значением
+        const a = signal(1), b = signal(0); let attempts = 0;
+        const p = transaction(async ({ read, write }) => { attempts++; const x = read(a); await sleep(5); write(b, x * 10); return x; });
+        a.value = 7;
+        const r = await p;
+        assert('transaction: read-set валидирован — повтор после внешней записи, запись применена одним batch', attempts === 2 && r === 7 && b.value === 70 && a.subs === null);
         reset();
     })();
 

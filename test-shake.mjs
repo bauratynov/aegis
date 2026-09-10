@@ -25,7 +25,7 @@ const has = (b, ...names) => names.filter(n => b.decls.has(n));
 {
     const b = await bundle('signal, computed, effect, batch, createScope');
     ok('signals only: нет кэша / форм / IDB / DOM-движка', has(b, '_cacheEntry', '_MESSAGES', '_idb', '_parseTemplate', 'request', 'announce', '_runTransition').length === 0, has(b, '_cacheEntry', '_MESSAGES', '_idb', '_parseTemplate', 'request', 'announce', '_runTransition').join(','));
-    ok('signals only: ≤ 10 KB gzip', b.gz <= 10, b.gz.toFixed(1) + ' KB');
+    ok('signals only: ≤ 11.5 KB gzip (фаза A: Кан-порядок, heap-планировщик, контракты в dev)', b.gz <= 11.5, b.gz.toFixed(1) + ' KB');
 }
 // 2. DOM-подмножество админки (15 экспортов): кэш, IDB, формы, роутер не входят
 if (full) {
@@ -52,7 +52,7 @@ if (full) {
     ok('prod admin: dev-инспекторы выкинуты (_lev, _nearest, _snippet, _zombieCheck, _inspectScope)', has(p, '_lev', '_nearest', '_snippet', '_zombieCheck', '_inspectScope').length === 0, has(p, '_lev', '_nearest', '_snippet', '_zombieCheck', '_inspectScope').join(','));
     ok('prod admin: ≤ 17 KB gzip', p.gz <= 17, p.gz.toFixed(1) + ' KB');
     const ps = await bundle('signal, computed, effect, batch, createScope', true);
-    ok('prod signals only: ≤ 5.5 KB gzip', ps.gz <= 5.5, ps.gz.toFixed(1) + ' KB');
+    ok('prod signals only: ≤ 6.5 KB gzip (долг фазы K: бюджеты секций)', ps.gz <= 6.5, ps.gz.toFixed(1) + ' KB');
     const pi = await bundle('island, mount, html, list, show, when, signal, computed, effect, on, bind, hydrate', true);
     ok('prod islands: ≤ 24 KB gzip', pi.gz <= 24, pi.gz.toFixed(1) + ' KB');
     // прод-бандл работает: сигналы/эффекты живут, предупреждения молчат

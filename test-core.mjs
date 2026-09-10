@@ -3,6 +3,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
     signal, computed, effect, batch, untrack, isSignal, createScope, onDispose, onError, flush, signals,
+    startTransition, deferred, transaction,
 } from './aegis.js';
 import { fuzzGraph } from './fuzz-graph.mjs';
 
@@ -486,4 +487,54 @@ test('L1: эффект, созданный в теле запуска, имее�
     sc.dispose();                           // scope → внешний эффект → _killKids → внутренний
     s.value = 3;
     assert.equal(inner, 3);
+});
+
+// ── фаза A3: планировщик
+test('startTransition: записи не запускают эффекты синхронно, pending сигнал, latest-wins, flush() дренирует', () => {
+    const q = signal(''); const seen = [];
+    const sc = createScope();
+    sc.run(() => effect(() => { seen.push(q.value); }));
+    seen.length = 0;
+    startTransition(() => { q.value = 'a'; });
+    assert.deepEqual(seen, []);
+    assert.equal(startTransition.pending.value, true);
+    startTransition(() => { q.value = 'ab'; });
+    flush();
+    assert.deepEqual(seen, ['ab']);            // два перехода — один запуск с последним значением
+    assert.equal(startTransition.pending.value, false);
+    sc.dispose();
+});
+
+test('deferred(): тень сигнала обновляется в transition-полосе, срочная привязка — сразу', () => {
+    const q = signal('x'); let dq; const seen = [];
+    const sc = createScope();
+    sc.run(() => { dq = deferred(q); effect(() => { seen.push(q.value + '/' + dq.value); }); });
+    seen.length = 0;
+    q.value = 'y';
+    assert.deepEqual(seen, ['y/x']);           // срочная часть видит новое, тень — старое
+    flush();
+    assert.deepEqual(seen, ['y/x', 'y/y']);
+    sc.dispose();
+});
+
+test('transaction(): read-set валидируется на commit — конфликт → повтор с новым значением, onConflict → abort', async () => {
+    const a = signal(1), b = signal(1); let attempts = 0;
+    const p = transaction(async ({ read, write }) => {
+        attempts++;
+        const x = read(a);
+        await new Promise(r => setTimeout(r, 5));
+        write(b, x + 1);
+        return x;
+    });
+    a.value = 10;                               // внешняя запись во время await
+    const r = await p;
+    assert.equal(attempts, 2);
+    assert.equal(r, 10);
+    assert.equal(b.value, 11);
+    assert.equal(a.subs, null);                 // фантомный наблюдатель не подписывается
+    let conflict = null;
+    const p2 = transaction(async ({ read }) => { read(a); await new Promise(r => setTimeout(r, 5)); return 1; }, { retries: 0, onConflict: (c) => { conflict = c; return 'abort'; } });
+    a.value = 20;
+    await assert.rejects(p2, /transaction conflict/);
+    assert.equal(conflict[0].name, 'signal');
 });

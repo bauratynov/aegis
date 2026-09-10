@@ -7,7 +7,7 @@
  *   await waitFor(() => t.text().includes('6'));
  *   t.unmount();
  */
-import { mount, destroy, settled, reset, configure, defaults, flushSync, batch, createScope, useClock, cache } from './aegis.js';
+import { mount, destroy, settled, reset, configure, defaults, flushSync, batch, createScope, useClock, useScheduler, cache } from './aegis.js';
 
 /**
  * Детерминированные часы кэша: staleTime, cacheTime и GC идут по ним, Date.now не трогается.
@@ -151,4 +151,36 @@ export function cleanup() {
 export async function withScope(fn) {
     const scope = createScope('test');
     try { return await scope.run(() => batch(fn)); } finally { scope.dispose(); }
+}
+
+/**
+ * Детерминированный планировщик для тестов отзывчивости: виртуальное время, очереди micro/frame/idle/yield как явные списки,
+ * cost(name) — виртуальная стоимость запуска эффекта, trace — [t, lane, effect]. inp(t0) — INP-оракул синтетического события:
+ * конец синхронной части − t0 + presentation до границы кадра 16.7 мс.
+ */
+export function fakeScheduler({ cost = () => 0.5 } = {}) {
+    let t = 0, pending = false, endSync = 0;
+    const q = { micro: [], frame: [], idle: [], yield: [] }, trace = [];
+    const restore = useScheduler({
+        now: () => t,
+        micro: (f) => q.micro.push(f),
+        frame: (f) => q.frame.push(f),
+        idle: (f) => q.idle.push(f),
+        yield: () => new Promise(r => q.yield.push(r)),
+        inputPending: () => pending,
+        onRun: (obs, lane) => { t += cost(obs._name); trace.push([t, lane, obs._name]); if (lane === 'sync') endSync = t; },
+    });
+    const drain = (k) => { const l = q[k]; q[k] = []; for (const f of l) f(k === 'idle' ? { timeRemaining: () => 8, didTimeout: false } : t); };
+    return {
+        now: () => t,
+        tick: (ms) => { t += ms; },
+        micro: () => drain('micro'),
+        frame: () => { t = Math.ceil(t / 16.7) * 16.7; drain('frame'); },
+        idle: () => drain('idle'),
+        yields: () => { pending = false; drain('yield'); },
+        input: () => { pending = true; },
+        trace,
+        inp: (t0) => endSync - t0 + (16.7 - ((endSync - t0) % 16.7)),
+        restore,
+    };
 }

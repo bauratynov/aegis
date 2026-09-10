@@ -209,6 +209,37 @@ let _win = 0;                // окно backdating: внешний batch / за
 let _runSeq = 0;             // штамп запуска observer'а: k-е чтение того же источника в одном запуске — O(1) без мутаций графа
 let _writer = null;          // эффект, выполняющийся сейчас: его записи становятся выученными рёбрами writer → observer для порядка раунда
 const _MAX_ROUNDS = 100;     // раундов flush до признания цикла бесконечным
+// ---- планировщик: время и очереди платформы через одну точку (подменяется useScheduler / fakeScheduler в тестах)
+let _sched = {
+    now: () => (typeof performance !== 'undefined' ? performance.now() : Date.now()),
+    micro: (f) => queueMicrotask(f),
+    frame: (f) => (typeof requestAnimationFrame === 'function' ? requestAnimationFrame(f) : setTimeout(f, 16)),
+    idle: (f) => (typeof requestIdleCallback === 'function' ? requestIdleCallback(f) : setTimeout(() => f({ timeRemaining: () => 50, didTimeout: true }), 1)),
+    yield: () => (globalThis.scheduler && typeof scheduler.yield === 'function') ? scheduler.yield()
+        : new Promise(r => { if (typeof setImmediate === 'function') setImmediate(r); else if (typeof MessageChannel === 'function') { const c = new MessageChannel(); c.port1.onmessage = () => { c.port1.close(); r(); }; c.port2.postMessage(0); } else setTimeout(r, 0); }),   // MessageChannel: макрозадача без 4-мс клампа; порт закрывается, чтобы не держать event loop
+    inputPending: () => !!(typeof navigator !== 'undefined' && navigator.scheduling && navigator.scheduling.isInputPending && navigator.scheduling.isInputPending({ includeContinuous: false })),
+    onRun: null,             // (obs, lane) — трассировка запусков (fakeScheduler / профилировщик)
+};
+/** Подменить время и очереди планировщика (тесты, симуляции): useScheduler({ now, micro, frame, idle, yield, inputPending }) → restore */
+export function useScheduler(impl) { const prev = _sched; _sched = { ...prev, ...impl }; return () => { _sched = prev; }; }
+/**
+ * Классы дедлайнов (EDF): полоса — не приоритет, а срок от причины записи. input: обработчик on() — синхронно, пока не истёк
+ * бюджет long task (40 мс) и нет ожидающего ввода, остаток — продолжениями через scheduler.yield() срезами по 8 мс;
+ * transition: startTransition() — никогда синхронно, latest-wins, старый UI виден; idle: effect(fn, { flush: 'idle' }).
+ * Вытеснение только на границе компонент-группы (корневой scope), чтобы один компонент не рвался между кадрами.
+ */
+const _D = { input: 50, transition: 250, idle: 2000 };
+let _cause = null;           // { lane, t0 } — причина текущей записи (on() → input, startTransition → transition)
+const _heap = [];            // min-heap наблюдателей по дедлайну _dl (tie-break — порядок создания)
+let _heapArmed = false, _slicing = false, _transCount = 0;
+const _settleRes = [];       // ожидающие nextTick(): резолвятся, когда heap и полосы пусты
+function _hless(a, b) { return a._dl < b._dl || (a._dl === b._dl && a._ord < b._ord); }
+function _hpush(o) { const h = _heap; h.push(o); let i = h.length - 1; while (i > 0) { const p = (i - 1) >> 1; if (!_hless(h[i], h[p])) break; [h[i], h[p]] = [h[p], h[i]]; i = p; } }
+function _hpop() {
+    const h = _heap, top = h[0], last = h.pop();
+    if (h.length) { h[0] = last; let i = 0; for (;;) { const l = 2 * i + 1, r = l + 1; let m = i; if (l < h.length && _hless(h[l], h[m])) m = l; if (r < h.length && _hless(h[r], h[m])) m = r; if (m === i) break; [h[i], h[m]] = [h[m], h[i]]; i = m; } }
+    return top;
+}
 // флаги observer'ов — одно Smi-слово вместо девяти булевых полей (один hidden class, один and+branch)
 const F_COMPUTED = 1, F_DIRTY = 2, F_COMPUTING = 4, F_DISPOSED = 8, F_LIVE = 16, F_QUEUED = 32, F_COUNTED = 64, F_TRACE = 128, F_OWN = 256, F_ASYNC = 512;
 const _DUR = { low: 0, medium: 1, high: 2 };
@@ -693,6 +724,7 @@ class Effect {
         this._rs = 0;               // штамп запуска (_track)
         this._fan = null;           // выученные рёбра: observers, поставленные в очередь записями этого запуска
         this._pe = null;            // эффект-владелец (усыновивший запуск) — раньше в раунде
+        this._dl = 0; this._dlLane = null;   // дедлайн и класс в heap (input-хвост / transition / idle)
     }
     get _disposed() { return (this._f & F_DISPOSED) !== 0; }
     get _queued() { return (this._f & F_QUEUED) !== 0; }
@@ -770,7 +802,8 @@ export function effect(fn, nameOrOpts) {
     const owner = _currentScope;
     let name = typeof nameOrOpts === 'string' ? nameOrOpts : (nameOrOpts && nameOrOpts.name) || null;
     const trace = !!(nameOrOpts && typeof nameOrOpts === 'object' && nameOrOpts.trace);
-    const lane = nameOrOpts && typeof nameOrOpts === 'object' && (nameOrOpts.flush === 'micro' || nameOrOpts.flush === 'frame') ? nameOrOpts.flush : null;
+    const fl = nameOrOpts && typeof nameOrOpts === 'object' ? nameOrOpts.flush : null;
+    const lane = fl === 'micro' || fl === 'frame' || fl === 'transition' || fl === 'idle' ? fl : null;   // transition/idle — классы дедлайнов (heap)
     const explicitName = !!name;                   // именованные (движок, пользователь с name) — без детектора E019
     if (!name && (!globalThis.AEGIS_PROD && _dev())) name = fn.name || null;   // авто-имя в dev: function search() {…} → "search"
     const site = (!globalThis.AEGIS_PROD && _dev()) ? ((name && /[:@]/.test(name)) ? _curSite : _callSite()) : null;
@@ -820,6 +853,7 @@ class Subscriber {
         this._f = 0;
         this._unreg = null;
         this._fan = null; this._pe = null;
+        this._dl = 0; this._dlLane = null;
     }
     get _disposed() { return (this._f & F_DISPOSED) !== 0; }
     get _queued() { return (this._f & F_QUEUED) !== 0; }
@@ -905,8 +939,10 @@ function _notify(subs) {
         for (const obs of subs) {                      // без копии: в push-фазе subs не пополняется
             if (obs._f & F_DISPOSED) { subs.delete(obs); continue; }
             if (obs._isComputed) obs._run();           // push: dirty по цепочке
-            else if (obs._lane) _enqueueLane(obs);       // отложенная полоса: microtask / кадр
-            else if (!(obs._f & F_QUEUED)) _enqueue(obs); // effects никогда не запускаются inline
+            else if (obs._f & F_QUEUED) continue;
+            else if (obs._lane) { if (obs._lane === 'micro' || obs._lane === 'frame') _enqueueLane(obs); else _enqueueDl(obs, obs._lane, _sched.now()); }   // явная полоса эффекта
+            else if (_cause && _cause.lane !== 'input') _enqueueDl(obs, _cause.lane, _cause.t0);   // transition: никогда синхронно
+            else _enqueue(obs);                         // sync и input: очередь flush (input — с бюджетом времени)
         }
     } finally {
         _notifyDepth--;
@@ -962,9 +998,92 @@ function _enqueueLane(obs) {
     _lanes[obs._lane].push(obs);
     if (!_laneScheduled[obs._lane]) {
         _laneScheduled[obs._lane] = true;
-        if (obs._lane === 'micro') queueMicrotask(() => _runLane('micro'));
-        else (typeof requestAnimationFrame === 'function' ? requestAnimationFrame : (cb) => setTimeout(cb, 16))(() => _runLane('frame'));
+        if (obs._lane === 'micro') _sched.micro(() => _runLane('micro'));
+        else _sched.frame(() => _runLane('frame'));
     }
+}
+/** Положить наблюдателя в heap с дедлайном класса; взвести дренаж */
+function _enqueueDl(obs, lane, t0) {
+    obs._f |= F_QUEUED;
+    obs._dl = t0 + (_D[lane] || _D.transition); obs._dlLane = lane;
+    if (lane === 'transition' && ++_transCount === 1) _transPending.value = true;
+    _hpush(obs);
+    _armHeap(lane);
+}
+function _armHeap(lane) {
+    if (_heapArmed) return;
+    _heapArmed = true;
+    if (lane === 'idle') _sched.idle((d) => { _heapArmed = false; _runSlice(_sched.now() + Math.max(2, d && d.timeRemaining ? d.timeRemaining() : 8)); });
+    else _sched.yield().then(() => { _heapArmed = false; _runSlice(_sched.now() + 8); });
+}
+function _rootOf(sc) { while (sc && sc.parent) sc = sc.parent; return sc; }
+/** Один срез: элементы heap по дедлайну, вытеснение на границе компонент-группы по бюджету или ожидающему вводу */
+function _runSlice(end) {
+    if (_slicing) return;
+    _slicing = true;
+    let prevRoot = null, ran = 0, errors = null;
+    try {
+        while (_heap.length) {
+            const obs = _heap[0];
+            const root = _rootOf(obs._owner);
+            if (ran && root !== prevRoot && (_sched.now() > end || _sched.inputPending())) { _armHeap(obs._dlLane); return; }
+            _hpop(); prevRoot = root; ran++;
+            obs._f &= ~F_QUEUED;
+            if (obs._dlLane === 'transition' && --_transCount === 0) _transPending.value = false;
+            if (obs._f & F_DISPOSED) continue;
+            if (_sched.onRun) _sched.onRun(obs, obs._dlLane);
+            try { obs._run(); } catch (e) { if (!_dispatchError(obs._owner, e)) (errors || (errors = [])).push(e); }
+        }
+    } finally {
+        _slicing = false;
+        if (!_heap.length) _settle();
+        if (!globalThis.AEGIS_PROD && _obsReg) _checkGraph('slice');
+    }
+    if (errors) _reportErrors(errors);
+}
+function _settle() { if (_heap.length || _lanes.micro.length || _lanes.frame.length) return; const r = _settleRes.splice(0); for (const f of r) f(); }
+/** Promise: heap и полосы пусты (для nextTick) */
+function _whenSettled() { return (_heap.length || _lanes.micro.length || _lanes.frame.length || _heapArmed) ? new Promise(r => _settleRes.push(r)) : Promise.resolve(); }
+const _transPending = /* @__PURE__ */ signal(false, 'transition:pending');
+/**
+ * Несрочное обновление: записи внутри не запускают эффекты синхронно — они идут в класс transition (дедлайн 250 мс) срезами
+ * после текущей задачи; повторная запись до дренажа схлопывается (latest-wins без второго состояния), старый UI виден.
+ *   startTransition(() => { query.value = q; });  startTransition.pending — сигнал «есть отложенная работа»
+ */
+export const startTransition = /* @__PURE__ */ Object.assign(function startTransition(fn) {
+    const prev = _cause; _cause = { lane: 'transition', t0: _sched.now() };
+    try { return batch(fn); } finally { _cause = prev; }
+}, { get pending() { return _transPending; } });
+/**
+ * Отложенная тень сигнала (useDeferredValue / createDeferred): ввод привязан к src (срочно), тяжёлый список — к deferred(src):
+ * поле отзывается мгновенно, список обновляется в transition-полосе, старый виден до готовности нового.
+ */
+export function deferred(src, opts = {}) {
+    const out = signal(src.peek(), 'deferred');
+    effect(() => { out.value = src.value; }, { flush: opts.lane || 'transition', name: 'deferred' });
+    return computed(() => out.value, 'deferred');
+}
+/**
+ * Оптимистичная транзакция для асинхронной работы (OCC: Kung & Robinson): fn({ read, write }) читает сигналы через read —
+ * пары (источник, версия) запоминаются без подписки; на commit read-set валидируется по версиям, при конфликте —
+ * повтор (retries) или onConflict(changed) → 'abort'; записи применяются одним batch. Защита от write skew между await.
+ */
+export function transaction(fn, { retries = 3, onConflict } = {}) {
+    const run = async (attempt) => {
+        const tx = { _isComputed: true, _f: F_COMPUTED, _ord: ++_ordSeq, _rs: ++_runSeq, _deps: null, _vers: null, _n: 0, _evict: null, _name: 'transaction', writes: new Map(), attempt };
+        const read = (sig) => { const prev = _tracking; _tracking = tx; try { return sig.value; } finally { _tracking = prev; } };
+        const write = (sig, v) => { tx.writes.set(sig, v); };
+        const r = await fn({ read, write, attempt });
+        if (tx._deps && tx._deps.length && _depsChanged(tx)) {
+            const changed = _changedDeps(tx);
+            if (onConflict && onConflict(changed) === 'abort') throw Object.assign(new Error('[Aegis] transaction conflict: ' + changed.map(d => d.name).join(', ') + ' changed while it was awaiting'), { changed });
+            if (attempt < retries) return run(attempt + 1);
+            throw Object.assign(new Error('[Aegis] transaction gave up after ' + retries + ' retries: ' + changed.map(d => d.name).join(', ')), { changed });
+        }
+        batch(() => { for (const [sig, v] of tx.writes) sig.value = v; });
+        return r;
+    };
+    return run(0);
 }
 function _runLane(lane) {
     _laneScheduled[lane] = false;
@@ -988,6 +1107,7 @@ function _runLane(lane) {
         }
     } finally {
         _laneScheduled[lane] = false;
+        _settle();
         if (!globalThis.AEGIS_PROD && _obsReg) _checkGraph(lane + ' lane');
         if (rounds > 3) _warn('E027', !globalThis.AEGIS_PROD && {
             what: `${lane} lane took ${rounds} rounds — effects keep writing signals other effects depend on.`,
@@ -1001,13 +1121,16 @@ function _runLane(lane) {
 export function flush() {
     _runLane('micro');
     _runLane('frame');
+    while (_heap.length) { const o = _hpop(); o._f &= ~F_QUEUED; if (o._dlLane === 'transition') _transCount--; if (!(o._f & F_DISPOSED)) o._run(); }
+    if (_transCount <= 0) { _transCount = 0; if (_transPending.peek()) _transPending.value = false; }
     _flush();
+    _settle();
 }
 
 // ---- профилирование (Aegis.dev.profile(true)) и stats()
 let _profiling = false;
 let _profileMark = null;   // разметка Performance-панели — ставится dev.profile() (секция 3), ядро её не тянет
-const _stats = { flushes: 0, effectRuns: 0, maxRounds: 0, slow: [], reordered: 0 };
+const _stats = { flushes: 0, effectRuns: 0, maxRounds: 0, slow: [], reordered: 0, sliced: 0 };
 let _liveEffects = 0, _liveScopes = 0;
 
 function _flush() {
@@ -1036,6 +1159,17 @@ function _flush() {
                     obs._f &= ~F_QUEUED;
                     if (obs._f & F_DISPOSED) continue;
                     if (names && names.length < 30) names.push(obs._name);
+                    if (_cause && _cause.lane === 'input' && i && (_sched.now() - _cause.t0 > _D.input - 10 || ((i & 15) === 15 && _sched.inputPending()))) {
+                        // бюджет long task исчерпан или ждёт ввод: остаток раунда и очереди — в класс input (дедлайн t0 + 50 мс), продолжение после yield
+                        for (let j = i; j < round.length; j++) { const o = round[j]; if (o._f & F_DISPOSED) o._f &= ~F_QUEUED; else { o._dl = _cause.t0 + _D.input; o._dlLane = 'input'; _hpush(o); } }
+                        for (const o of _qa) { if (o._f & F_DISPOSED) o._f &= ~F_QUEUED; else { o._dl = _cause.t0 + _D.input; o._dlLane = 'input'; _hpush(o); } }
+                        _qa.length = 0; _qSorted = true; _qLastOrd = 0; _qEdges = false;
+                        round.length = 0; i = 0;
+                        _stats.sliced++;
+                        _armHeap('input');
+                        break;
+                    }
+                    if (_sched.onRun) _sched.onRun(obs, 'sync');
                     try {
                         if (_profiling) {
                             const ts = performance.now();

@@ -65,12 +65,20 @@ export interface EffectOptions {
     /** печатать причину каждого перезапуска (dev) */
     trace?: boolean;
     /** 'sync' (default) — синхронно; 'micro' — один запуск за микротаск; 'frame' — один запуск за кадр */
-    flush?: 'sync' | 'micro' | 'frame';
+    flush?: 'sync' | 'micro' | 'frame' | 'transition' | 'idle';   // transition/idle — классы дедлайнов (250 мс / 2 с), дренаж срезами после текущей задачи
 }
 export function effect(fn: () => void | (() => void), nameOrOpts?: string | EffectOptions): () => void;
 /** Отладка: печатать стек каждой записи в сигнал. trace(sig, false) — выключить */
 export function trace<T extends Signal<any>>(sig: T, on?: boolean): T;
 export function batch<T>(fn: () => T): T;
+/** Несрочное обновление: записи внутри идут в класс transition (дедлайн 250 мс) срезами после текущей задачи; повторная запись до дренажа схлопывается, старый UI виден. startTransition.pending — сигнал */
+export const startTransition: (<T>(fn: () => T) => T) & { readonly pending: ReadonlySignal<boolean> };
+/** Отложенная тень сигнала (useDeferredValue): ввод привязан к src, тяжёлый список — к deferred(src) */
+export function deferred<T>(src: Signal<T> | ReadonlySignal<T>, opts?: { lane?: 'transition' | 'idle' }): ReadonlySignal<T>;
+/** Оптимистичная транзакция (OCC): read(sig) запоминает версии без подписки; на commit read-set валидируется, при конфликте — повтор (retries) или onConflict → 'abort'; записи применяются одним batch */
+export function transaction<T>(fn: (tx: { read<V>(sig: Signal<V> | ReadonlySignal<V>): V; write<V>(sig: Signal<V>, value: V): void; attempt: number }) => Promise<T> | T, opts?: { retries?: number; onConflict?: (changed: Array<{ name: string; value: string }>) => 'abort' | void }): Promise<T>;
+/** Подменить время и очереди планировщика (тесты, симуляции); возвращает restore */
+export function useScheduler(impl: Partial<{ now(): number; micro(f: () => void): void; frame(f: (t?: number) => void): void; idle(f: (d: { timeRemaining(): number; didTimeout: boolean }) => void): void; yield(): Promise<void>; inputPending(): boolean; onRun: ((obs: { _name: string }, lane: string) => void) | null }>): () => void;
 
 // ── Dev & testing ──────────────────────────────────────────────
 
@@ -665,6 +673,8 @@ export function resource<T = unknown, P = unknown>(source: LoaderSource<P, T>, o
 export function settled(): Promise<void>;
 
 export interface MutationOptions<A extends unknown[]> {
+    /** 'validate' — сигналы, прочитанные через ctx.read до ответа, валидируются по версиям на commit (OCC): изменились → патч снят, ключи перечитаны, E052 в dev */
+    isolation?: 'validate';
     /** ресурсы, чьи data снимаются перед optimistic и откатываются при ошибке */
     resources?: Array<{ data: { peek(): any }; mutate(v: any): void }>;
     optimistic?: (...args: A) => void;
@@ -699,7 +709,7 @@ export interface Mutation<A extends unknown[], R> {
  * Мутация с pending, double-submit guard, optimistic + rollback, invalidate.
  *   const addTodo = mutation((text, { signal }) => api.post('/api/todos', { text }, { signal }), { resources: [todos], optimistic: … });
  */
-export function mutation<A extends unknown[], R>(fn: (...args: [...A, { signal: AbortSignal; /** ETag затронутого ресурса для If-Match */ etag: string | null }]) => Promise<R> | R, opts?: MutationOptions<A>): Mutation<A, R>;
+export function mutation<A extends unknown[], R>(fn: (...args: [...A, { signal: AbortSignal; /** isolation: 'validate' — чтение сигнала с запоминанием версии (OCC) */ read<V>(sig: Signal<V> | ReadonlySignal<V>): V; /** ETag затронутого ресурса для If-Match */ etag: string | null }]) => Promise<R> | R, opts?: MutationOptions<A>): Mutation<A, R>;
 
 export interface StreamOptions<T> {
     method?: string;
