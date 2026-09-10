@@ -5064,6 +5064,105 @@
         reset();
     })();
 
+    section('💎 фаза B2 — list(): дельты reactive-массивов, moveBefore, rebuild-план, стриминговая досборка, view transitions, гибернация');
+
+    await (async () => {
+        const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+        const row = (it) => html`<li>${it.n}</li>`;
+        // 1. Дельты reactive-массива: push/splice — O(|Δ|) мутаций DOM, без полной сверки
+        const rr = reactive([{ id: 1, n: 'a' }, { id: 2, n: 'b' }, { id: 3, n: 'c' }]);
+        const ul = document.createElement('ul'); sandbox.appendChild(ul);
+        const sc = createScope();
+        sc.run(() => ul.append(list(rr, row)));
+        await sleep(0);
+        const mo = new MutationObserver(() => {}); mo.observe(ul, { childList: true });
+        rr.push({ id: 4, n: 'd' });
+        let recs = mo.takeRecords();
+        assert('дельта: push → одна childList-мутация с одним добавленным узлом', recs.length === 1 && recs[0].addedNodes.length === 1 && ul.textContent === 'abcd');
+        rr.splice(1, 1);
+        recs = mo.takeRecords();
+        assert('дельта: splice(1,1) → одна мутация, порядок верный', recs.length === 1 && recs[0].removedNodes.length === 1 && ul.textContent === 'acd');
+        rr.unshift({ id: 5, n: 'z' });
+        assert('дельта: unshift — строка встала первой', ul.textContent === 'zacd' && ul.children[0].textContent === 'z');
+        rr[2] = { id: 6, n: 'Q' };
+        assert('дельта: запись по индексу — replace на месте', ul.textContent === 'zaQd');
+        rr.sort((x, y) => x.n.localeCompare(y.n));
+        assert('дельта: sort → сброс лога, полная сверка даёт верный порядок', ul.textContent === rr.map(x => x.n).join(''));
+        mo.disconnect(); sc.dispose(); ul.remove();
+
+        // 2. Identity-trim иммутабельных массивов: замена одного объекта из 300 — ключи только для середины (проверяем корректность)
+        const big = signal(Array.from({ length: 300 }, (_, i) => ({ id: i, n: 'r' + i })));
+        const ul2 = document.createElement('ul'); sandbox.appendChild(ul2);
+        const sc2 = createScope(); sc2.run(() => ul2.append(list(big, row)));
+        await sleep(0);
+        const next = big.peek().slice(); next[150] = { id: 150, n: 'X' };
+        big.value = next;
+        assert('identity-trim: одна замена в середине — строка перерисована, остальные на месте', ul2.children[150].textContent === 'X' && ul2.children.length === 300 && ul2.children[0].textContent === 'r0');
+        // 3. Rebuild-план: разворот 300 строк — план rebuild, порядок верный, scope строк живы (эффекты не пересозданы)
+        const effBefore = stats().effects;
+        big.value = big.peek().slice().reverse();
+        const plan = dev.plans().at(-1);
+        assert('rebuild-план: разворот 300 строк выбирает rebuild и даёт верный порядок', plan && plan.plan === 'rebuild' && ul2.children[0].textContent === 'r299' && ul2.children[299].textContent === 'r0');
+        assert('rebuild-план: строки не пересозданы (число эффектов не выросло)', stats().effects === effBefore);
+        sc2.dispose(); ul2.remove();
+
+        // 4. moveBefore: фокус в переставляемой строке сохраняется (если платформа поддерживает)
+        if ('moveBefore' in Element.prototype) {
+            const o1 = { id: 1 }, o2 = { id: 2 }, o3 = { id: 3 };
+            const items = signal([o1, o2, o3]);
+            const ul3 = document.createElement('ul'); document.body.appendChild(ul3);
+            const sc3 = createScope(); sc3.run(() => ul3.append(list(items, (it) => html`<li><input value=${'v' + it.id}></li>`)));
+            await sleep(0);
+            const inp = ul3.querySelectorAll('input')[1]; inp.focus(); inp.setSelectionRange(1, 2);
+            items.value = [o3, o2, o1];   // те же объекты — строки переставляются, а не перерисовываются
+            assert('moveBefore: фокус и выделение переживают перестановку строк', document.activeElement === inp && inp.selectionStart === 1 && inp.selectionEnd === 2 && ul3.textContent === '' && ul3.querySelectorAll('input')[1] === inp);
+            sc3.dispose(); ul3.remove();
+        }
+
+        // 5. Стриминговая досборка под startTransition: большие вставки идут срезами, pending-сигнал, всё на месте после nextTick
+        const pending = signal(false);
+        const many = signal([]);
+        const ul4 = document.createElement('ul'); sandbox.appendChild(ul4);
+        const sc4 = createScope(); sc4.run(() => ul4.append(list(many, row, { pending })));
+        await sleep(0);
+        startTransition(() => { many.value = Array.from({ length: 400 }, (_, i) => ({ id: i, n: 'n' + i })); });
+        await nextTick();
+        assert('streaming: после nextTick все строки на месте и в порядке', ul4.children.length === 400 && ul4.children[0].textContent === 'n0' && ul4.children[399].textContent === 'n399' && pending.value === false);
+        sc4.dispose(); ul4.remove();
+
+        // 6. View transitions: одна document.startViewTransition на flush для двух списков, DOM уже переставлен внутри колбэка
+        const origVT = document.startViewTransition; let vtCalls = 0, insideOrder = null;
+        document.startViewTransition = (cb) => { vtCalls++; cb(); insideOrder = ul5.textContent; return { ready: Promise.resolve(), finished: Promise.resolve(), updateCallbackDone: Promise.resolve() }; };
+        const va = signal([{ id: 1, n: 'a' }, { id: 2, n: 'b' }]), vb = signal([{ id: 1, n: 'x' }]);
+        const ul5 = document.createElement('ul'), ul6 = document.createElement('ul'); sandbox.append(ul5, ul6);
+        const sc5 = createScope(); sc5.run(() => { ul5.append(list(va, row, { transition: 'view' })); ul6.append(list(vb, row, { transition: 'view' })); });
+        await nextTick(); await sleep(0);
+        vtCalls = 0;
+        batch(() => { va.value = [{ id: 2, n: 'b' }, { id: 1, n: 'a' }]; vb.value = [{ id: 1, n: 'x' }, { id: 2, n: 'y' }]; });
+        await nextTick(); await sleep(0);
+        assert('view transitions: одна startViewTransition на две сверки, DOM переставлен внутри колбэка', vtCalls === 1 && insideOrder === 'ba' && ul6.textContent === 'xy');
+        assert('view transitions: строки получили уникальные view-transition-name', new Set([...ul5.children, ...ul6.children].map(li => li.style.viewTransitionName)).size === 4);
+        document.startViewTransition = origVT; sc5.dispose(); ul5.remove(); ul6.remove();
+
+        // 7. Гибернация: строки чанка вне экрана замораживаются (эффекты умирают, DOM — снимок), оттаивают с актуальными данными
+        if (typeof ContentVisibilityAutoStateChangeEvent === 'function') {
+            const hv = signal('one');
+            const hitems = signal([{ id: 1 }, { id: 2 }]);
+            const ul7 = document.createElement('ul'); sandbox.appendChild(ul7);
+            const sc7 = createScope(); sc7.run(() => ul7.append(list(hitems, (it) => html`<li>${() => it.id + ':' + hv.value}</li>`, { hibernate: true })));
+            await sleep(0);
+            const before = stats().effects;
+            ul7.dispatchEvent(new ContentVisibilityAutoStateChangeEvent('contentvisibilityautostatechange', { skipped: true }));
+            assert('hibernate: skipped → эффекты строк уничтожены, DOM остался снимком', stats().effects < before && ul7.textContent === '1:one2:one');
+            hv.value = 'two';
+            assert('hibernate: замороженные строки не обновляются', ul7.textContent === '1:one2:one');
+            ul7.dispatchEvent(new ContentVisibilityAutoStateChangeEvent('contentvisibilityautostatechange', { skipped: false }));
+            assert('hibernate: оттаивание перерисовывает строки с актуальным значением', ul7.textContent === '1:two2:two' && stats().effects === before);
+            sc7.dispose(); ul7.remove();
+        }
+        reset();
+    })();
+
     section('component() & destroy()');
 
     (() => {

@@ -72,6 +72,8 @@ const dev = {
     contracts: 'sampled',
     /** Объяснение кода предупреждения (ERRORS.md) в консоль: Aegis.dev.explain('E019') */
     explain(code) { return import(/* @vite-ignore */ new URL('./aegis-devtools.js', import.meta.url).href).then(m => m.explain(code)); },
+    /** EXPLAIN ANALYZE последних сверок list(): { plan: 'keyed' | 'rebuild', n, kept, lis, moves, ms } */
+    plans() { return _ext.plans ? _ext.plans() : []; },
     /** Снимок кэша ресурсов: Aegis.dev.cache() → console.table */
     cache() { return _ext.cacheStats ? _ext.cacheStats() : []; },
     /** Панель инспектора в странице (aegis-devtools.js рядом с модулем): компоненты, сигналы, эффекты, stats, предупреждения */

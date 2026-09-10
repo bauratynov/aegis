@@ -50,11 +50,11 @@ if (full) {
     const p = await bundle('signal, effect, computed, component, mount, html, text, attr, cls, show, list, bind, on, debounced, batch', true);
     ok('prod admin: ни одного what/why/fix', !/\b(?:what|why|fix):\s*["'`]/.test(p.minJs), String((p.minJs.match(/\bwhat:/g) || []).length));
     ok('prod admin: dev-инспекторы выкинуты (_lev, _nearest, _snippet, _zombieCheck, _inspectScope)', has(p, '_lev', '_nearest', '_snippet', '_zombieCheck', '_inspectScope').length === 0, has(p, '_lev', '_nearest', '_snippet', '_zombieCheck', '_inspectScope').join(','));
-    ok('prod admin: ≤ 18.5 KB gzip (фаза B1: committers, программа обхода, fusion)', p.gz <= 18.5, p.gz.toFixed(1) + ' KB');
+    ok('prod admin: ≤ 21 KB gzip (фазы B1–B2: committers, программа обхода, fusion, list с дельтами/планером/гибернацией)', p.gz <= 21, p.gz.toFixed(1) + ' KB');
     const ps = await bundle('signal, computed, effect, batch, createScope', true);
     ok('prod signals only: ≤ 6.5 KB gzip (долг фазы K: бюджеты секций)', ps.gz <= 6.5, ps.gz.toFixed(1) + ' KB');
     const pi = await bundle('island, mount, html, list, show, when, signal, computed, effect, on, bind, hydrate', true);
-    ok('prod islands: ≤ 25 KB gzip', pi.gz <= 25, pi.gz.toFixed(1) + ' KB');
+    ok('prod islands: ≤ 28 KB gzip', pi.gz <= 28, pi.gz.toFixed(1) + ' KB');
     // прод-бандл работает: сигналы/эффекты живут, предупреждения молчат
     const { writeFileSync, mkdtempSync } = await import('node:fs');
     const { tmpdir } = await import('node:os');
@@ -73,7 +73,7 @@ if (full) {
     const a = await bundle('island, mount, html, list, show, when, signal, computed, effect, on, bind, hydrate');
     const bad = has(a, '_cacheEntry', '_fetchEntry', '_idb', '_MESSAGES', 'router');
     ok('islands + hydrate: кэш не тянется без resource', bad.length === 0, bad.join(','));
-    ok('islands + hydrate: ≤ 36 KB gzip', a.gz <= 36, a.gz.toFixed(1) + ' KB');
+    ok('islands + hydrate: ≤ 38 KB gzip', a.gz <= 38, a.gz.toFixed(1) + ' KB');
     const c = await bundle('island, mount, html, list, show, when, signal, computed, effect, on, bind, hydrate, resource');
     ok('+ resource: кэш, seedFrom и prefetch подключены (регистрация через _ext)', has(c, '_cacheEntry', 'seedFrom', 'prefetch', '_cacheReady').length === 4);
     ok('+ resource: таблица сообщений форм всё ещё не нужна', !c.decls.has('_MESSAGES'));

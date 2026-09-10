@@ -121,6 +121,8 @@ export const dev: {
     graph(root?: Scope): string;
     /** dev-overlay: предупреждения всплывают в углу страницы; false — только консоль (или localStorage aegis:overlay=0) */
     overlay: boolean;
+    /** EXPLAIN ANALYZE последних сверок list(): план keyed | rebuild, n, kept, lis, moves, ms */
+    plans(): Array<{ plan: 'keyed' | 'rebuild'; n: number; kept: number; lis: number; moves: number; ms: number }>;
     /** Runtime-контракты графа и дерева scope: 'sampled' (default) | 'strict' (каждый flush; тесты) | false */
     contracts: 'sampled' | 'strict' | false;
     /** Объяснение кода предупреждения из ERRORS.md — печатает в консоль и возвращает текст */
@@ -352,9 +354,17 @@ export interface ListOptions<T = any> {
     /** разметка пустого списка */
     fallback?: (() => Node | DocumentFragment | string) | Node;
     /** CSS-контракт enter/leave для строк (true → 'aegis'); уходящая строка получает data-leaving */
-    transition?: boolean | string;
+    transition?: boolean | string | 'view';
     /** 'signal' — renderFn получает Signal<T>; замена объекта под ключом патчит сигнал вместо перерисовки */
     item?: 'signal';
+    /** 'view' — перестановки и вставки анимирует View Transitions API (одна startViewTransition на flush, FLIP бесплатно); viewClass — view-transition-class строк (default 'aegis-row') */
+    viewClass?: string;
+    /** строки вне экрана замораживаются (contentvisibilityautostatechange): scope строки уничтожается, DOM остаётся снимком, при возврате — перерисовка с актуальными данными */
+    hibernate?: boolean;
+    /** сигнал «строки ещё создаются срезами» (стриминговая досборка под startTransition / вводом) */
+    pending?: Signal<boolean>;
+    /** порядок досборки от видимого: элемент с прокруткой и высота строки */
+    viewport?: Element; itemHeight?: number;
 }
 export function list<T>(
     items: Signal<T[]> | ReadonlySignal<T[]> | (() => T[]) | T[],
