@@ -16,7 +16,7 @@ Read `aegis.d.ts` for exact types, `ERRORS.md` for warning codes, `test.html` fo
 - Async work lives in `resource()` / `mutation()` — not in `effect(async …)` (E016).
 - `untrack(() => x.value)` inside a computed or effect means x is NOT a dependency: the result stays cached until a tracked source changes. Use it only for reads that must not re-run the computation.
 - `effect()` outside a scope is a leak, not a crash: dev warns with E001 and the effect keeps running; `window.__AEGIS_DEV__ = 'strict'` throws instead, and `defaults.orphanEffects = 'throw' | 'root'` sets the production behaviour. An unhandled effect error marks the component host with `data-aegis-error` and goes to `reportError`; other islands keep running. A disposed `computed()` is frozen at its last value (E045 on read).
-- In `ctx` you get: `el, slot, signal, computed, effect, batch, provide, inject, when, selector, on, delegate, bind, text, attr, cls, style, clsMap, styleMap, html, show, list, interval, timeout, observe, resize, mutate, guardedFetch (pre-bound), debounced, throttled, poll, onDispose`. Everything else — `import` from `./aegis.js`.
+- In `ctx` you get: `el, slot, signal, computed, effect, batch, provide, inject, when, selector, on, delegate, bind, text, attr, cls, style, styleMap, html, show, list, interval, timeout, observe, resize, mutate, guardedFetch (pre-bound), debounced, throttled, poll, onDispose`. Everything else — `import` from `./aegis.js`.
 
 ## Canonical island
 

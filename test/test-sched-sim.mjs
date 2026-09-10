@@ -7,7 +7,7 @@
 //   INP-оракул: p98 симулированного INP для потока нажатий ≤ порога при 3 группах × N эффектов
 import { existsSync } from 'node:fs';
 
-const mod = await import(existsSync(new URL('./aegis_full.js', import.meta.url)) ? './aegis_full.js' : './aegis.js');
+const mod = await import('../aegis.js');
 const { signal, effect, createScope, on, startTransition, flush, reset, useScheduler } = mod;
 // локальная копия fakeScheduler из aegis-test.js (тот импортирует ./aegis.js = ядро, без on()/cache — в node не грузится)
 function fakeScheduler({ cost = () => 0.5 } = {}) {

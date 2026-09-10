@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import {
     signal, computed, effect, batch, untrack, isSignal, createScope, onDispose, onError, flush, signals,
     startTransition, deferred, transaction, defaults,
-} from './aegis.js';
+} from '../aegis.js';
 import { fuzzGraph } from './fuzz-graph.mjs';
 
 test('signal: базовое чтение/запись, peek, update, equals', () => {

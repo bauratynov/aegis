@@ -840,7 +840,7 @@ export function effect(fn, nameOrOpts) {
             site,
             what: `Effect "${name || 'anonymous'}" created outside a component scope — it will never be cleaned up.`,
             why: 'Effects created outside a scope leak subscribers forever, causing memory growth.',
-            fix: `Wrap in component(el, ({ effect }) => { ... }) or scope.run(() => effect(...)).${typeof _components !== 'undefined' && _components.size ? ' After an await in setup the scope is lost — use the helpers from ctx (they stay bound) or runWithOwner(getOwner(), …).' : ''}`,
+            fix: `Wrap in mount(el, ({ effect }) => { ... }) or scope.run(() => effect(...)).${typeof _components !== 'undefined' && _components.size ? ' After an await in setup the scope is lost — use the helpers from ctx (they stay bound) or runWithOwner(getOwner(), …).' : ''}`,
         });
     }
     const node = new Effect(fn, name, owner, trace, lane);
@@ -1359,7 +1359,7 @@ export function onDispose(fn) {
     _warn('E017', !globalThis.AEGIS_PROD && {
         what: 'onDispose() called outside a scope — the cleanup will never run.',
         why: 'Cleanups are owned by the scope that is active when they are registered.',
-        fix: 'Call it inside component()/mount() setup or scope.run(() => …).',
+        fix: 'Call it inside island()/mount() setup or scope.run(() => …).',
     });
     return _noop;
 }

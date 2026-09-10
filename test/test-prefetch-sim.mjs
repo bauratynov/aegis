@@ -4,7 +4,7 @@
 // Регрессионные пороги: markov ≥ uniform + 8 п.п.; серверный prior на холодном старте (сессия 1) ≥ 30 %; рост между сессиями 1 и 3.
 import { existsSync } from 'node:fs';
 
-const mod = await import(existsSync(new URL('./aegis_full.js', import.meta.url)) ? './aegis_full.js' : './aegis.js');
+const mod = await import('../aegis.js');
 if (typeof mod.predictor !== 'function') { console.log('test-prefetch-sim: predictor() не найден (ядро без секции кэша) — пропуск'); process.exit(0); }
 const { predictor } = mod;
 

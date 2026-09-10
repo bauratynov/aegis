@@ -30,19 +30,24 @@
         on, delegate, interval, timeout,
         guardedFetch, debounced, throttled,
         html, text, attr, cls, style, bind, show, list,
-        component, register, hydrate, destroy, destroyAll,
+        register, hydrate, destroy, destroyAll,
         render, $, $$,
-        resource, watch, store, portal, transition, errorBoundary, ref,
+        resource, watch, portal, transition, errorBoundary, ref,
         reactive, isReactive,
         form, required, minLen, maxLen, emailRule, matches,
-        wireForm, cachedResource, invalidate, seed, seedFrom, attach, clone, expose, getOwner, runWithOwner, configure, request, api, HttpError, mutation, streamResource, settled, prefetch, infiniteResource, dev, onWarn, AegisWarning, reset, flushSync, root, until, flush, stats, trace, island, element, from, history as undoHistory, size, inView, viewport, springSignal, tween, modal, scaffold, setValidationMessages, maxSize, mime, maxFiles, createContext, provide, inject, persisted, linked, selector, when, cssVars, media, defaults, swap, boost, tpl, adopt, jsonScript,
+        wireForm, invalidate, seed, seedFrom, attach, clone, expose, getOwner, runWithOwner, configure, request, api, HttpError, mutation, streamResource, settled, prefetch, infiniteResource, dev, onWarn, AegisWarning, reset, flushSync, root, until, flush, stats, trace, island, element, from, history as undoHistory, size, inView, viewport, springSignal, tween, modal, scaffold, setValidationMessages, maxSize, mime, maxFiles, createContext, provide, inject, persisted, linked, selector, when, cssVars, media, defaults, swap, boost, tpl, adopt, jsonScript,
         spring, flip, animate,
         trap, roving, announce,
         css, adoptStyles, scopedStyle,
         defineElement, anchor, router, command, virtualScroll,
-        offlineResource,
         lazy, nextTick, i18n, uncloak, injectStyles,
-        VERSION, mount, cache, withRetry, leader, predictor, speculate, prefetchOn, onError, lens, signals, fieldArray, min, wizard, draft, live, busy, tabbables, startTransition, deferred, transaction, trusted } from './aegis.js';
+        VERSION, mount, cache, withRetry, leader, predictor, speculate, prefetchOn, onError, lens, signals, fieldArray, min, wizard, draft, live, busy, tabbables, startTransition, deferred, transaction, trusted } from '../aegis.js';
+    // removed in 0.8 — the sections below exercise the canonical calls through their old names
+    const store = (def) => reactive(def, { shallow: true });
+    const cachedResource = (src, opts = {}) => resource(src, { ...opts, cache: opts.cache ?? true });
+    const offlineResource = (src, opts = {}) => resource(src, { ...opts, offline: opts.offline ?? true });
+    const component = (el, setup) => mount(el, setup);
+
 
     const results = document.getElementById('results');
     const sandbox = document.getElementById('sandbox');
@@ -631,7 +636,7 @@
         tick.value++;
         assert('router: scope предыдущего маршрута уничтожен', disposedA === 1 && effectRunsA === 2);
         scope.dispose();
-        history.replaceState(null, '', '/test.html');
+        history.replaceState(null, '', '/test/test.html');
     })();
 
     section('html`` — парсер (конечный автомат)');
@@ -1693,7 +1698,7 @@
         assert('router: search = default убирает ключ', location.search === '');
         assert('router: params', r.params.value.id === '7' && log.includes('item:7'));
         scope.dispose();
-        history.replaceState(null, '', '/test.html');
+        history.replaceState(null, '', '/test/test.html');
         sandbox.innerHTML = '';
     })();
 
@@ -2490,7 +2495,7 @@
     section('aegis/test — render, fire, waitFor, mockFetch, cleanup');
 
     await (async () => {
-        const T = await import('./aegis-test.js');
+        const T = await import('../aegis-test.js');
         const Counter = ({ props, signal, html }) => { const n = signal(props.start); return html`<button class="c" @click=${() => n.value++}>${n}</button>`; };
         const t = T.render(Counter, { props: { start: 5 } });
         assert('test: render монтирует в document.body, find/text работают', t.el.isConnected && t.find('button.c').textContent === '5' && t.text() === '5');
@@ -2728,7 +2733,7 @@
         sc2.onError((e) => { caught = e; });
         sc2.run(() => { effect(() => { if (boom.value) throw new Error('kaboom'); }, 'boom-effect'); });
         boom.value = 1;
-        assert('error: сообщение эффекта содержит позицию в исходнике', caught && /at \/test\.html:\d+:\d+/.test(caught.message) && caught.aegis && /test\.html/.test(caught.aegis.site));
+        assert('error: сообщение эффекта содержит позицию в исходнике', caught && /at \/test\/test\.html:\d+:\d+/.test(caught.message) && caught.aegis && /test\.html/.test(caught.aegis.site));
         sc2.dispose();
         off();
         dev.resetWarnings();
@@ -2870,7 +2875,7 @@
 
     await (async () => {
         reset();
-        const T = await import('./aegis-test.js');
+        const T = await import('../aegis-test.js');
         const seen = [];
         const off = onWarn(w => seen.push(w));
         dev.resetWarnings();
@@ -2956,7 +2961,7 @@
 
     await (async () => {
         reset();
-        const T = await import('./aegis-test.js');
+        const T = await import('../aegis-test.js');
         const seen = [];
         const off = onWarn(w => seen.push(w));
         dev.resetWarnings();
@@ -3346,7 +3351,7 @@
             configure({ fetch: async () => { throw new TypeError('Failed to fetch'); } });
             await o.send('POST', '/t6/off/item', { a: 1 }, { optimistic: (l) => [...(l || []), 2] });
             await o.send('POST', '/t6/off/reject', { a: 2 });
-            const st = await import('./aegis-test.js');
+            const st = await import('../aegis-test.js');
             await st.flushAll();
             assert('offline log: optimistic применён, две мутации в очереди', o.data.value.length === 2);
             configure({ fetch: async (url, init) => {
@@ -3540,7 +3545,7 @@
         const seen = [];
         const off = onWarn((w) => seen.push(w));
         const sleep = (ms) => new Promise(r => setTimeout(r, ms));
-        const st = await import('./aegis-test.js');
+        const st = await import('../aegis-test.js');
         const hasIDB = typeof indexedDB !== 'undefined' && !/HeadlessChrome/.test(navigator.userAgent) && await Promise.race([new Promise((res) => {
             try {
                 const r = indexedDB.open('aegis-probe', 1);
@@ -4866,7 +4871,7 @@
 
     await (async () => {
         // Свежий экземпляр модуля (query в URL) — в нём кэш ещё ни разу не использовался, как в бандле, где resource появляется позже hydrate
-        const fresh = await import('./aegis.js?fresh=shake');
+        const fresh = await import('../aegis.js?fresh=shake');
         const root = document.createElement('div');
         const sc = document.createElement('script'); sc.type = 'application/json'; sc.dataset.aegisCache = 'shake:seed'; sc.dataset.aegisMaxAge = '60000'; sc.textContent = '{"n":42}';   // не innerHTML: закрывающий тег script в строке оборвал бы скрипт страницы
         root.append(sc, document.createElement('p'));
@@ -4875,11 +4880,11 @@
         assert('hydrate() до кэша: корень отложен, seedFrom ещё не вызван (скрипт не помечен)', !root.querySelector('script').dataset.aegisSeeded);
         assert('первое обращение к кэшу засевает отложенные корни', fresh.cache.has('shake:seed') && root.querySelector('script').dataset.aegisSeeded === '1');
         let fetched = 0;
-        const r = fresh.cachedResource('shake:seed', { staleTime: 60000, fetcher: async () => { fetched++; return { n: 0 }; } });
+        const r = fresh.resource('shake:seed', { cache: true, staleTime: 60000, fetcher: async () => { fetched++; return { n: 0 }; } });
         await new Promise(res => setTimeout(res, 20));
         assert('cachedResource после hydrate читает засеянные данные без запроса', r.data.value && r.data.value.n === 42 && fetched === 0);
         r.dispose();
-        const res = fresh.cachedResource('shake:err', { fetcher: async () => { throw new Error('boom'); } });
+        const res = fresh.resource('shake:err', { cache: true, fetcher: async () => { throw new Error('boom'); } });
         await new Promise(r2 => setTimeout(r2, 30));
         assert('свежий модуль: ошибка resource доступна (кэш подключился лениво)', !!res.error.value && res.error.value.message === 'boom');
         res.dispose();

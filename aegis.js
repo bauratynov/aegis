@@ -840,7 +840,7 @@ export function effect(fn, nameOrOpts) {
             site,
             what: `Effect "${name || 'anonymous'}" created outside a component scope — it will never be cleaned up.`,
             why: 'Effects created outside a scope leak subscribers forever, causing memory growth.',
-            fix: `Wrap in component(el, ({ effect }) => { ... }) or scope.run(() => effect(...)).${typeof _components !== 'undefined' && _components.size ? ' After an await in setup the scope is lost — use the helpers from ctx (they stay bound) or runWithOwner(getOwner(), …).' : ''}`,
+            fix: `Wrap in mount(el, ({ effect }) => { ... }) or scope.run(() => effect(...)).${typeof _components !== 'undefined' && _components.size ? ' After an await in setup the scope is lost — use the helpers from ctx (they stay bound) or runWithOwner(getOwner(), …).' : ''}`,
         });
     }
     const node = new Effect(fn, name, owner, trace, lane);
@@ -1359,7 +1359,7 @@ export function onDispose(fn) {
     _warn('E017', !globalThis.AEGIS_PROD && {
         what: 'onDispose() called outside a scope — the cleanup will never run.',
         why: 'Cleanups are owned by the scope that is active when they are registered.',
-        fix: 'Call it inside component()/mount() setup or scope.run(() => …).',
+        fix: 'Call it inside island()/mount() setup or scope.run(() => …).',
     });
     return _noop;
 }
@@ -3328,24 +3328,6 @@ export function cssVars(el, vars) {
 }
 
 /**
- * Toggle multiple CSS-классов через map { className: signal/fn/bool }
- *
- * @example
- *   clsMap(el, {
- *       active: () => isActive.value,
- *       disabled: isDisabled,     // Signal
- *       'text-bold': true,        // static
- *   });
- */
-export function clsMap(el, classMap) {
-    const disposers = [];
-    for (const [name, fn] of Object.entries(classMap)) {
-        disposers.push(cls(el, name, fn));
-    }
-    return () => disposers.forEach(d => d());
-}
-
-/**
  * Привязать несколько CSS-свойств через map { prop: signal/fn/string }
  *
  * @example
@@ -4151,7 +4133,7 @@ function _lev(a, b) {
 
 /** Dev: опечатка в деструктуризации ctx → did-you-mean (или «импортируйте из aegis.js») */
 /** Хелперы ctx, чувствительные к владельцу: после await в setup _currentScope потерян — вернуть его */
-const _OWNED = ['effect', 'computed', 'on', 'delegate', 'bind', 'text', 'attr', 'cls', 'style', 'clsMap', 'styleMap', 'html', 'show', 'list', 'when', 'selector', 'provide', 'inject', 'interval', 'timeout', 'observe', 'resize', 'mutate', 'debounced', 'throttled', 'poll', 'guardedFetch', 'fetch'];
+const _OWNED = ['effect', 'computed', 'on', 'delegate', 'bind', 'text', 'attr', 'cls', 'style', 'styleMap', 'html', 'show', 'list', 'when', 'selector', 'provide', 'inject', 'interval', 'timeout', 'observe', 'resize', 'mutate', 'debounced', 'throttled', 'poll', 'guardedFetch', 'fetch'];
 function _bindCtx(ctx, scope) {
     for (const k of _OWNED) {
         const f = ctx[k];
@@ -4181,7 +4163,7 @@ function _ctxProxy(ctx) {
         get(t, key) {
             if (key in t || typeof key !== 'string') return t[key];
             const keys = Object.keys(t);
-            const known = ['resource', 'mutation', 'router', 'reactive', 'store', 'watch', 'linked', 'persisted', 'until', 'transition', 'spring', 'trap', 'swap', 'tpl', 'adopt', 'ref', 'untrack', 'when', 'selector', 'cachedResource', 'streamResource', 'form', 'wireForm', 'attach', 'clone', 'media', 'theme'];
+            const known = ['resource', 'mutation', 'router', 'reactive', 'watch', 'linked', 'persisted', 'until', 'transition', 'spring', 'trap', 'swap', 'tpl', 'adopt', 'ref', 'untrack', 'when', 'selector', 'cachedResource', 'streamResource', 'form', 'wireForm', 'attach', 'clone', 'media', 'theme'];
             const nearCtx = _nearest(key, keys), nearMod = _nearest(key, known);
             _warn('E026', !globalThis.AEGIS_PROD && {
                 what: `setup ctx has no "${key}".`,
@@ -4193,7 +4175,7 @@ function _ctxProxy(ctx) {
     });
 }
 
-export function component(el, setup) {
+function _component(el, setup) {
     // Если уже есть компонент — уничтожить
     if (_components.has(el)) destroy(el);
     if (typeof _liveInit === 'function') _liveInit();   // live-регионы должны существовать до первого announce()
@@ -4236,7 +4218,6 @@ export function component(el, setup) {
             attr: (target, name, fn) => attr(target, name, fn),
             cls: (target, name, fn) => cls(target, name, fn),
             style: (target, prop, fn) => style(target, prop, fn),
-            clsMap: (target, map) => clsMap(target, map),
             styleMap: (target, map) => styleMap(target, map),
             html, show: _ctxLazy('show'), list: _ctxLazy('list'),
             interval, timeout, observe, resize, mutate,
@@ -4293,7 +4274,7 @@ export function mount(selector, setup) {
         }
         return undefined;
     }
-    return component(el, setup);
+    return _component(el, setup);
 }
 
 /**
@@ -4599,7 +4580,7 @@ export function hydrate(root = document, opts = {}) {
                 if (!_serverKids.has(el)) _serverKids.set(el, [...el.childNodes].map(n => n.cloneNode(true)));   // первый mount: запомнить серверную разметку
                 else el.replaceChildren(..._serverKids.get(el).map(n => n.cloneNode(true)));                       // повторный mount: вернуть её, чтобы setup не дублировал свой рендер
             }
-            const api = component(el, (ctx) => fn(el, data, ctx));
+            const api = _component(el, (ctx) => fn(el, data, ctx));
             const done = (a) => {
                 h.api = a;
                 el.removeAttribute('aria-busy');
@@ -5436,92 +5417,6 @@ export function until(source, predicate = (v) => !!v, { timeout: ms } = {}) {
 }
 
 
-// ============================================================================
-// 11. STORE — Reactive state container
-// ============================================================================
-
-/**
- * Реактивный store из plain-объекта.
- * Все свойства становятся signals, геттеры — computed.
- *
- * @example
- *   const todos = store({
- *       items: [],
- *       filter: 'all',
- *       get filtered() { return this.filter === 'all' ? this.items : this.items.filter(i => i.done); },
- *       get count() { return this.items.length; },
- *       add(text) { this.items = [...this.items, { id: Date.now(), text, done: false }]; },
- *       toggle(id) { this.items = this.items.map(i => i.id === id ? {...i, done: !i.done} : i); },
- *   });
- *   // todos.items, todos.filter — reactive signals behind the scenes
- *   // todos.filtered, todos.count — computed
- *   // todos.add('test') — action, auto-batched
- */
-export function store(definition) {
-    const signals = Object.create(null);
-    const computeds = Object.create(null);
-    const methods = Object.create(null);
-    const bound = Object.create(null); // кэш обёрток: store.add === store.add
-
-    const descriptors = Object.getOwnPropertyDescriptors(definition);
-
-    for (const [key, desc] of Object.entries(descriptors)) {
-        if (desc.get) {
-            computeds[key] = null; // lazy init after proxy is ready
-        } else if (typeof desc.value === 'function') {
-            methods[key] = desc.value;
-        } else {
-            signals[key] = signal(desc.value, `store:${key}`);
-        }
-    }
-
-    // Forward ref: handler ссылается на p (Proxy), не на target
-    let p;
-
-    const handler = {
-        get(_, key) {
-            if (typeof key === 'string' && _DENIED_KEYS.has(key)) return undefined;
-            if (key in signals) return signals[key].value;
-            if (key in computeds) {
-                if (!computeds[key]) {
-                    computeds[key] = computed(() => descriptors[key].get.call(p), `store:${key}`);
-                }
-                return computeds[key].value;
-            }
-            if (key in methods) {
-                // action: this = store, все записи внутри — один flush
-                return bound[key] || (bound[key] = (...args) => batch(() => methods[key].apply(p, args)));
-            }
-            if (typeof key === 'symbol' || key in _) return Reflect.get(_, key);
-            if (key === '$signals') return signals;
-            if (key === '$reset') return () => {
-                batch(() => {
-                    for (const [k, desc] of Object.entries(descriptors)) {
-                        if (!desc.get && typeof desc.value !== 'function') {
-                            signals[k].value = desc.value;
-                        }
-                    }
-                });
-            };
-            return undefined;
-        },
-        set(_, key, value) {
-            // Prototype pollution defense
-            if (typeof key === 'string' && _DENIED_KEYS.has(key)) return true;
-            if (key in signals) {
-                signals[key].value = value;
-                return true;
-            }
-            signals[key] = signal(value, `store:${key}`);
-            return true;
-        },
-    };
-
-    p = new Proxy({}, handler);
-    return p;
-}
-
-
 /**
  * Внешний источник как сигнал (отписка в текущем scope):
  *   from(matchMedia('(prefers-color-scheme: dark)'), 'change', mq => mq.matches)   // (EventTarget, event, map)
@@ -5906,7 +5801,7 @@ export function errorBoundary(el, setup, fallback) {
         }
     };
     try {
-        const r = component(el, (ctx) => { ctx.onError(handle); return setup(ctx); });
+        const r = _component(el, (ctx) => { ctx.onError(handle); return setup(ctx); });
         return r && typeof r.then === 'function' ? r.catch(e => { handle(e); return undefined; }) : r;
     } catch (e) {
         handle(e);
@@ -8618,11 +8513,6 @@ function _cachedResource(source, opts = {}) {
         data, inflight, started, error, key, stale, refresh, mutate, abort,
         promise: () => current.peek()?.promise || null, dispose,
     });
-}
-
-/** resource(url, { cache: true }) — SWR-кэш; оставлено как отдельное имя */
-export function cachedResource(source, opts = {}) {
-    return _cachedResource(source, opts);
 }
 
 /**
@@ -11412,11 +11302,6 @@ function _offlineResource(source, opts = {}) {
     });
 }
 
-/** resource(url, { offline: true }) — оставлено как отдельное имя */
-export function offlineResource(source, opts = {}) {
-    return _offlineResource(source, opts);
-}
-
 
 // ============================================================================
 // 34. SERVER HTML — swap, morph, boost, tpl, adopt, jsonScript
@@ -11947,7 +11832,7 @@ function _namespace() {
     // Dev
     dev, onWarn, AegisWarning, reset, flushSync, flush, stats,
     // DOM
-    html, render, show, when, list, bind, text, attr, cls, style, clsMap, styleMap, cssVars, ref, attach, clone, prevent, stop, self,
+    html, render, show, when, list, bind, text, attr, cls, style, styleMap, cssVars, ref, attach, clone, prevent, stop, self,
     // Events
     on, delegate,
     // Utilities
@@ -11956,13 +11841,13 @@ function _namespace() {
     guardedFetch, debounced, throttled, poll,
     configure, request, api, HttpError, defaults, withRetry,
     // Data
-    resource, mutation, streamResource, sse, settled, watch, store,
-    cachedResource, invalidate, seed, seedFrom, prefetch, prefetchOn, infiniteResource, cache, useClock,
+    resource, mutation, streamResource, sse, settled, watch,
+    invalidate, seed, seedFrom, prefetch, prefetchOn, infiniteResource, cache, useClock,
     // Form
     form, required, minLen, maxLen, pattern, emailRule, email, min, max, matches, maxSize, mime, maxFiles, setValidationMessages,
     wireForm,
     // Component
-    component, mount, register, island, element, hydrate, destroy, destroyAll,
+    mount, register, island, element, hydrate, destroy, destroyAll,
     errorBoundary, portal, transition, lazy,
     // Animation
     spring, springSignal, tween, flip, animate, media, reducedMotion, theme,
@@ -11981,7 +11866,6 @@ function _namespace() {
     // Virtual Scroll
     virtualScroll,
     // Offline
-    offlineResource,
     // Server HTML
     swap, boost, tpl, adopt, jsonScript,
     // i18n

@@ -5,7 +5,7 @@ import { createServer } from 'node:http';
 import { readFileSync, existsSync } from 'node:fs';
 import { join, extname } from 'node:path';
 
-const ROOT = new URL('.', import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1');
+const ROOT = new URL('..', import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1');   // the repository root: test/test.html imports ../aegis.js
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.mjs': 'text/javascript', '.css': 'text/css', '.json': 'application/json' };
 // no visible, focused window in a headless CI run: same list as test-browsers.mjs
 const KNOWN_ENV_ONLY = new Set(['size(): реактивен', 'trap: focus moved inside (or bg tab)', 'offlineResource: data loaded', 'offlineResource: optimistic update', 'leader: лок получен', 'sync: ответ разослан другим вкладкам с Lamport-меткой']);   // the last one: a BroadcastChannel round-trip between tabs that a loaded CI runner sometimes misses
@@ -34,7 +34,7 @@ const base = `http://127.0.0.1:${server.address().port}`;
 const browser = await pw.webkit.launch();
 const page = await browser.newPage();
 const got = await Promise.race([
-    new Promise(res => { resolveReport = res; page.goto(`${base}/test.html?report=1&novt=1`).catch(() => {}); }),
+    new Promise(res => { resolveReport = res; page.goto(`${base}/test/test.html?report=1&novt=1`).catch(() => {}); }),
     new Promise(res => setTimeout(() => res(null), 240_000)),
 ]);
 await browser.close();

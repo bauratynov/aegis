@@ -4,7 +4,7 @@ import {
     signal, computed, effect, createScope, debounced, html, list, form, minLen, required, emailRule,
     resource, HttpError, defineElement, element, island, i18n, reactive, router, ref, attach, flush, stats,
     type Signal, type ReadonlySignal, type Computed, type ValidationRule, type HtmlValue,
-} from './aegis.js';
+} from '../aegis.js';
 
 // ── #59: methods the runtime has
 const count = signal(0);
@@ -93,7 +93,7 @@ router({
 });
 
 // ── cache API, useClock, invalidate grammar
-import { cache, useClock, invalidate, mutation, configure, api } from './aegis.js';
+import { cache, useClock, invalidate, mutation, configure, api } from '../aegis.js';
 const cached: User[] | undefined = cache.get<User[]>(['users', 1]);
 cache.set({ b: 1, a: 2 }, { x: 1 }, { staleTime: 30_000 });
 const ex = cache.explain('/api/users'); const st: 'fresh' | 'stale' | 'inflight' | 'error' | 'empty' | 'absent' = ex.state; void st; void cached;
@@ -118,7 +118,7 @@ mutation<[User], User>(async (v, { etag }) => api.put('/api/users/' + v.id, v, {
 const sz: number = cache.size().bytes; void sz; cache.stats().limits.maxEntries;
 
 // ── cache phase 6 — persist / sync / leader / offline dead-letter
-import { leader } from './aegis.js';
+import { leader } from '../aegis.js';
 resource<User[]>('/api/users', { cache: { persist: { version: 2, maxBytes: 5_000_000, maxAge: 86_400_000 }, sync: false, staleTime: 60_000 } });
 resource<User[]>('/api/users', { cache: { persist: true } });
 const rec = await cache.persisted('/api/users'); if (rec) { const at: number = rec.at; void at; }
@@ -127,7 +127,7 @@ const isLeader = leader('sse', { fallback: false }); const l: boolean = isLeader
 const off = resource<number[]>('/api/queue', { offline: { maxAttempts: 5 } });
 const dead = off.failed.value; if (dead.length) { const url: string = dead[0].mutation.url; void url; }
 
-import { predictor, speculate, prefetchOn, prefetch, boost, type Predictor } from './aegis.js';
+import { predictor, speculate, prefetchOn, prefetch, boost, type Predictor } from '../aegis.js';
 // ── cache phase 7 — speculation budget / intent / predictor / speculate
 configure({ speculation: { maxInflight: 2, saveData: 'respect' }, prefetch: { minUtility: 0, hoverDelay: 'auto', horizon: 1500 } });
 configure({ speculation: false });
@@ -143,7 +143,7 @@ const undo7 = speculate({ prerender: 'conservative', exclude: '[data-no-speculat
 const sp7 = stats().speculation; if (sp7) { const q: number = sp7.queued; void q; }
 const cs7 = cache.stats(); const gh: number = cs7.ghost; void gh; cs7.speculation.skipped; cs7.prefetch.hoverDelay;
 
-import { lens, signals, linked, bind, onError, type FunctionBinding } from './aegis.js';
+import { lens, signals, linked, bind, onError, type FunctionBinding } from '../aegis.js';
 // ── core phase 2b — lens / signals / function bindings / onError
 const cents = signal(250);
 const price = lens(() => cents.value / 100, (v) => { cents.value = Math.round(v * 100); }); price.value = 3; price.update(v => v + 1);
@@ -154,7 +154,7 @@ const { count: cnt, total: tot } = signals({ count: 1, get total(): number { ret
 const lk = linked(() => cnt.value); lk.update(v => v + 1);
 const offErr = onError((e, info) => { void e; if (info) { const s: string = info.effect; void s; } }); offErr();
 
-import { form as form3, wireForm as wireForm3, setValidationMessages, i18n as i18n3, type FieldRef, type FormStatus } from './aegis.js';
+import { form as form3, wireForm as wireForm3, setValidationMessages, i18n as i18n3, type FieldRef, type FormStatus } from '../aegis.js';
 // ── forms phase 3 — issues / canSubmit / wire / field / status
 const f3 = form3({ email: '', age: 0 }, { rules: { email: [required, emailRule] }, mode: 'blur-then-live', native: true });
 const iss: string | null = f3.issues.email.value; void iss; const cs3: boolean = f3.canSubmit.value; void cs3; const st3: FormStatus = f3.status.value; void st3;
@@ -165,7 +165,7 @@ const w3 = wireForm3(document.createElement('form'), { messages: 'page', mode: '
 w3.issues.$any.value; w3.canSubmit.value; w3.status.value; w3.submitted.value; w3.abort();
 const t3 = i18n3({ en: { validation: { minLen: 'At least {n}' } } }, { locale: 'en' }); setValidationMessages(t3); setValidationMessages({ minLen: { one: '{n} char', other: '{n} chars' } }); setValidationMessages(null);
 
-import { fieldArray, min, type FieldArray } from './aegis.js';
+import { fieldArray, min, type FieldArray } from '../aegis.js';
 // ── forms phase 4a — fieldArray / growing form / wireForm observe, types, html, intents
 const f4 = form3({ title: '' }, { rules: { 'items[].qty': [min(1)] } });
 const items4: FieldArray<{ qty: number; sku: string }> = fieldArray(f4, 'items', { row: { qty: 1, sku: '' } });
@@ -174,7 +174,7 @@ f4.addField('extra', 1, [required]); f4.renameField('extra', 'more'); f4.removeF
 const w4 = wireForm3(document.createElement('form'), { observe: true, types: { d: Date, n: Number, tags: Array }, html: 'morph', intents: { add: (f, e) => { void f.keys; void e; } } });
 w4.wire(document.createElement('input')); w4.unwire('x'); w4.rewire(); w4.adoptErrors(); w4.el.noValidate; w4.parsed.value;
 
-import { wizard, draft, type Wizard } from './aegis.js';
+import { wizard, draft, type Wizard } from '../aegis.js';
 // ── forms phase 4b — guard / draft / wizard / summary / a11y
 const f5 = form3({ name: '', city: '' }, { a11y: { field: 'blur', summary: true }, focusOnError: 'summary' });
 const stopGuard = f5.guard({ confirm: async (url) => url.length > 0 }); stopGuard(); f5.summary(); const el5 = f5.errorList.value[0]?.el; void el5;
@@ -182,7 +182,7 @@ const w5: Wizard = wizard(f5, { steps: [['name'], ['city']], history: true }); w
 const d5 = draft(f5, 'k', { debounce: 100, exclude: (k) => k === 'city' }); d5.restored; d5.clear(); d5.stop();
 const w6 = wireForm3(document.createElement('form'), { a11y: { field: 'off' }, summary: true, guard: true, draft: 'x' }); w6.guard(); w6.summary('#s'); w6.errorList.value;
 
-import { announce, live, busy, trap, when as when5, mutation as mutation5, boost as boost5 } from './aegis.js';
+import { announce, live, busy, trap, when as when5, mutation as mutation5, boost as boost5 } from '../aegis.js';
 // ── a11y phase 5a — announce 2.0 / live / busy / when announce / mutation announce / router focus
 const clr = announce('x', { politeness: 'assertive', clearAfter: false, dedupe: 0 }); clr(); announce.init(); announce.clear('polite');
 const n5 = signal(0); const stopLive = live(n5, { debounce: 100, format: (v) => v + ' items' }); stopLive(); announce(() => String(n5.value), { immediate: true })();
@@ -192,7 +192,7 @@ when5(resource<{ n: number }>('/x'), { data: (d) => String(d.n) }, { busy: true,
 mutation5<[number], number>(async (x) => x, { announce: true }); mutation5<[], number>(async () => 1, { announce: { success: 'Saved', error: (e) => String(e), undone: false } });
 router({ '/': () => {} }, { focus: 'auto', announce: (to) => 'Page ' + to.path }); boost5({ focus: false, announce: false });
 
-import { tabbables, roving as roving5 } from './aegis.js';
+import { tabbables, roving as roving5 } from '../aegis.js';
 // ── a11y phase 5b — trap 3.0 / tabbables / roving 2.0
 const tb: HTMLElement[] = tabbables(document.body); void tb;
 const rel5 = trap(document.createElement('div'), { autoFocus: 'container', recapture: false, escape: true }); rel5.refresh(); rel5();
@@ -201,7 +201,7 @@ rv5.setActive(0); const ai: number = rv5.active.value; void ai; rv5.refresh(); r
 roving5(document.createElement('div'), { virtual: document.createElement('input'), onActivate: (el, i) => { void el; void i; } });
 
 // ── aegis/test — render / fire / waitFor / mockFetch
-import { render, fire, waitFor, mockFetch, cleanup, withScope, fakeClock } from './aegis-test.js';
+import { render, fire, waitFor, mockFetch, cleanup, withScope, fakeClock } from '../aegis-test.js';
 const clock = fakeClock(1000); await clock.advance(30_000); clock.restore();
 const h = render(({ props, html }) => html`<b>${props.n}</b>`, { props: { n: 1 } });
 const b: HTMLElement = h.find('b'); void b;

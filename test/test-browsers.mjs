@@ -1,5 +1,5 @@
 // Run test.html in headless Chrome and Firefox: `npm run test:browsers`
-// Serves this folder on a free port (aegis_full.js is served as aegis.js when present), collects results:
+// Serves the repository root on a free port, collects results:
 //   Chrome  — --dump-dom, counts ✓/✗ in the rendered page
 //   Firefox — test.html?report=1 POSTs { passed, failed, fails } to /__report
 // Browser paths: CHROME / FIREFOX env vars, otherwise the usual locations per OS. A missing browser is skipped, not failed.
@@ -9,8 +9,7 @@ import { spawn } from 'node:child_process';
 import { join, extname } from 'node:path';
 import { tmpdir } from 'node:os';
 
-const ROOT = new URL('.', import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1');
-const FULL = existsSync(join(ROOT, 'aegis_full.js'));
+const ROOT = new URL('..', import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1');   // the repository root: test/test.html imports ../aegis.js
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.mjs': 'text/javascript', '.css': 'text/css', '.json': 'application/json' };
 // Headless runs: tests that need a visible, focused window or IndexedDB. Chrome headless lacks all of them;
 // Firefox headless on a CI runner has no window focus either. They pass in a real browser.
@@ -33,7 +32,6 @@ const server = createServer((q, r) => {
         return;
     }
     let p = decodeURIComponent(q.url.split('?')[0]);
-    if (p === '/aegis.js' && FULL) p = '/aegis_full.js';
     const file = join(ROOT, p);
     if (!existsSync(file)) { r.writeHead(404); r.end(); return; }
     let data = readFileSync(file);
@@ -54,7 +52,7 @@ if (chrome) {
     const profile = mkdtempSync(join(tmpdir(), 'aegis-chrome-'));
     // async spawn: the server lives in this process, a blocking spawnSync would deadlock Chrome's requests
     const dom = await new Promise((res) => {
-        const cp = spawn(chrome, ['--headless=new', '--disable-gpu', '--no-first-run', `--user-data-dir=${profile}`, '--virtual-time-budget=300000', '--dump-dom', `${base}/test.html?novt=1`], { stdio: ['ignore', 'pipe', 'ignore'] });
+        const cp = spawn(chrome, ['--headless=new', '--disable-gpu', '--no-first-run', `--user-data-dir=${profile}`, '--virtual-time-budget=300000', '--dump-dom', `${base}/test/test.html?novt=1`], { stdio: ['ignore', 'pipe', 'ignore'] });
         let out = '';
         cp.stdout.setEncoding('utf8');
         cp.stdout.on('data', (c) => { out += c; });
@@ -71,7 +69,7 @@ if (chrome) {
 const firefox = find(candidates.firefox);
 if (firefox) {
     const profile = mkdtempSync(join(tmpdir(), 'aegis-ff-'));
-    const ff = spawn(firefox, ['--headless', '-no-remote', '-profile', profile, `${base}/test.html?report=1&novt=1`], { stdio: 'ignore' });
+    const ff = spawn(firefox, ['--headless', '-no-remote', '-profile', profile, `${base}/test/test.html?report=1&novt=1`], { stdio: 'ignore' });
     const got = await Promise.race([new Promise(res => { resolveReport = res; }), new Promise(res => setTimeout(() => res(null), 240_000))]);
     ff.kill('SIGKILL');
     await new Promise(res => setTimeout(res, 500));

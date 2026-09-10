@@ -15,7 +15,8 @@
  *   Core (10 names, enough for most pages): signal, computed, effect, batch, html, island, mount, resource, wireForm, swap
  *   Extended: everything else below — helpers for specific jobs (router, forms, cache, motion, a11y). Same file, same guarantees,
  *             tree-shaken away when you do not import it.
- *   Deprecated: marked @deprecated; still work, removed in 1.0. The line names the replacement.
+ *   Removed before 1.0 (0.8): clsMap → cls(el, { … }), store → reactive(obj, { shallow: true }), cachedResource → resource(url, { cache: true }),
+ *             offlineResource → resource(url, { offline: true }), component → mount. Nothing is marked @deprecated any more.
  */
 
 // ── Reactive Core ──────────────────────────────────────────────
@@ -284,8 +285,6 @@ export function cssVars(el: HTMLElement | SVGElement, vars: Record<string, React
  * Toggle multiple CSS classes via a map { className: signal/fn/bool }.
  * @returns cleanup function that disposes all class effects
  */
-/** @deprecated Use `cls(el, { active: sig })` — same object form, diffs only its own classes. */
-export function clsMap(el: Element, map: Record<string, Reactive<unknown>>): () => void;
 
 /**
  * Bind multiple CSS properties via a map { prop: signal/fn/string }.
@@ -803,17 +802,7 @@ export function watch<T>(
  *       add(text) { this.items = [...this.items, { id: Date.now(), text, done: false }]; },
  *   });
  */
-/** @deprecated Use `reactive(obj)` — getters become computeds, methods become batched actions, plus `$patch`/`$subscribe`/`$snapshot`/`$reset`. `store()` = `reactive(obj, { shallow: true })`. */
-export function store<T extends object>(definition: T): T & {
-    readonly $signals: Record<string, Signal<unknown>>;
-    $reset(): void;
-};
-
 // ── Cached Resource (SWR) ──────────────────────────────────────
-
-/** = resource(source, { cache: true, ...opts }) */
-/** @deprecated Use `resource(url, { cache: true, staleTime })`. */
-export function cachedResource<T = unknown>(source: string | (() => string), opts?: ResourceOptions<T> & CacheOptions): ResourceResult<T>;
 
 /** Warm the cache without subscribers (hover, approaching the viewport); the data is available to resource(url, { cache: true }) */
 export function prefetch(url: string, opts?: { /** kind of warm-up for hit statistics (prefetchOn sets it itself) */ kind?: string; /** probability of use — warm up only when p·rtt exceeds the network cost */ p?: number; /** bypass the network budget (configure({ speculation })) */ force?: boolean; key?: string; staleTime?: number; cacheTime?: number; fetcher?: Fetcher; transform?: (d: unknown) => unknown }): Promise<void>;
@@ -1205,7 +1194,6 @@ export interface ComponentContext<E extends Element = HTMLElement> {
     attr: typeof attr;
     cls: typeof cls;
     style: typeof style;
-    clsMap: typeof clsMap;
     styleMap: typeof styleMap;
     html: typeof html;
     show: typeof show;
@@ -1238,12 +1226,6 @@ export interface ComponentContext<E extends Element = HTMLElement> {
 
 /** The result of component(): if setup returned a template (Node) it is inserted into el and { el, destroy } is returned */
 export type ComponentResult<R> = R extends Node ? { el: Element; destroy(): void } : R;
-
-/** @deprecated Use `mount(el, Component)` — the same setup contract, accepts an element or a selector. `component()` stays as an alias. */
-export function component<E extends Element = HTMLElement, R = void>(
-    el: E,
-    setup: (ctx: ComponentContext<E>) => R
-): ComponentResult<R>;
 
 /**
  * Shorthand: mount component by CSS selector or element.
@@ -1495,7 +1477,7 @@ export interface ElementDefinition<P extends Record<string, PropDefinition> = Re
 }
 
 /** tagName must contain a hyphen (otherwise a DOMException at runtime — and a type error here) */
-/** @deprecated Use `element(tag, Component, { props })` — the same component function as islands and mount(). `defineElement()` stays as the low-level form. */
+/** Low-level custom element from a definition object (props with reflection, shadow, formAssociated). `element(tag, Component, { props })` is the component form built on it. */
 export function defineElement<P extends Record<string, PropDefinition>>(tagName: `${string}-${string}`, def: ElementDefinition<P>): typeof HTMLElement;
 
 // ── Anchor Positioning ─────────────────────────────────────────
@@ -1640,9 +1622,6 @@ export function virtualScroll<T>(parent: Element, items: T[] | Signal<T[]> | Rea
 
 // ── Offline Resource ───────────────────────────────────────────
 
-/** = resource(source, { offline: true, ...opts }) */
-/** @deprecated Use `resource(url, { offline: true })`. */
-export function offlineResource<T = unknown>(source: string | (() => string), opts?: ResourceOptions<T> & OfflineOptions): OfflineResourceResult<T>;
 
 // ── Server HTML ────────────────────────────────────────────────
 
@@ -1824,7 +1803,6 @@ declare const Aegis: {
     attr: typeof attr;
     cls: typeof cls;
     style: typeof style;
-    clsMap: typeof clsMap;
     styleMap: typeof styleMap;
     ref: typeof ref;
     attach: typeof attach;
@@ -1857,8 +1835,6 @@ declare const Aegis: {
     poll: typeof poll;
     resource: typeof resource;
     watch: typeof watch;
-    store: typeof store;
-    cachedResource: typeof cachedResource;
     seed: typeof seed;
     seedFrom: typeof seedFrom;
     invalidate: typeof invalidate;
@@ -1870,7 +1846,6 @@ declare const Aegis: {
     emailRule: typeof emailRule;
     matches: typeof matches;
     wireForm: typeof wireForm;
-    component: typeof component;
     mount: typeof mount;
     register: typeof register;
     hydrate: typeof hydrate;
@@ -1907,7 +1882,6 @@ declare const Aegis: {
     router: typeof router;
     command: typeof command;
     virtualScroll: typeof virtualScroll;
-    offlineResource: typeof offlineResource;
     swap: typeof swap;
     boost: typeof boost;
     tpl: typeof tpl;

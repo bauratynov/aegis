@@ -7,7 +7,7 @@
 <script type="module">
 // Бенчмарк в духе js-framework-benchmark: create/update/swap/select/remove/clear + ядро.
 // Запуск: статический сервер + Chrome (headless без --virtual-time-budget), результат — в <pre id="out"> и window.__bench.
-import { signal, list, html, createScope, batch, effect, computed, selector, defaults, flushSync, reactive, configure } from './aegis.js';
+import { signal, list, html, createScope, batch, effect, computed, selector, defaults, flushSync, reactive, configure } from '../aegis.js';
 defaults.motion = false;
 const out = {};
 const N = 1000, ROUNDS = 5;

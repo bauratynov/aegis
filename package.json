@@ -58,13 +58,13 @@
   },
   "sideEffects": false,
   "scripts": {
-    "test": "node --test test-core.mjs && node check-exports.mjs && tsc -p tsconfig.types.json && node test-prefetch-sim.mjs && node test-shake.mjs && node test-sched-sim.mjs",
-    "test:prefetch": "node test-prefetch-sim.mjs",
-    "test:shake": "node test-shake.mjs",
-    "test:sched": "node test-sched-sim.mjs",
+    "test": "node --test test/test-core.mjs && node test/check-exports.mjs && tsc -p test/tsconfig.json && node test/test-prefetch-sim.mjs && node test/test-shake.mjs && node test/test-sched-sim.mjs",
+    "test:prefetch": "node test/test-prefetch-sim.mjs",
+    "test:shake": "node test/test-shake.mjs",
+    "test:sched": "node test/test-sched-sim.mjs",
     "build": "node build.mjs",
-    "test:browsers": "node test-browsers.mjs",
-    "test:webkit": "node test-webkit.mjs",
+    "test:browsers": "node test/test-browsers.mjs",
+    "test:webkit": "node test/test-webkit.mjs",
     "prepublishOnly": "npm run build && npm test"
   },
   "devDependencies": {
