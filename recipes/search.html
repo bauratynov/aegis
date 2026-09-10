@@ -19,7 +19,7 @@ mount('#app', ({ signal, html, when, list }) => {
     return html`
         <input placeholder="Search cities…" @input.debounce.300=${(e) => { q.value = e.target.value; }}>
         ${when(hits, {
-            loading: () => html`<p>Searching…</p>`,
+            loading: () => html`<p>${() => q.value.trim() ? 'Searching…' : 'Type a city: Almaty, Berlin, London…'}</p>`,
             error: (e, retry) => html`<p>${e.message} <button @click=${retry}>Retry</button></p>`,
             data: (rows, rowsSignal) => html`<ul class=${{ dim: hits.validating }}>${list(rowsSignal, (c) => html`<li>${c}</li>`, { key: (c) => c })}</ul>`,
         })}`;

@@ -16,6 +16,7 @@ const read = (p) => readFileSync(p, 'utf8');
 const readme = (existsSync(join(ROOT, 'README.md')) ? read(join(ROOT, 'README.md')) : read(join(ROOT, '_queue', '21_README.md')))
     .replace(/`([^`\n]*?)\\`\\``/g, '``` $1`` ```');   // GitHub renders `html\`\`` as html``; CommonMark needs a longer backtick fence around it
 const VERSION = (read(join(ROOT, 'package.json')).match(/"version":\s*"([^"]+)"/) || [, '0.0.0'])[1];
+const BUILD = Date.now().toString(36);   // cache-buster for theme.css / site.js / play.js on every build
 const TESTS = (readme.match(/tests-(\d+)/) || [, '1000'])[1];
 
 // ── highlighter (no dependencies) ─────────────────────────────────────────────
@@ -23,25 +24,39 @@ const esc = (s) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, 
 const KW = /\b(?:import|export|from|const|let|var|function|return|if|else|for|of|in|while|do|switch|case|break|continue|new|class|extends|super|this|typeof|instanceof|async|await|try|catch|finally|throw|default|yield|delete|void|null|undefined|true|false|as|type|interface|declare|readonly|keyof|extends|implements|namespace|enum|static|get|set)\b/;
 const JS_RE = /(\/\*[\s\S]*?\*\/|\/\/[^\n]*)|(`(?:\\[\s\S]|[^`])*`)|('(?:\\.|[^'\n])*'|"(?:\\.|[^"\n])*")|(\b\d+(?:\.\d+)?(?:_\d+)*\b)|([A-Za-z_$][\w$]*)(?=\s*\()|([A-Za-z_$][\w$]*)/g;
 function hlJs(src) {
-    return src.replace(JS_RE, (m, cm, tpl, str, num, fn, id) => {
-        if (cm) return `<span class="cm">${esc(cm)}</span>`;
-        if (tpl) return `<span class="tpl">${esc(tpl).replace(/\$\{[\s\S]*?\}/g, (x) => `<span class="fn">${x}</span>`)}</span>`;
-        if (str) return `<span class="str">${esc(str)}</span>`;
-        if (num) return `<span class="num">${num}</span>`;
-        if (fn) return KW.test(fn) ? `<span class="kw">${fn}</span>` : `<span class="fn">${fn}</span>`;
-        if (id) return KW.test(id) ? `<span class="kw">${id}</span>` : esc(id);
-        return esc(m);
-    });
+    let out = '', last = 0;
+    for (const m of src.matchAll(JS_RE)) {
+        out += esc(src.slice(last, m.index)); last = m.index + m[0].length;   // gaps (operators, generics like <T>) are escaped too
+        const [, cm, tpl, str, num, fn, id] = m;
+        if (cm) out += `<span class="cm">${esc(cm)}</span>`;
+        else if (tpl) out += `<span class="tpl">${esc(tpl).replace(/\$\{[\s\S]*?\}/g, (x) => `<span class="fn">${x}</span>`)}</span>`;
+        else if (str) out += `<span class="str">${esc(str)}</span>`;
+        else if (num) out += `<span class="num">${num}</span>`;
+        else if (fn) out += KW.test(fn) ? `<span class="kw">${fn}</span>` : `<span class="fn">${fn}</span>`;
+        else if (id) out += KW.test(id) ? `<span class="kw">${id}</span>` : esc(id);
+        else out += esc(m[0]);
+    }
+    return out + esc(src.slice(last));
 }
 function hlHtml(src) {
     return src.split(/(<script\b[^>]*>)([\s\S]*?)(<\/script>)/g).map((part, i) => {
         if (i % 4 === 2) return hlJs(part);
-        return part.replace(/(<!--[\s\S]*?-->)|(<\/?)([\w-]+)([^>]*)(\/?>)/g, (m, cm, open, tag, attrs, close) => {
-            if (cm) return `<span class="cm">${esc(cm)}</span>`;
-            const a = attrs.replace(/([@:.?\w][\w:.-]*)(=)?("(?:[^"]*)"|'(?:[^']*)'|\$\{[^}]*\})?/g, (x, n, eq, v) =>
-                `<span class="attr">${esc(n)}</span>${eq ? '=' : ''}${v ? (v.startsWith('$') ? `<span class="fn">${esc(v)}</span>` : `<span class="str">${esc(v)}</span>`) : ''}`);
-            return `<span class="tag">${esc(open)}${tag}</span>${a}<span class="tag">${esc(close)}</span>`;
-        });
+        if (i % 4 === 1 || i % 4 === 3) return `<span class="tag">${esc(part)}</span>`;
+        let out = '', last = 0;
+        for (const m of part.matchAll(/(<!--[\s\S]*?-->)|(<\/?)([\w-]+)([^>]*)(\/?>)/g)) {
+            out += esc(part.slice(last, m.index)); last = m.index + m[0].length;
+            const [, cm, open, tag, attrs, close] = m;
+            if (cm) { out += `<span class="cm">${esc(cm)}</span>`; continue; }
+            let a = '', al = 0;
+            for (const x of attrs.matchAll(/([@:.?\w][\w:.-]*)(=)?("(?:[^"]*)"|'(?:[^']*)'|\$\{[^}]*\})?/g)) {
+                a += esc(attrs.slice(al, x.index)); al = x.index + x[0].length;
+                const [, n, eq, v] = x;
+                a += `<span class="attr">${esc(n)}</span>${eq ? '=' : ''}${v ? (v.startsWith('$') ? `<span class="fn">${esc(v)}</span>` : `<span class="str">${esc(v)}</span>`) : ''}`;
+            }
+            a += esc(attrs.slice(al));
+            out += `<span class="tag">${esc(open)}${tag}</span>${a}<span class="tag">${esc(close)}</span>`;
+        }
+        return out + esc(part.slice(last));
     }).join('');
 }
 function hl(code, lang) {
@@ -69,6 +84,9 @@ marked.use({
         },
         link({ href, tokens, title }) { return `<a href="${esc(fixHref(href))}"${title ? ` title="${esc(title)}"` : ''}${/^https?:/.test(href) ? ' target="_blank" rel="noopener"' : ''}>${this.parser.parseInline(tokens)}</a>`; },
         hr() { return ''; },
+        // raw HTML in prose (e.g. `<script type="application/json">` mentioned in a JSDoc) is shown as text, never parsed —
+        // an unescaped <script> would swallow the rest of the page
+        html({ text }) { return esc(text); },
     },
 });
 const md = (src) => { headings = []; const out = marked.parse(src); return { html: out, headings: headings.slice() }; };
@@ -148,7 +166,9 @@ const apiGroups = [...Object.keys(GROUPS), 'Other', 'Types'].map(g => ({ name: g
 const deprecatedEntries = apiEntries.filter(e => e.deprecated).sort((a, b) => a.name.localeCompare(b.name));
 
 // ── layout ────────────────────────────────────────────────────────────────────
-const LOGO = `<svg viewBox="0 0 32 32" aria-hidden="true"><path d="M16 2 4 7v9c0 7.2 5.1 12.4 12 14 6.9-1.6 12-6.8 12-14V7L16 2Z" fill="#0B1020"/><path d="M16 4.2 6 8.4V16c0 6 4.2 10.4 10 11.9 5.8-1.5 10-5.9 10-11.9V8.4L16 4.2Z" fill="#E8B42E"/><path d="m17.6 8-6.4 9.3h4.4L14.4 24l6.8-9.6h-4.4L17.6 8Z" fill="#0B1020"/></svg>`;
+// the mark from logo/logo_1.webp redrawn as vectors: prompt chevron + lambda with a dot, petrol blue #184C64
+const LOGO = `<svg viewBox="0 0 603 450" aria-hidden="true"><g fill="#184C64"><path d="M0 26v62l104 47L0 182v62l160-92v-34L0 26z"/><path d="M296 0h96l211 450h-96L344 96 181 450H85L296 0z"/><circle cx="332" cy="300" r="44"/></g></svg>`;
+const MARK_FILE = LOGO.replace('<svg ', '<svg xmlns="http://www.w3.org/2000/svg" ');
 const NAV = [['Docs', '/docs/introduction/'], ['API', '/api/'], ['Examples', '/examples/'], ['Playground', '/play/'], ['Blog', '/blog/']];
 function layout({ title, description, path, main, nav = '', wide = false, extraHead = '', scripts = '' }) {
     const section = NAV.find(([, href]) => path.startsWith(href.split('/').slice(0, 2).join('/') + '/'))?.[0];
@@ -162,14 +182,14 @@ function layout({ title, description, path, main, nav = '', wide = false, extraH
 <link rel="canonical" href="${ORIGIN}${path}">
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
 <meta property="og:title" content="${esc(title)}"><meta property="og:description" content="${esc(description)}"><meta property="og:image" content="${ORIGIN}/og.png"><meta property="og:url" content="${ORIGIN}${path}"><meta name="twitter:card" content="summary_large_image">
-<link rel="stylesheet" href="/theme.css?v=${VERSION}">
+<link rel="stylesheet" href="/theme.css?v=${BUILD}">
 <script>try{var t=JSON.parse(localStorage.getItem('aegis:theme'));if(!t)t=matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light';document.documentElement.dataset.theme=t}catch(e){}</script>
 ${extraHead}
 </head>
 <body>
 <header class="top"><div class="in">
     <button class="icon-btn burger" aria-label="Menu"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7h16M4 12h16M4 17h16"/></svg></button>
-    <a class="logo" href="/">${LOGO}Aegis</a>
+    <a class="logo" href="/">${LOGO}<span>aegis<span class="js">js</span></span></a>
     <nav>${NAV.map(([n, h]) => `<a href="${h}"${n === section ? ' class="on"' : ''}>${n}</a>`).join('')}</nav>
     <div class="grow"></div>
     <div class="search" data-aegis="site-search"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg><input type="search" placeholder="Search docs…" aria-label="Search"><kbd>Ctrl K</kbd></div>
@@ -178,7 +198,7 @@ ${extraHead}
 </div></header>
 ${main}
 <footer><div class="wrap"><span>© ${new Date().getFullYear()} Aegis · MIT · v${VERSION} · ${TESTS} tests passing in Chrome and Firefox</span><span><a href="${GH}">GitHub</a> · <a href="/llms.txt">llms.txt</a> · <a href="/aegis.d.ts">aegis.d.ts</a> · <a href="/bench.html">bench</a> · built with Aegis, no build step for you</span></div></footer>
-<script type="module" src="/site.js?v=${VERSION}"></script>
+<script type="module" src="/site.js?v=${BUILD}"></script>
 ${scripts}
 </body>
 </html>`;
@@ -238,6 +258,9 @@ const RECIPES = [
 ];
 {
     cpSync(join(ROOT, 'recipes'), join(DIST, 'recipes'), { recursive: true });
+    // the recipes are deliberately unstyled in the repo; on the site they get a small base sheet in the palette (copies only)
+    const RECIPE_CSS = `<style>body{font:14px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;padding:14px;color:#2B2F36;margin:0}input,select,textarea{font:inherit;padding:6px 9px;border:1px solid #CFD8DE;border-radius:6px;margin:2px 0}button{font:inherit;font-weight:600;padding:6px 12px;border:1px solid #123A4D;border-radius:6px;background:#184C64;color:#fff;cursor:pointer}button:disabled{opacity:.5;cursor:default}table{border-collapse:collapse}td,th{padding:4px 8px;border-bottom:1px solid #E1E6EA;text-align:left}th{cursor:pointer}ul{padding-left:20px}dialog{border:1px solid #E1E6EA;border-radius:10px;padding:18px}label{display:block;margin:6px 0}[aria-invalid=true]{border-color:#E5484D}.error,[role=alert]{color:#E5484D;font-size:13px}p{margin:8px 0}</style>`;
+    for (const f of readdirSync(join(DIST, 'recipes'))) if (f.endsWith('.html') && f !== 'index.html') { const p = join(DIST, 'recipes', f); writeFileSync(p, read(p).replace('</head>', RECIPE_CSS + '</head>')); }
     cpSync(join(ROOT, 'demo'), join(DIST, 'demo'), { recursive: true });
     for (const f of ['bench.html', 'aegis.min.js', 'aegis.min.js.map', 'aegis.core.js', 'aegis.core.min.js', 'aegis.d.ts', 'aegis-devtools.js', 'aegis-test.js', 'aegis-test.d.ts', 'llms.txt', 'ERRORS.md']) if (existsSync(join(ROOT, f))) cpSync(join(ROOT, f), join(DIST, f));
     cpSync(join(ROOT, existsSync(join(ROOT, 'aegis_full.js')) ? 'aegis_full.js' : 'aegis.js'), join(DIST, 'aegis.js'));
@@ -264,7 +287,7 @@ const RECIPES = [
 {
     const main = `<div class="play"><div class="bar"><b>Playground</b><select id="preset" title="Preset"></select><button id="run" class="primary">Run <kbd>Ctrl+Enter</kbd></button><button id="share">Share link</button><span id="msg"></span><span class="grow"></span><span>The frame imports <code>/aegis.js</code> with dev warnings on. Console output appears below the result.</span></div>
         <main><textarea id="code" spellcheck="false" aria-label="Code"></textarea><div class="out"><iframe id="frame" title="result"></iframe><pre id="console"></pre></div></main></div>`;
-    write('play/index.html', layout({ title: 'Playground · Aegis', description: 'Edit and run Aegis code in the browser, share a link. No build, no account.', path: '/play/', main, scripts: `<script type="module" src="/play.js?v=${VERSION}"></script>` }).replace('<footer>', '<footer hidden>'));
+    write('play/index.html', layout({ title: 'Playground · Aegis', description: 'Edit and run Aegis code in the browser, share a link. No build, no account.', path: '/play/', main, scripts: `<script type="module" src="/play.js?v=${BUILD}"></script>` }).replace('<footer>', '<footer hidden>'));
 }
 
 // blog (placeholder list; posts live in site/blog/*.md)
@@ -338,7 +361,9 @@ cpSync(join(SITE, 'src', 'theme.css'), join(DIST, 'theme.css'));
 cpSync(join(SITE, 'src', 'site.js'), join(DIST, 'site.js'));
 cpSync(join(SITE, 'src', 'play.js'), join(DIST, 'play.js'));
 write('search.json', JSON.stringify(search));
-write('favicon.svg', LOGO.replace('<svg ', '<svg xmlns="http://www.w3.org/2000/svg" '));
+write('favicon.svg', MARK_FILE);
+write('logo/mark.svg', MARK_FILE);
+if (existsSync(join(SITE, 'src', 'logo'))) cpSync(join(SITE, 'src', 'logo'), join(DIST, 'logo'), { recursive: true });
 write('robots.txt', `User-agent: *\nAllow: /\nSitemap: ${ORIGIN}/sitemap.xml\n`);
 const urls = ['/', '/api/', '/examples/', '/play/', '/blog/', ...DOCS.map(d => `/docs/${d.slug}/`)];
 write('sitemap.xml', `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">${urls.map(u => `<url><loc>${ORIGIN}${u}</loc></url>`).join('')}</urlset>`);

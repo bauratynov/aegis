@@ -18,11 +18,11 @@ declare const SIGNAL: unique symbol;
 
 export interface ReadonlySignal<T> {
     readonly value: T;
-    /** прочитать без подписки */
+    /** read without subscribing */
     peek(): T;
-    /** ручная подписка: fn(value) при каждом реальном изменении; возвращает unsubscribe */
+    /** manual subscription: fn(value) on every real change; returns unsubscribe */
     subscribe(fn: (value: T) => void): () => void;
-    /** бренд: только сигналы Aegis (не любой { value }) */
+    /** brand: only Aegis signals (not any { value }) */
     readonly [SIGNAL]: true;
 }
 export interface Signal<T> extends ReadonlySignal<T> {
@@ -30,135 +30,135 @@ export interface Signal<T> extends ReadonlySignal<T> {
     /** sig.update(v => v + 1) */
     update(fn: (prev: T) => T): void;
 }
-/** computed(): read-only сигнал с ручным dispose (обычно не нужен — умирает со scope) */
+/** computed(): a read-only signal with manual dispose (rarely needed — it dies with its scope) */
 export interface Computed<T> extends ReadonlySignal<T> {
     dispose(): void;
 }
 
 export interface SignalOptions<T> {
-    /** появился первый подписчик (эффект / computed / subscribe) — запустить producer, открыть соединение */
+    /** the first subscriber appeared (effect / computed / subscribe) — start the producer, open the connection */
     watched?(): void;
-    /** ушёл последний подписчик — остановить */
+    /** the last subscriber left — stop */
     unwatched?(): void;
     name?: string;
     equals?: false | ((a: T, b: T) => boolean);
-    /** Как часто пишется: 'high' — конфиг/локаль/тема, 'medium' — сессия, 'low' (default) — всё остальное. Производные неживые computed перепроверяются только после записей своего уровня (Salsa durability) */
+    /** How often it is written: 'high' — config/locale/theme, 'medium' — session, 'low' (default) — everything else. Derived non-live computeds are re-checked only after writes of their own level (Salsa durability) */
     durability?: 'low' | 'medium' | 'high';
 }
 export interface ComputedOptions<T> extends SignalOptions<T> {
-    /** computed((prev) => …, { initial }) — предыдущее значение первым аргументом */
+    /** computed((prev) => …, { initial }) — the previous value as the first argument */
     initial?: T;
 }
 
-/** Значение, сигнал или геттер — всё, что принимают реактивные хелперы */
+/** A value, a signal or a getter — anything the reactive helpers accept */
 export type Reactive<T> = T | Signal<T> | ReadonlySignal<T> | (() => T);
 export type Displayable = string | number | boolean | null | undefined;
-/** class: строка | массив | { name: reactive truthy } (clsx-семантика) */
+/** class: string | array | { name: reactive truthy } (clsx semantics) */
 export type ClassValue = string | null | undefined | false | ClassValue[] | Record<string, Reactive<unknown>>;
 
 export function signal<T>(initial: T, nameOrOpts?: string | SignalOptions<T>): Signal<T>;
 export function computed<T>(fn: (prev: T) => T, nameOrOpts?: string | ComputedOptions<T>): Computed<T>;
 export interface EffectOptions {
-    /** false — дети эффекта (effect/on/interval/createScope/subscribe, созданные в теле) живут до dispose владельца, а не до следующего запуска */
+    /** false — children of the effect (effect/on/interval/createScope/subscribe created in its body) live until the owner is disposed, not until the next run */
     own?: boolean;
     name?: string;
-    /** печатать причину каждого перезапуска (dev) */
+    /** print the reason for every re-run (dev) */
     trace?: boolean;
-    /** 'sync' (default) — синхронно; 'micro' — один запуск за микротаск; 'frame' — один запуск за кадр */
-    flush?: 'sync' | 'micro' | 'frame' | 'transition' | 'idle';   // transition/idle — классы дедлайнов (250 мс / 2 с), дренаж срезами после текущей задачи
+    /** 'sync' (default) — synchronous; 'micro' — one run per microtask; 'frame' — one run per frame */
+    flush?: 'sync' | 'micro' | 'frame' | 'transition' | 'idle';   // transition/idle — deadline classes (250 ms / 2 s), drained in slices after the current task
 }
 export function effect(fn: () => void | (() => void), nameOrOpts?: string | EffectOptions): () => void;
-/** Отладка: печатать стек каждой записи в сигнал. trace(sig, false) — выключить */
+/** Debugging: print the stack of every write to a signal. trace(sig, false) — turn off */
 export function trace<T extends Signal<any>>(sig: T, on?: boolean): T;
 export function batch<T>(fn: () => T): T;
-/** Несрочное обновление: записи внутри идут в класс transition (дедлайн 250 мс) срезами после текущей задачи; повторная запись до дренажа схлопывается, старый UI виден. startTransition.pending — сигнал */
+/** Non-urgent update: writes inside go to the transition class (250 ms deadline) in slices after the current task; a repeated write before the drain collapses, the old UI stays visible. startTransition.pending — a signal */
 export const startTransition: (<T>(fn: () => T) => T) & { readonly pending: ReadonlySignal<boolean> };
-/** Отложенная тень сигнала (useDeferredValue): ввод привязан к src, тяжёлый список — к deferred(src) */
+/** A deferred shadow of a signal (useDeferredValue): the input is bound to src, the heavy list — to deferred(src) */
 export function deferred<T>(src: Signal<T> | ReadonlySignal<T>, opts?: { lane?: 'transition' | 'idle' }): ReadonlySignal<T>;
-/** Оптимистичная транзакция (OCC): read(sig) запоминает версии без подписки; на commit read-set валидируется, при конфликте — повтор (retries) или onConflict → 'abort'; записи применяются одним batch */
+/** Optimistic transaction (OCC): read(sig) records versions without subscribing; on commit the read-set is validated, on conflict — retry (retries) or onConflict → 'abort'; writes are applied in one batch */
 export function transaction<T>(fn: (tx: { read<V>(sig: Signal<V> | ReadonlySignal<V>): V; write<V>(sig: Signal<V>, value: V): void; attempt: number }) => Promise<T> | T, opts?: { retries?: number; onConflict?: (changed: Array<{ name: string; value: string }>) => 'abort' | void }): Promise<T>;
-/** Подменить время и очереди планировщика (тесты, симуляции); возвращает restore */
+/** Replace the scheduler's clock and queues (tests, simulations); returns restore */
 export function useScheduler(impl: Partial<{ now(): number; micro(f: () => void): void; frame(f: (t?: number) => void): void; idle(f: (d: { timeRemaining(): number; didTimeout: boolean }) => void): void; yield(): Promise<void>; inputPending(): boolean; onRun: ((obs: { _name: string }, lane: string) => void) | null }>): () => void;
 
 // ── Dev & testing ──────────────────────────────────────────────
 
 export interface WarningInfo {
-    /** путь scope, где возникло предупреждение: component:div#app ‹ list:row (null вне scope) */
+    /** scope path where the warning occurred: component:div#app ‹ list:row (null outside a scope) */
     where?: string | null;
-    /** элемент, к которому относится предупреждение (печатается в консоль как %o) */
+    /** the element the warning is about (printed to the console as %o) */
     el?: Element | null;
-    /** позиция в исходнике (dev): '/js/app.js:42:15' — html``-шаблон, effect() или resource(), где возникло предупреждение */
+    /** source position (dev): '/js/app.js:42:15' — the html`` template, effect() or resource() where the warning occurred */
     site?: string | null;
-    /** полный URL файла для site */
+    /** full file URL for site */
     url?: string | null;
-    /** строка исходника с кареткой под виновным ${} (dev; файл подтягивается fetch-ем один раз) */
+    /** the source line with a caret under the offending ${} (dev; the file is fetched once) */
     snippet?: Promise<string | null>;
-    /** то же после разрешения */
+    /** the same after resolution */
     snippetText?: string | null; code: string; what: string; why: string; fix: string }
-/** Предупреждение движка как исключение (window.__AEGIS_DEV__ = 'strict') */
+/** An engine warning as an exception (window.__AEGIS_DEV__ = 'strict') */
 export class AegisWarning extends Error { code: string; what: string; why: string; fix: string }
-/** Подписка на предупреждения (dev-режим): warnings-as-assertions в тестах. Возвращает unsubscribe */
+/** Subscribe to warnings (dev mode): warnings-as-assertions in tests. Returns unsubscribe */
 /**
- * Ошибки эффектов, не поглощённые scope.onError / errorBoundary: fn(error, error.aegis). Без обработчиков — self.reportError(e).
- * Писатель сигнала исключение не получает (кроме __AEGIS_DEV__ = 'strict'). Возвращает unsubscribe; в scope снимается автоматически.
+ * Effect errors not swallowed by scope.onError / errorBoundary: fn(error, error.aegis). Without handlers — self.reportError(e).
+ * The writer of the signal does not get the exception (except with __AEGIS_DEV__ = 'strict'). Returns unsubscribe; inside a scope it is removed automatically.
  */
 export function onError(fn: (error: unknown, info: { effect: string; scope: string; changed: Array<{ name: string; value: string }>; site?: string } | null) => void): () => void;
 export function onWarn(fn: (w: WarningInfo) => void): () => void;
-/** Управление dev-режимом: dev.enable() (localStorage + reload на проде), dev.disable(), dev.resetWarnings() */
-export interface ScopeInspection { scope: string | null; el: Element | null; signals: Array<{ name: string; value: string; /** сам сигнал (не-перечислимое поле) */ readonly ref?: ReadonlySignal<unknown> }>; effects: Array<{ name: string; deps: string[]; scope: string | null; /** позиция effect() в исходнике (dev) */ site?: string | null }>; children: number }
+/** Dev-mode control: dev.enable() (localStorage + reload in production), dev.disable(), dev.resetWarnings() */
+export interface ScopeInspection { scope: string | null; el: Element | null; signals: Array<{ name: string; value: string; /** the signal itself (non-enumerable field) */ readonly ref?: ReadonlySignal<unknown> }>; effects: Array<{ name: string; deps: string[]; scope: string | null; /** source position of the effect() (dev) */ site?: string | null }>; children: number }
 export const dev: {
     readonly on: boolean;
     enable(): void;
     disable(): void;
     resetWarnings(): void;
-    /** performance.measure / console.timeStamp на каждый flush в треке «Aegis» Performance-панели */
+    /** performance.measure / console.timeStamp on every flush in the “Aegis” track of the Performance panel */
     profile(on?: boolean): void;
-    /** Реактивный мир острова по DOM-узлу: Aegis.dev.of($0) */
+    /** The reactive world of an island by DOM node: Aegis.dev.of($0) */
     of(el: Element): ScopeInspection | null;
-    /** JSON-снимок компонентов (или одного scope) — для чата с ассистентом */
+    /** JSON snapshot of the components (or of one scope) — for a chat with an assistant */
     inspect(root?: Document | Element | Scope): ScopeInspection[] | ScopeInspection;
-    /** Граф зависимостей как Mermaid */
+    /** Dependency graph as Mermaid */
     graph(root?: Scope): string;
-    /** dev-overlay: предупреждения всплывают в углу страницы; false — только консоль (или localStorage aegis:overlay=0) */
+    /** dev overlay: warnings pop up in the page corner; false — console only (or localStorage aegis:overlay=0) */
     overlay: boolean;
-    /** EXPLAIN ANALYZE последних сверок list(): план keyed | rebuild, n, kept, lis, moves, ms */
+    /** EXPLAIN ANALYZE of the latest list() reconciliations: plan keyed | rebuild, n, kept, lis, moves, ms */
     plans(): Array<{ plan: 'keyed' | 'rebuild'; n: number; kept: number; lis: number; moves: number; ms: number }>;
-    /** Runtime-контракты графа и дерева scope: 'sampled' (default) | 'strict' (каждый flush; тесты) | false */
+    /** Runtime contracts of the graph and the scope tree: 'sampled' (default) | 'strict' (every flush; tests) | false */
     contracts: 'sampled' | 'strict' | false;
-    /** Объяснение кода предупреждения из ERRORS.md — печатает в консоль и возвращает текст */
+    /** Explanation of a warning code from ERRORS.md — prints to the console and returns the text */
     explain(code: string): Promise<string>;
-    /** Снимок кэша ресурсов (то же, что cache.stats().entries) — console.table(Aegis.dev.cache()) */
+    /** Snapshot of the resource cache (same as cache.stats().entries) — console.table(Aegis.dev.cache()) */
     cache(): CacheEntryStats[];
-    /** Панель инспектора в странице (грузит aegis-devtools.js рядом с модулем); также ?aegis-devtools в URL */
+    /** In-page inspector panel (loads aegis-devtools.js next to the module); also ?aegis-devtools in the URL */
     panel(): Promise<{ host: HTMLElement; shadow: ShadowRoot; close(): void; highlight(el: Element | null): void }>;
 };
-/** Сбросить модульные синглтоны между тестами (компоненты, реестр, кэш ресурсов, live-region) */
+/** Reset module singletons between tests (components, registry, resource cache, live region) */
 export function reset(opts?: { components?: boolean; cache?: boolean; registry?: boolean; dom?: boolean }): void;
-/** Синхронно выполнить отложенные рендеры show()/list() и очередь эффектов */
+/** Synchronously run deferred show()/list() renders and the effect queue */
 export function flushSync(): void;
-/** Синхронно выполнить отложенные полосы micro/frame и очередь эффектов */
+/** Synchronously run the deferred micro/frame lanes and the effect queue */
 export function flush(): void;
-/** Счётчики движка: flushes, effectRuns, maxRounds, slow (top-20 по мс при dev.profile), scopes, effects, components, кэши */
-export function stats(): { /** резидентные острова, выгрузки (page-out) и гибернации */ islands: { resident: number; evictions: number; hibernations: number } | null; flushes: number; effectRuns: number; maxRounds: number; /** раундов, где порядок эффектов пришлось восстановить сортировкой (churn подписок) */ reordered: number; slow: Array<{ name: string; ms: number }>; scopes: number; effects: number; components: number; resourceCache: number; cssCache: number; queued: number; prefetch: { fired: number; used: number; wasted: number; hoverDelay: number } | null; speculation: { inflight: number; queued: number; fired: number; skipped: number; aborted: number } | null };
-/** Корневой scope для тестов: const [api, dispose] = root(dispose => …) */
+/** Engine counters: flushes, effectRuns, maxRounds, slow (top-20 by ms under dev.profile), scopes, effects, components, caches */
+export function stats(): { /** resident islands, page-outs and hibernations */ islands: { resident: number; evictions: number; hibernations: number } | null; flushes: number; effectRuns: number; maxRounds: number; /** rounds where the effect order had to be restored by sorting (subscription churn) */ reordered: number; slow: Array<{ name: string; ms: number }>; scopes: number; effects: number; components: number; resourceCache: number; cssCache: number; queued: number; prefetch: { fired: number; used: number; wasted: number; hoverDelay: number } | null; speculation: { inflight: number; queued: number; fired: number; skipped: number; aborted: number } | null };
+/** Root scope for tests: const [api, dispose] = root(dispose => …) */
 export function root<T>(fn: (dispose: () => void) => T): [T, () => void];
-/** Дождаться сигнала: resolve при первом значении, для которого predicate истинен; reject TimeoutError / при dispose scope */
+/** Await a signal: resolves on the first value for which the predicate is true; rejects with TimeoutError / on scope dispose */
 export function until<T>(source: Reactive<T>, predicate?: (v: T) => boolean, opts?: { timeout?: number }): Promise<T> & { toBe(v: T): Promise<T>; changed(): Promise<T> };
 
 // ── Context ────────────────────────────────────────────────────
 
 export interface Context<T> { readonly id: symbol; readonly default: T }
 export function createContext<T>(defaultValue?: T): Context<T>;
-/** Положить значение в контекст текущего scope (вне scope — глобально) */
+/** Put a value into the context of the current scope (outside a scope — globally) */
 export function provide<T>(key: Context<T> | string, value: T): void;
-/** Достать из контекста: scope-цепочка → DOM-предки (между островами) → глобальный. Вызывать синхронно в setup */
+/** Take from the context: scope chain → DOM ancestors (between islands) → global. Call synchronously in setup */
 export function inject<T>(key: Context<T>): T;
 export function inject<T>(key: Context<T> | string, fallback: T): T;
 export function inject(key: string): unknown;
 
 // ── State helpers ──────────────────────────────────────────────
 
-/** Сигнал в localStorage/sessionStorage с синхронизацией между вкладками */
+/** A signal in localStorage/sessionStorage with cross-tab sync */
 export function persisted<T>(key: string, initial: T, opts?: {
     storage?: Storage | null;
     serialize?: (v: T) => string;
@@ -166,35 +166,35 @@ export function persisted<T>(key: string, initial: T, opts?: {
     sync?: boolean;
     debounce?: number;
 }): Signal<T> & { clear(): void };
-/** Writable derived: запись живёт до следующего изменения источника */
+/** Writable derived: a write lives until the next change of the source */
 /**
- * Двусторонняя линза: чтение — computed(get), запись — set(v) в источник (без локального состояния).
+ * Two-way lens: reading — computed(get), writing — set(v) into the source (no local state).
  *   bind:value=${lens(() => cents.value / 100, v => cents.value = Math.round(v * 100))}   |   lens(state.address, 'city')
  */
 export function lens<T>(get: () => T, set: (v: T) => void, name?: string): Signal<T>;
 export function lens<O extends object, K extends keyof O>(obj: O, key: K, name?: string): Signal<O[K]>;
-/** [get, set] — function binding для bind:value / bind(): то же, что lens(get, set) */
+/** [get, set] — function binding for bind:value / bind(): the same as lens(get, set) */
 export type FunctionBinding<T = any> = [() => T, (v: T) => void];
 /**
- * Именованные сигналы из ключей объекта — для E-сообщений, trace() и dev.graph(); геттер → computed.
+ * Named signals from object keys — for E-messages, trace() and dev.graph(); a getter → computed.
  *   const { count, query } = signals({ count: 0, query: '' });
  */
 export function signals<T extends Record<string, unknown>>(obj: T, opts?: { prefix?: string }): { [K in keyof T]: Signal<T[K]> };
 export function linked<T>(source: () => T, name?: string): Signal<T>;
 export function linked<S, T>(opts: { source: () => S; compute: (source: S, prev: { source: S; value: T } | undefined) => T }, name?: string): Signal<T>;
-/** Внешний источник как сигнал: (EventTarget, event, map) | (producer(set) => unsubscribe, initial) | { subscribe } */
+/** An external source as a signal: (EventTarget, event, map) | (producer(set) => unsubscribe, initial) | { subscribe } */
 export function from<T, E extends EventTarget = EventTarget>(target: E, event: string, map?: (target: E) => T): ReadonlySignal<T>;
-export function from<T>(producer: (set: (v: T) => void) => (() => void) | void, initial?: T, opts?: { /** producer стартует с первым подписчиком и останавливается с последним */ lazy?: boolean }): ReadonlySignal<T>;
+export function from<T>(producer: (set: (v: T) => void) => (() => void) | void, initial?: T, opts?: { /** the producer starts with the first subscriber and stops with the last */ lazy?: boolean }): ReadonlySignal<T>;
 export function from<T>(subscribable: { subscribe(fn: (v: T) => void): (() => void) | { unsubscribe(): void }; value?: T; peek?(): T }): ReadonlySignal<T>;
-/** Undo/redo для сигнала, reactive() или store() */
+/** Undo/redo for a signal, reactive() or store() */
 export function history<T>(source: Signal<T> | object, opts?: { limit?: number; debounce?: number }): {
     undo(): void; redo(): void; canUndo: ReadonlySignal<boolean>; canRedo: ReadonlySignal<boolean>;
     pause(): void; resume(): void; commit(): void; clear(): void;
     past: ReadonlySignal<unknown[]>; future: ReadonlySignal<unknown[]>;
 };
-/** O(2) обновлений вместо N для «выбранной строки»: const isSelected = selector(selectedId) */
+/** O(2) updates instead of N for the “selected row”: const isSelected = selector(selectedId) */
 export function selector<K, S = K>(source: Signal<S> | ReadonlySignal<S> | (() => S), equals?: (source: S, key: K) => boolean): (key: K) => boolean;
-/** Выполнить fn без подписки на прочитанные сигналы */
+/** Run fn without subscribing to the signals it reads */
 export function untrack<T>(fn: () => T): T;
 export function isSignal(v: unknown): v is Signal<unknown>;
 
@@ -205,13 +205,13 @@ export interface ReactiveExtras<T> {
     readonly $raw: T;
     $snapshot(): T;
     $patch(patch: Partial<T>): void;
-    /** effect над глубоким снимком */
+    /** effect over a deep snapshot */
     $subscribe(fn: (snapshot: T) => void): () => void;
     $reset(): void;
 }
 /**
- * Глубоко-реактивный объект: поля → сигналы, геттеры → computed, методы → batched actions;
- * массивы и plain-объекты реактивны глубоко, Date/Map/File/DOM — как есть. { shallow: true } = store()
+ * Deeply reactive object: fields → signals, getters → computeds, methods → batched actions;
+ * arrays and plain objects are reactive deeply, Date/Map/File/DOM stay as they are. { shallow: true } = store()
  */
 export function reactive<T extends object>(obj: T, opts?: { shallow?: boolean }): T & ReactiveExtras<T>;
 export function isReactive(v: unknown): boolean;
@@ -220,33 +220,33 @@ export function isReactive(v: unknown): boolean;
 
 export interface Scope {
     readonly name: string | null;
-    /** элемент компонента (inject() по DOM-предкам) */
+    /** the component element (inject() through DOM ancestors) */
     el: Element | null;
     run<T>(fn: () => T): T;
     /** using scope = createScope() */
     [Symbol.dispose]?(): void;
-    /** Возвращает unregister — снять cleanup досрочно */
+    /** Returns unregister — remove the cleanup early */
     onDispose(fn: () => void): () => void;
-    /** Обработчик ошибок эффектов этого scope и вложенных; ошибки несут e.aegis = { effect, scope, changed } */
+    /** Error handler for effects of this scope and nested ones; errors carry e.aegis = { effect, scope, changed } */
     onError(fn: (error: any) => void): () => void;
     dispose(): void;
 }
 
-/** name — для сообщений об ошибках (component:div#app, list:row) */
+/** name — for error messages (component:div#app, list:row) */
 export function createScope(name?: string): Scope;
-/** Текущий scope-владелец (null вне scope). Для кода после await: runWithOwner(getOwner(), () => …) */
+/** The current owner scope (null outside a scope). For code after await: runWithOwner(getOwner(), () => …) */
 export function getOwner(): Scope | null;
 export function runWithOwner<T>(scope: Scope | null, fn: () => T): T;
 export function onDispose(fn: () => void): () => void;
 
 // ── DOM Rendering ──────────────────────────────────────────────
 
-/** Что можно вставить в html``: текст, узел, сигнал, функция (реактивно), ref/attach, class/style-объект, массив. Promise/Date — нет (${String(date)}, when()/resource()) */
+/** What can go into html``: text, a node, a signal, a function (reactive), ref/attach, a class/style object, an array. Not Promise/Date (${String(date)}, when()/resource()) */
 export type HtmlValue = Displayable | Node | ReadonlySignal<any> | ((...args: any[]) => unknown) | Ref<any> | Attachment<any> | ClassValue | Record<string, Reactive<unknown>> | FunctionBinding | FieldRef | HtmlValue[];
 export function html(strings: TemplateStringsArray, ...values: HtmlValue[]): DocumentFragment;
-/** Автор ручается за значение: обходит sink-проверки html`` (URL с нестандартной схемой, готовый HTML для srcdoc/.innerHTML) */
+/** The author vouches for the value: bypasses the html`` sink checks (a URL with a non-standard scheme, ready HTML for srcdoc/.innerHTML) */
 export function trusted<T = string>(v: T): { readonly __aegisTrusted: T };
-/** Конфиг DOMPurify для зон пользовательского HTML: без data-aegis*, on*, script/template/iframe */
+/** DOMPurify config for user-HTML zones: no data-aegis*, on*, script/template/iframe */
 export const sanitizeConfig: Readonly<{ FORBID_ATTR: string[]; FORBID_TAGS: string[] }>;
 export function render(target: Element, content: DocumentFragment | Element): void;
 
@@ -260,7 +260,7 @@ export function attr(el: Element, name: string, value: Reactive<Displayable>): (
  * @param fn — boolean signal, function, or static value
  */
 export function cls(el: Element, name: string, value: Reactive<unknown>): () => void;
-/** cls(el, { active: sig, done: () => … }) / cls(el, ['btn', size]) — diff только своих классов */
+/** cls(el, { active: sig, done: () => … }) / cls(el, ['btn', size]) — diffs only its own classes */
 export function cls(el: Element, classes: ClassValue): () => void;
 
 /**
@@ -269,9 +269,9 @@ export function cls(el: Element, classes: ClassValue): () => void;
  * @param prop — CSS property name (camelCase)
  * @param fn — string signal, function, or static value
  */
-/** --custom-property идёт через setProperty; число — только для unitless-свойств */
+/** --custom-property goes through setProperty; a number — only for unitless properties */
 export function style(el: HTMLElement | SVGElement, prop: string, value: Reactive<string | number | null>): () => void;
-/** CSS custom properties из сигналов: cssVars(el, { x, progress }) → --x, --progress */
+/** CSS custom properties from signals: cssVars(el, { x, progress }) → --x, --progress */
 export function cssVars(el: HTMLElement | SVGElement, vars: Record<string, Reactive<string | number | null>>): () => void;
 
 /**
@@ -304,36 +304,36 @@ export function bind(el: HTMLInputElement | HTMLSelectElement | HTMLTextAreaElem
  * @param falseBranch — content factory or element for falsy condition (optional)
  * @returns Comment anchor node (insert this into your DOM)
  */
-/** Три состояния ресурса в html``: ${when(users, { loading, error, data })} */
-/** Сообщение a11y: строка | функция от значения | false (молчать) */
+/** The three states of a resource in html``: ${when(users, { loading, error, data })} */
+/** a11y message: a string | a function of the value | false (silent) */
 export type A11yMsg<X = unknown> = string | ((x: X) => string | null | false) | false;
 export function when<T>(res: { data: { value: T | null; peek(): T | null }; loading?: { value: boolean }; error?: { value: unknown; peek(): unknown }; refresh?: () => unknown }, branches: {
     loading?: () => Node | Node[] | string;
     error?: (error: any, retry: () => void) => Node | Node[] | string;
-    /** data(value, signal) — второй аргумент для реактивных list()/text() внутри ветки */
+    /** data(value, signal) — the second argument for reactive list()/text() inside the branch */
     data?: (data: T, signal: ReadonlySignal<T | null>) => Node | Node[] | string;
     empty?: () => Node | Node[] | string;
-}, opts?: { /** aria-busy на контейнере пока loading/validating (default true) */ busy?: boolean; /** объявления: error assertive (default текст ошибки), data — только после реального ожидания, loading */ announce?: false | { loading?: A11yMsg<void>; error?: A11yMsg<unknown>; data?: A11yMsg<T> } }): Comment;
+}, opts?: { /** aria-busy on the container while loading/validating (default true) */ busy?: boolean; /** announcements: error assertive (default: the error text), data — only after a real wait, loading */ announce?: false | { loading?: A11yMsg<void>; error?: A11yMsg<unknown>; data?: A11yMsg<T> } }): Comment;
 
-/** Обёртки событий в стиле Svelte 5: @submit=${prevent(save)} (в html`` также @submit.prevent, .stop, .self, .once, .passive, .capture, .outside, .window, .document, .enter/.esc/…, .ctrl/.meta/.shift/.alt, .debounce.N, .throttle.N) */
+/** Svelte 5-style event wrappers: @submit=${prevent(save)} (in html`` also @submit.prevent, .stop, .self, .once, .passive, .capture, .outside, .window, .document, .enter/.esc/…, .ctrl/.meta/.shift/.alt, .debounce.N, .throttle.N) */
 export function prevent<E extends Event>(fn: (e: E) => void): (e: E) => void;
 export function stop<E extends Event>(fn: (e: E) => void): (e: E) => void;
 export function self<E extends Event>(fn: (e: E) => void): (e: E) => void;
 
-/** matchMedia как сигнал (один на запрос) */
+/** matchMedia as a signal (one per query) */
 export function media(query: string): ReadonlySignal<boolean>;
-/** prefers-reduced-motion как сигнал; запись перекрывает системную настройку */
+/** prefers-reduced-motion as a signal; a write overrides the system setting */
 export const reducedMotion: Signal<boolean>;
-/** Тема: mode 'light' | 'dark' | 'system' в localStorage + атрибут на <html> + color-scheme */
+/** Theme: mode 'light' | 'dark' | 'system' in localStorage + an attribute on <html> + color-scheme */
 export function theme(opts?: { attr?: string; storage?: string }): { mode: Signal<'light' | 'dark' | 'system'>; dark: ReadonlySignal<boolean> };
 
 export interface ShowOptions {
-    /** Ветки создаются один раз и прячутся через display:none (аналог v-show): DOM и состояние сохраняются */
+    /** branches are created once and hidden with display:none (like v-show): DOM and state are kept */
     keep?: boolean;
-    /** CSS-контракт `${name}-enter-from|active|to` / `${name}-leave-*` (true → 'aegis'); leave доигрывается до удаления */
+    /** CSS contract `${name}-enter-from|active|to` / `${name}-leave-*` (true → 'aegis'); leave plays out before removal */
     transition?: boolean | string;
 }
-/** show(open, () => html`…`, { transition: 'fade' }) — опции третьим аргументом, если ветки else нет */
+/** show(open, () => html`…`, { transition: 'fade' }) — options as the third argument when there is no else branch */
 export function show(
     condition: Signal<boolean> | (() => boolean) | boolean,
     trueBranch: (() => DocumentFragment | Element) | DocumentFragment | Element,
@@ -346,7 +346,7 @@ export function show(
     opts?: ShowOptions
 ): Comment;
 
-/** Ленивый индекс строки list(): сигнал создаётся при первом чтении .value */
+/** Lazy row index of list(): the signal is created on the first read of .value */
 export interface RowIndex {
     readonly value: number;
     peek(): number;
@@ -355,19 +355,19 @@ export interface RowIndex {
 
 export interface ListOptions<T = any> {
     key?: string | ((item: T, index: number) => string | number);
-    /** разметка пустого списка */
+    /** markup for the empty list */
     fallback?: (() => Node | DocumentFragment | string) | Node;
-    /** CSS-контракт enter/leave для строк (true → 'aegis'); уходящая строка получает data-leaving */
+    /** enter/leave CSS contract for rows (true → 'aegis'); a leaving row gets data-leaving */
     transition?: boolean | string | 'view';
-    /** 'signal' — renderFn получает Signal<T>; замена объекта под ключом патчит сигнал вместо перерисовки */
+    /** 'signal' — renderFn receives Signal<T>; replacing the object under a key patches the signal instead of re-rendering */
     item?: 'signal';
-    /** 'view' — перестановки и вставки анимирует View Transitions API (одна startViewTransition на flush, FLIP бесплатно); viewClass — view-transition-class строк (default 'aegis-row') */
+    /** 'view' — moves and inserts are animated with the View Transitions API (one startViewTransition per flush, FLIP for free); viewClass — the view-transition-class of rows (default 'aegis-row') */
     viewClass?: string;
-    /** строки вне экрана замораживаются (contentvisibilityautostatechange): scope строки уничтожается, DOM остаётся снимком, при возврате — перерисовка с актуальными данными */
+    /** off-screen rows are frozen (contentvisibilityautostatechange): the row scope is destroyed, the DOM stays as a snapshot, on return — re-render with current data */
     hibernate?: boolean;
-    /** сигнал «строки ещё создаются срезами» (стриминговая досборка под startTransition / вводом) */
+    /** a signal “rows are still being created in slices” (streaming assembly under startTransition / typing) */
     pending?: Signal<boolean>;
-    /** порядок досборки от видимого: элемент с прокруткой и высота строки */
+    /** assembly order from the visible part: the scrolling element and the row height */
     viewport?: Element; itemHeight?: number;
 }
 export function list<T>(
@@ -382,8 +382,8 @@ export function list<T>(
 ): Comment;
 export function list<T>(
     items: Signal<T[]> | ReadonlySignal<T[]> | (() => T[]) | T[],
-    /** index — сигнал: актуален после сортировки/удаления. Строка перерисовывается, если объект под ключом заменён */
-    /** renderFn может вернуть один узел, фрагмент из нескольких (<tr>+<tr>, <dt>+<dd>) или массив — обёрток нет */
+    /** index — a signal: current after sorting/removal. A row re-renders if the object under its key was replaced */
+    /** renderFn may return one node, a fragment of several (<tr>+<tr>, <dt>+<dd>) or an array — no wrappers */
     renderFn: (item: T, index: RowIndex) => Node | Node[] | string | number,
     key?: string | ((item: T) => string | number),
     opts?: ListOptions
@@ -405,25 +405,25 @@ export interface Ref<T extends Element = Element> {
 }
 export function ref<T extends Element = Element>(): Ref<T>;
 
-/** Маркер attach() для html``: <canvas ${attach(el => …)}> */
+/** attach() marker for html``: <canvas ${attach(el => …)}> */
 export interface Attachment<E extends Element = Element> {
     readonly fn: (el: E) => void | (() => void);
     readonly opts: AttachOptions;
 }
 export interface AttachOptions {
-    /** только init + cleanup, без реактивного перезапуска (карты, редакторы) */
+    /** init + cleanup only, without reactive re-runs (maps, editors) */
     once?: boolean;
 }
 /**
- * Поведение на элементе после монтирования: init + cleanup + реактивность одной функцией.
- * fn выполняется как effect: перезапуск при изменении прочитанных сигналов, cleanup перед перезапуском и при dispose.
+ * Behaviour on an element after mount: init + cleanup + reactivity in one function.
+ * fn runs as an effect: re-runs when the signals it read change, cleanup before a re-run and on dispose.
  */
 export function attach<E extends Element = Element>(fn: (el: E) => void | (() => void), opts?: AttachOptions): Attachment<E>;
 export function attach<E extends Element>(el: E, fn: (el: E) => void | (() => void), opts?: AttachOptions): () => void;
 
 /**
- * Живая копия фрагмента из html``: привязки создаются заново в текущем scope.
- * Фрагмент с готовыми узлами (list()/show()-якоря) не воспроизводим — cloneNode + dev warning E013.
+ * A live copy of a fragment from html``: bindings are created anew in the current scope.
+ * A fragment with finished nodes (list()/show() anchors) cannot be reproduced — cloneNode + dev warning E013.
  */
 export function clone(frag: DocumentFragment): DocumentFragment;
 
@@ -453,7 +453,7 @@ export function nextTick(fn?: () => void): Promise<void>;
  * @returns an async fetch function: (url, opts?) => Promise<json | text | undefined>
  */
 export interface GuardedFetch {
-    /** устаревший (отменённый) вызов никогда не резолвится; { stale: 'undefined' } — старое поведение */
+    /** a stale (cancelled) call never resolves; { stale: 'undefined' } — the old behaviour */
     (url: string, opts?: RequestOptions & { stale?: 'undefined' }): Promise<any>;
     pending: ReadonlySignal<boolean>;
     error: ReadonlySignal<unknown>;
@@ -462,18 +462,18 @@ export function guardedFetch(scope?: Scope): GuardedFetch;
 
 // ── HTTP layer ─────────────────────────────────────────────────
 
-/** Ошибка HTTP-ответа: статус, Response и разобранное тело (e.data.errors из Laravel/Django) */
+/** HTTP response error: status, Response and the parsed body (e.data.errors from Laravel/Django) */
 export class HttpError extends Error {
     name: 'HttpError';
     status: number;
     response: Response;
     data: unknown;
-    /** circuit breaker открыт — запрос не отправлялся; retryAt — когда попробовать снова (ms epoch) */
+    /** the circuit breaker is open — the request was not sent; retryAt — when to try again (ms epoch) */
     circuit?: boolean;
     retryAt?: number;
-    /** повтор отклонён retry budget */
+    /** the retry was rejected by the retry budget */
     budget?: boolean;
-    /** сервер просил ждать дольше maxWait (мс) */
+    /** the server asked to wait longer than maxWait (ms) */
     retryAfter?: number;
     constructor(status: number, response: Response, data: unknown);
 }
@@ -484,75 +484,75 @@ export interface CsrfConfig {
     cookie?: string;
     meta?: string;
     token?: () => string;
-    /** decodeURIComponent значения cookie (Laravel) */
+    /** decodeURIComponent of the cookie value (Laravel) */
     decode?: boolean;
 }
 export interface AegisConfig {
-    /** Доверенные origin (кроме своего и baseURL): только им уходят плоские headers и CSRF-токен */
+    /** Trusted origins (besides your own and baseURL): only they receive the flat headers and the CSRF token */
     origins?: string[];
-    /** Разрешённые нестандартные схемы для URL-атрибутов (myapp:, intent:) */
+    /** Allowed non-standard schemes for URL attributes (myapp:, intent:) */
     urlSchemes?: string[];
-    /** Острова: политика origin для data-aegis-src ('same-origin' | функция | RegExp | префиксы) и allow-list имён внутри [data-aegis-untrusted] */
+    /** Islands: origin policy for data-aegis-src ('same-origin' | function | RegExp | prefixes) and an allow-list of names inside [data-aegis-untrusted] */
     islands?: { src?: 'same-origin' | ((url: string) => boolean) | RegExp | string[]; allow?: string[] };
-    /** Trusted Types: имя passthrough-политики для литералов html`` (default 'aegis') и политика для серверного HTML (swap/boost/wireForm) */
+    /** Trusted Types: the name of the passthrough policy for html`` literals (default 'aegis') and the policy for server HTML (swap/boost/wireForm) */
     trustedTypes?: { name?: string; server?: ((html: string, who: string) => any) | string };
-    /** делегирование событий: один listener на document для перечисленных типов (только всплывающие; capture/passive/once и @ev.direct — напрямую) */
+    /** event delegation: one listener on document for the listed types (bubbling only; capture/passive/once and @ev.direct — directly) */
     delegateEvents?: string[] | null;
-    /** ёмкость SWR-кэша: maxEntries (default 500, SIEVE-вытеснение среди незанятых записей), maxBytes (default 0 — без лимита) */
+    /** SWR cache capacity: maxEntries (default 500, SIEVE eviction among idle entries), maxBytes (default 0 — no limit) */
     cache?: { maxEntries?: number;
-    /** Принципал персиста: записи и офлайн-мутации другого scope не гидрируются и не воспроизводятся (logout: cache.purge()) */
+    /** Persist principal: entries and offline mutations of another scope are neither hydrated nor replayed (logout: cache.purge()) */
     scope?: () => string | null | undefined;
-    /** Имена query-параметров, значения которых заменяются на * в ключах кэша, BroadcastChannel и истории */
+    /** Names of query parameters whose values are replaced with * in cache keys, BroadcastChannel and history */
     redact?: string[]; maxBytes?: number };
-    /** заголовок ответа с шаблонами ключей для invalidate() — 'Aegis-Invalidate: /api/users*, /api/stats' (same-origin); false — выключить */
+    /** response header with key patterns for invalidate() — 'Aegis-Invalidate: /api/users*, /api/stats' (same-origin); false — off */
     invalidateHeader?: string | false;
-    /** circuit breaker per origin: после threshold retryable-ошибок подряд запросы падают сразу (e.circuit, e.retryAt) на cooldown, затем один probe */
+    /** circuit breaker per origin: after threshold consecutive retryable errors requests fail immediately (e.circuit, e.retryAt) for cooldown, then one probe */
     breaker?: boolean | { threshold?: number; cooldown?: number; key?: (url: string) => string };
-    /** идентификация сущностей для cache.patchEntity() и cache: { entity }: (obj) => 'user:42' | null */
+    /** entity identification for cache.patchEntity() and cache: { entity }: (obj) => 'user:42' | null */
     identify?: ((obj: any) => string | null) | null;
-    /** спекулятивные запросы (prefetch, preload маршрута, predict, прогрев островов): 'auto' — по navigator.connection (saveData / 2g / prefers-reduced-data → выключено, 3g → один в полёте), false — никогда, { maxInflight, saveData: 'ignore' } */
+    /** speculative requests (prefetch, route preload, predict, island warm-up): 'auto' — by navigator.connection (saveData / 2g / prefers-reduced-data → off, 3g → one in flight), false — never, { maxInflight, saveData: 'ignore' } */
     speculation?: 'auto' | false | { maxInflight?: number; saveData?: 'respect' | 'ignore' };
-    /** порог полезности прогрева (p·min(rtt, horizon) − передача − fixedCost, мс) и задержка hover: 80 | 'auto' (адаптивная по dwell-гистограммам) */
+    /** warm-up usefulness threshold (p·min(rtt, horizon) − transfer − fixedCost, ms) and hover delay: 80 | 'auto' (adaptive by dwell histograms) */
     prefetch?: { minUtility?: number; fixedCost?: number; horizon?: number; hoverDelay?: number | 'auto'; rtt?: number; bytes?: number } | null;
-    /** лимит повторов на клиент в скользящем окне: retries ≤ ratio × requests + min; отказ — e.budget === true */
+    /** retry limit per client in a sliding window: retries ≤ ratio × requests + min; rejection — e.budget === true */
     retryBudget?: boolean | { ratio?: number; min?: number; window?: number };
-    /** планировщик ревалидации: refill token bucket на причину (мс), параллелизм, стаггер между стартами, джиттер reconnect */
+    /** revalidation scheduler: token-bucket refill per reason (ms), concurrency, stagger between starts, reconnect jitter */
     revalidate?: { focus?: number; reconnect?: number; concurrency?: number; stagger?: number; reconnectJitter?: number };
-    /** пресет или своя схема; null — выключить; без вызова — автодетект из <meta name="aegis-csrf"> / <meta name="csrf-token"> */
+    /** a preset or your own scheme; null — off; without a call — auto-detected from <meta name="aegis-csrf"> / <meta name="csrf-token"> */
     csrf?: CsrfPreset | CsrfConfig | null;
-    /** заголовки по умолчанию (default: X-Requested-With: XMLHttpRequest) */
+    /** default headers (default: X-Requested-With: XMLHttpRequest) */
     headers?: Record<string, string>;
     baseURL?: string;
-    /** мс; 0 — без таймаута */
+    /** ms; 0 — no timeout */
     timeout?: number;
-    /** подмена fetch: прокси, логирование, моки */
+    /** fetch replacement: proxies, logging, mocks */
     fetch?: (url: string, init: RequestInit) => Promise<Response>;
     onError?: (error: HttpError, info: { url: string; status: number }) => void;
-    /** после PRG-редиректа формы: 'assign' (default) — location.assign(response.url); 'none'; или свой обработчик */
+    /** after a form's PRG redirect: 'assign' (default) — location.assign(response.url); 'none'; or your own handler */
     onRedirect?: 'assign' | 'none' | ((response: Response) => void);
 }
-/** Настройка HTTP-слоя под свой бэкенд — одна строка на проект: configure({ csrf: 'django' }) */
+/** Configure the HTTP layer for your backend — one line per project: configure({ csrf: 'django' }) */
 export function configure(opts: AegisConfig): AegisConfig;
 
 export interface RequestOptions extends Omit<RequestInit, 'body' | 'method' | 'headers'> {
-    /** If-Match для оптимистичной блокировки (ETag из cache.explain(key).etag или ctx.etag мутации) */
+    /** If-Match for optimistic locking (the ETag from cache.explain(key).etag or the mutation's ctx.etag) */
     ifMatch?: string;
     method?: string;
-    /** объект → JSON + Content-Type; FormData/Blob/string — как есть */
+    /** object → JSON + Content-Type; FormData/Blob/string — as is */
     body?: unknown;
     query?: Record<string, string | number | boolean> | URLSearchParams;
     headers?: HeadersInit;
-    /** мс; default configure().timeout */
+    /** ms; default configure().timeout */
     timeout?: number;
-    /** вернуть Response без разбора тела */
+    /** return the Response without parsing the body */
     raw?: boolean;
 }
 /**
- * Единый HTTP-запрос: baseURL, query, JSON-тело, CSRF для unsafe same-origin, timeout, HttpError с разобранным телом.
+ * One HTTP request: baseURL, query, JSON body, CSRF for unsafe same-origin, timeout, HttpError with the parsed body.
  */
 export function request<T = unknown>(url: string, init?: RequestOptions & { raw?: false }): Promise<T>;
 export function request(url: string, init: RequestOptions & { raw: true }): Promise<Response>;
-/** Сахар над request() */
+/** Sugar over request() */
 export const api: {
     get<T = unknown>(url: string, opts?: RequestOptions): Promise<T>;
     post<T = unknown>(url: string, body?: unknown, opts?: RequestOptions): Promise<T>;
@@ -561,8 +561,8 @@ export const api: {
     delete<T = unknown>(url: string, opts?: RequestOptions): Promise<T>;
 };
 export type Fetcher = (url: string, opts: { signal?: AbortSignal; method?: string; body?: unknown }) => Promise<unknown>;
-/** Точка подмены для всего движка: defaults.fetcher = mock — resource/cache/offline/guardedFetch идут через него */
-export const defaults: { /** null → request() из движка; подмена: defaults.fetcher = mock */ fetcher: Fetcher | null; motion: 'auto' | 'reduce' | 'none' };
+/** The single mocking point for the whole engine: defaults.fetcher = mock — resource/cache/offline/guardedFetch go through it */
+export const defaults: { /** null → the engine's request(); mocking: defaults.fetcher = mock */ fetcher: Fetcher | null; motion: 'auto' | 'reduce' | 'none' };
 
 export interface RetryOptions {
     retries?: number;
@@ -571,45 +571,45 @@ export interface RetryOptions {
     signal?: AbortSignal;
     shouldRetry?: (error: unknown, attempt: number) => boolean;
 }
-/** Повтор с exponential backoff и full jitter; уважает Retry-After; AbortError не повторяется */
+/** Retry with exponential backoff and full jitter; honours Retry-After; AbortError is not retried */
 export function withRetry<T>(fn: (attempt: number) => Promise<T>, opts?: RetryOptions): Promise<T>;
 
-/** Размер элемента как сигналы (ResizeObserver) */
+/** Element size as signals (ResizeObserver) */
 export function size(el: Element, opts?: { box?: 'border-box' | 'content-box' }): { width: ReadonlySignal<number>; height: ReadonlySignal<number> };
-/** Видимость элемента как сигналы (IntersectionObserver) */
+/** Element visibility as signals (IntersectionObserver) */
 export function inView(el: Element, opts?: IntersectionObserverInit): { visible: ReadonlySignal<boolean>; ratio: ReadonlySignal<number> };
-/** Окно как сигналы (singleton, один passive listener, запись в rAF) */
+/** The window as signals (singleton, one passive listener, writes in rAF) */
 export function viewport(): { width: ReadonlySignal<number>; height: ReadonlySignal<number>; scrollX: ReadonlySignal<number>; scrollY: ReadonlySignal<number> };
 
-export function debounced<T extends (...args: any[]) => any>(fn: T, ms: number): T & { cancel(): void; /** вызвать немедленно, отменив таймер */ flush: T };
+export function debounced<T extends (...args: any[]) => any>(fn: T, ms: number): T & { cancel(): void; /** call immediately, cancelling the timer */ flush: T };
 export function throttled<T extends (...args: any[]) => any>(fn: T, ms: number): T;
-/** Polling с auto-stop при dispose. В фоновой вкладке спит (background: true — не спать) */
+/** Polling with auto-stop on dispose. Sleeps in a background tab (background: true — do not sleep) */
 export function poll(fn: () => Promise<void> | void, ms: number, opts?: { background?: boolean }): () => void;
 
 // ── Data ───────────────────────────────────────────────────────
 
 export type ResourceStatus = 'idle' | 'pending' | 'success' | 'error';
 
-/** Единый контракт resource() / resource({ cache }) / resource({ offline }) / streamResource / infiniteResource */
+/** One contract for resource() / resource({ cache }) / resource({ offline }) / streamResource / infiniteResource */
 export interface ResourceResult<T> {
     data: ReadonlySignal<T | null> | Signal<T | null>;
-    /** идёт запрос и данных ещё нет (скелетон один раз) */
+    /** a request is in flight and there is no data yet (skeleton once) */
     loading: ReadonlySignal<boolean>;
-    /** идёт запрос поверх данных (dimming, не мигание) */
+    /** a request is in flight over existing data (dimming, not flicker) */
     validating: ReadonlySignal<boolean>;
-    /** keepPrevious: показаны данные предыдущего ключа, пока грузятся новые */
+    /** keepPrevious: data of the previous key is shown while the new one loads */
     stale: ReadonlySignal<boolean>;
     status: ReadonlySignal<ResourceStatus>;
     error: ReadonlySignal<HttpError | Error | null>;
-    /** текущий URL / сериализованные params */
+    /** current URL / serialised params */
     key: ReadonlySignal<string | null>;
     refresh(): Promise<void>;
-    /** Optimistic update: локальная запись (для offline — ещё и в IndexedDB) */
+    /** Optimistic update: a local write (for offline — also into IndexedDB) */
     mutate(fnOrValue: T | ((prev: T | null) => T)): void;
     abort(): void;
-    /** последний запрос этого ресурса (для await в тестах) */
+    /** the last request of this resource (for await in tests) */
     readonly promise: Promise<void> | null;
-    /** дождаться данных: resolve(data) или reject(error) */
+    /** await the data: resolve(data) or reject(error) */
     ready(): Promise<T | null>;
     dispose(): void;
 }
@@ -619,47 +619,47 @@ export interface ResourceOptions<T> {
     transform?: (data: unknown) => T;
     fetcher?: Fetcher;
     immediate?: boolean;
-    /** structural sharing ответа: неизменённые части сохраняют identity; массивы объектов матчатся по полю 'id' (default), по своему полю или функции; false — выключить */
+    /** structural sharing of the response: unchanged parts keep their identity; arrays of objects are matched by the 'id' field (default), by your own field or a function; false — off */
     share?: boolean | string | ((item: any) => unknown);
-    /** один GET на URL в полёте для нескольких resource(url) (default true при fetcher по умолчанию) */
+    /** one GET per URL in flight for several resource(url) (default true with the default fetcher) */
     dedupe?: boolean;
-    /** повторы с backoff: true → 3, число, или предикат (err, attempt) => boolean; default 0 */
+    /** retries with backoff: true → 3, a number, or a predicate (err, attempt) => boolean; default 0 */
     retry?: boolean | number | ((error: unknown, attempt: number) => boolean);
-    /** перезапрос по событиям — только opt-in */
+    /** refetch on events — opt-in only */
     refetch?: { focus?: boolean; reconnect?: boolean; interval?: number };
 }
-/** Часть ключа кэша: строка, число, объект params или функция (реактивная часть) */
+/** A cache key part: a string, a number, a params object or a function (the reactive part) */
 export type CacheKeyPart = string | number | boolean | null | Record<string, unknown> | (() => string | number | Record<string, unknown>);
 export interface CacheOptions {
-    /** ключ вместо URL: строка или иерархический массив ['users', () => id.value] (invalidate(['users']) матчит все) */
+    /** a key instead of the URL: a string or a hierarchical array ['users', () => id.value] (invalidate(['users']) matches all) */
     key?: string | CacheKeyPart[] | (() => string | CacheKeyPart[]);
-    /** теги для invalidate({ tags }) */
+    /** tags for invalidate({ tags }) */
     tags?: string | string[];
-    /** после каждого ответа списка засеять дочерние записи: (data) => [[key, item], …] — карточка открывается без запроса */
+    /** after every list response seed the child entries: (data) => [[key, item], …] — a card opens without a request */
     seeds?: (data: any) => Array<[string | CacheKeyPart[], unknown]>;
-    /** ответ — сущность (configure({ identify })): обновить её во всех списках */
+    /** the response is an entity (configure({ identify })): update it in every list */
     entity?: boolean;
-    /** мс | 'http' (Cache-Control max-age / Age / Expires ответа; ['http', fallbackMs]) | 'auto' | { auto: true, k?, min?, max? } — T* = sqrt(2k/(λ̂μ̂)) − 1/λ̂ по наблюдаемым частотам */
+    /** ms | 'http' (Cache-Control max-age / Age / Expires of the response; ['http', fallbackMs]) | 'auto' | { auto: true, k?, min?, max? } — T* = sqrt(2k/(λ̂μ̂)) − 1/λ̂ from the observed rates */
     staleTime?: number | 'http' | ['http', number] | 'auto' | { auto: true; k?: number; min?: number; max?: number };
-    /** мс до сборки незанятой записи; Infinity — держать до вытеснения по лимитам; 'http' — max-age + stale-while-revalidate из ответа */
+    /** ms until an idle entry is collected; Infinity — keep until evicted by limits; 'http' — max-age + stale-while-revalidate from the response */
     cacheTime?: number | 'http';
-    /** держать старые данные при смене URL (default true для реактивного source) */
+    /** keep old data when the URL changes (default true for a reactive source) */
     keepPrevious?: boolean;
-    /** default ['focus', 'reconnect']; [] — выключить. События, пришедшие в скрытой вкладке, применяются при возврате в неё */
+    /** default ['focus', 'reconnect']; [] — off. Events that arrived in a hidden tab are applied when you return to it */
     revalidateOn?: Array<'focus' | 'reconnect'>;
-    /** polling: мс или функция от данных (0 — стоп); один таймер на все ресурсы, сетка 1 с, backoff при ошибках, сон в скрытой вкладке */
+    /** polling: ms or a function of the data (0 — stop); one timer for all resources, 1 s grid, backoff on errors, sleeps in a hidden tab */
     interval?: number | ((data: any) => number);
-    /** продолжать polling в скрытой вкладке (браузер всё равно троттлит) */
+    /** keep polling in a hidden tab (the browser throttles anyway) */
     background?: boolean;
-    /** не вытеснять запись по лимитам кэша */
+    /** never evict the entry by cache limits */
     pin?: boolean;
-    /** запись переживает перезагрузку (IndexedDB): true | { version — смена формата сбрасывает, maxBytes — бюджет хранилища (4 MB), maxAge — срок (7 дней) } */
+    /** the entry survives a reload (IndexedDB): true | { version — a format change resets, maxBytes — storage budget (4 MB), maxAge — lifetime (7 days) } */
     persist?: boolean | { version?: number; maxBytes?: number; maxAge?: number };
-    /** делиться данными и инвалидацией с другими вкладками (BroadcastChannel, default true) */
+    /** share data and invalidation with other tabs (BroadcastChannel, default true) */
     sync?: boolean;
 }
 export interface OfflineOptions {
-    /** попыток на мутацию до dead-letter (default 10); 4xx — сразу */
+    /** attempts per mutation before dead-letter (default 10); 4xx — immediately */
     maxAttempts?: number;
     dbName?: string;
     storeName?: string;
@@ -671,51 +671,51 @@ export interface LoaderSource<P, T> {
     loader: (ctx: { params: P; signal: AbortSignal }) => Promise<T> | T;
 }
 export interface OfflineResourceResult<T> extends ResourceResult<T> {
-    /** dead-letter: мутации, которые сервер отверг или не удалось доставить */
+    /** dead-letter: mutations the server rejected or that could not be delivered */
     failed: ReadonlySignal<Array<{ mutation: { mutId: string; method: string; url: string; body: unknown }; error: unknown }>>;
     online: ReadonlySignal<boolean>;
     syncing: ReadonlySignal<boolean>;
-    /** сетевая мутация; офлайн или сетевая ошибка → в IndexedDB-очередь, отправка при online / Background Sync */
+    /** network mutation; offline or a network error → into the IndexedDB queue, sent when online / Background Sync */
     send(method: string, url: string, body?: unknown, opts?: { optimistic?: (current: T | null) => T }): Promise<unknown>;
-    /** совместимость: mutate('POST', url, body, optimistic) === send(...) */
+    /** compatibility: mutate('POST', url, body, optimistic) === send(...) */
     mutate(method: string, url: string, body?: unknown, optimistic?: (current: T | null) => T): Promise<unknown>;
     mutate(fnOrValue: T | ((prev: T | null) => T)): void;
 }
 
 /**
- * Реактивная загрузка данных — один примитив:
+ * Reactive data loading — one primitive:
  *   resource('/api/users')                                 GET
- *   resource(() => `/api/users?page=${page.value}`)       перезапрос при изменении сигналов
+ *   resource(() => `/api/users?page=${page.value}`)       refetch when signals change
  *   resource({ params: () => uid.value, loader: async ({ params, signal }) => … })
- *   resource(url, { cache: true, staleTime: 30000 })       SWR-кэш (общий по ключу)
- *   resource(url, { offline: true })                       IndexedDB + очередь мутаций
+ *   resource(url, { cache: true, staleTime: 30000 })       SWR cache (shared by key)
+ *   resource(url, { offline: true })                       IndexedDB + mutation queue
  */
 export function resource<T = unknown>(source: string | (() => string | null | false), opts: ResourceOptions<T> & { initial: T } & { cache?: boolean | CacheOptions; offline?: false }): ResourceResult<T> & { data: Signal<T> };
 export function resource<T = unknown>(source: string | (() => string | null | false), opts: ResourceOptions<T> & { offline: true | OfflineOptions }): OfflineResourceResult<T>;
 export function resource<T = unknown>(source: string | (() => string | null | false), opts?: ResourceOptions<T> & { cache?: boolean | CacheOptions; offline?: false }): ResourceResult<T>;
 export function resource<T = unknown, P = unknown>(source: LoaderSource<P, T>, opts?: ResourceOptions<T>): ResourceResult<T>;
 
-/** Дождаться завершения всех запросов resource()/mutation()/guardedFetch — вместо sleep(50) в тестах */
+/** Await the completion of all resource()/mutation()/guardedFetch requests — instead of sleep(50) in tests */
 export function settled(): Promise<void>;
 
 export interface MutationOptions<A extends unknown[]> {
-    /** 'validate' — сигналы, прочитанные через ctx.read до ответа, валидируются по версиям на commit (OCC): изменились → патч снят, ключи перечитаны, E052 в dev */
+    /** 'validate' — signals read through ctx.read before the response are validated by version on commit (OCC): changed → the patch is dropped, the keys are refetched, E052 in dev */
     isolation?: 'validate';
-    /** ресурсы, чьи data снимаются перед optimistic и откатываются при ошибке */
+    /** resources whose data is snapshotted before optimistic and rolled back on error */
     resources?: Array<{ data: { peek(): any }; mutate(v: any): void }>;
     optimistic?: (...args: A) => void;
     invalidates?: InvalidatePattern | InvalidatePattern[];
-    /** ждать перезапросы invalidates перед снятием pending (default true) */
+    /** wait for the invalidates refetches before clearing pending (default true) */
     awaitInvalidates?: boolean;
-    /** серверный ответ → новый base затронутых ресурсов без refetch: (result, base, ...args) => data */
+    /** server response → a new base of the affected resources without a refetch: (result, base, ...args) => data */
     commit?: (result: any, base: any, ...args: A) => any;
-    /** обновить записи кэша по шаблонам без refetch: { '/api/users*': (data, result, ...args) => data } */
+    /** update cache entries by patterns without a refetch: { '/api/users*': (data, result, ...args) => data } */
     updates?: Record<string, (data: any, result: any, ...args: A) => any>;
-    /** обновить сущности во всех записях (configure({ identify })): (result, ...args) => [[entityKey, (node) => node], …] */
+    /** update entities in every entry (configure({ identify })): (result, ...args) => [[entityKey, (node) => node], …] */
     patch?: (result: any, ...args: A) => Array<[string, (node: any) => any]>;
-    /** 412/409 от сервера: base — до правки, local — с optimistic, server — актуальное; вернуть 'server' | 'client' | объект для повтора мутации с ним */
+    /** 412/409 from the server: base — before the edit, local — with optimistic, server — current; return 'server' | 'client' | an object to retry the mutation with */
     onConflict?: (c: { base: any; local: any; server: any; merge(): { value: any; conflicts: string[] }; error: HttpError }) => 'server' | 'client' | object | Promise<'server' | 'client' | object>;
-    /** объявления для скринридера: true — дефолты (Saved / текст ошибки / Change reverted / conflict), или свои */
+    /** screen-reader announcements: true — defaults (Saved / the error text / Change reverted / conflict), or your own */
     announce?: true | { pending?: A11yMsg; success?: A11yMsg<any>; error?: A11yMsg<unknown>; undone?: A11yMsg<unknown>; conflict?: A11yMsg<unknown> };
     /** 'ignore' (default, double-submit guard) | 'queue' | 'latest' | 'parallel' */
     concurrent?: 'ignore' | 'queue' | 'latest' | 'parallel';
@@ -723,7 +723,7 @@ export interface MutationOptions<A extends unknown[]> {
     onError?: (error: unknown, ...args: A) => void;
 }
 export interface Mutation<A extends unknown[], R> {
-    /** запуск; ошибка не бросается — она в .error (run() бросает) */
+    /** run; the error is not thrown — it is in .error (run() throws) */
     (...args: A): Promise<R | undefined>;
     run(...args: A): Promise<R | undefined>;
     pending: ReadonlySignal<boolean>;
@@ -732,25 +732,25 @@ export interface Mutation<A extends unknown[], R> {
     abort(): void;
 }
 /**
- * Мутация с pending, double-submit guard, optimistic + rollback, invalidate.
+ * A mutation with pending, double-submit guard, optimistic + rollback, invalidate.
  *   const addTodo = mutation((text, { signal }) => api.post('/api/todos', { text }, { signal }), { resources: [todos], optimistic: … });
  */
-export function mutation<A extends unknown[], R>(fn: (...args: [...A, { signal: AbortSignal; /** isolation: 'validate' — чтение сигнала с запоминанием версии (OCC) */ read<V>(sig: Signal<V> | ReadonlySignal<V>): V; /** ETag затронутого ресурса для If-Match */ etag: string | null }]) => Promise<R> | R, opts?: MutationOptions<A>): Mutation<A, R>;
+export function mutation<A extends unknown[], R>(fn: (...args: [...A, { signal: AbortSignal; /** isolation: 'validate' — read a signal and remember its version (OCC) */ read<V>(sig: Signal<V> | ReadonlySignal<V>): V; /** ETag of the affected resource for If-Match */ etag: string | null }]) => Promise<R> | R, opts?: MutationOptions<A>): Mutation<A, R>;
 
 export interface StreamOptions<T> {
     method?: string;
     body?: unknown;
     headers?: HeadersInit;
-    /** 'ndjson' (default: data — массив строк JSON), 'text' (data — строка) или парсер строки */
+    /** 'ndjson' (default: data — an array of JSON lines), 'text' (data — a string) or a line parser */
     parse?: 'ndjson' | 'text' | ((line: string) => T);
     initial?: unknown;
     reduce?: (acc: any, item: T) => any;
     immediate?: boolean;
 }
-/** Стриминг ответа в растущий сигнал; done — сигнал завершения */
+/** Stream a response into a growing signal; done — the completion signal */
 export function streamResource<T = unknown>(source: string | (() => string | null), opts?: StreamOptions<T>): ResourceResult<any> & { done: ReadonlySignal<boolean> };
 
-/** Server-Sent Events поверх EventSource: event "aegis-signals" пишет JSON в сигналы; закрывается при dispose scope */
+/** Server-Sent Events over EventSource: the "aegis-signals" event writes JSON into signals; closed on scope dispose */
 export function sse(url: string, opts?: {
     signals?: Record<string, Signal<any>>;
     events?: Record<string, (data: any, e: MessageEvent) => void>;
@@ -804,12 +804,12 @@ export function store<T extends object>(definition: T): T & {
 /** @deprecated Use `resource(url, { cache: true, staleTime })`. */
 export function cachedResource<T = unknown>(source: string | (() => string), opts?: ResourceOptions<T> & CacheOptions): ResourceResult<T>;
 
-/** Прогреть кэш без подписчиков (hover, приближение к viewport); данные доступны resource(url, { cache: true }) */
-export function prefetch(url: string, opts?: { /** вид прогрева для статистики попаданий (prefetchOn проставляет сам) */ kind?: string; /** вероятность использования — прогрев только при p·rtt выше цены сети */ p?: number; /** мимо бюджета сети (configure({ speculation })) */ force?: boolean; key?: string; staleTime?: number; cacheTime?: number; fetcher?: Fetcher; transform?: (d: unknown) => unknown }): Promise<void>;
-/** Прогрев по намерению: hover (default) | tap | visible; при saveData/2g — только tap. Возвращает dispose */
-export function prefetchOn(el: Element, urlOrFn: string | ((target: Element) => string | null | undefined), opts?: { on?: 'hover' | 'tap' | 'visible'; /** 'auto' — горизонт по скорости скролла (400 / 1200 / 3000 px) */ rootMargin?: string; /** задержка hover: мс | 'auto' */ delay?: number | 'auto'; /** порог скорости курсора (px/s): ниже — «целится», греем сразу */ velocity?: number; /** вероятность использования (или функция от цели) для порога полезности */ p?: number | ((target: Element) => number); staleTime?: number; kind?: string }): () => void;
+/** Warm the cache without subscribers (hover, approaching the viewport); the data is available to resource(url, { cache: true }) */
+export function prefetch(url: string, opts?: { /** kind of warm-up for hit statistics (prefetchOn sets it itself) */ kind?: string; /** probability of use — warm up only when p·rtt exceeds the network cost */ p?: number; /** bypass the network budget (configure({ speculation })) */ force?: boolean; key?: string; staleTime?: number; cacheTime?: number; fetcher?: Fetcher; transform?: (d: unknown) => unknown }): Promise<void>;
+/** Warm-up on intent: hover (default) | tap | visible; with saveData/2g — tap only. Returns dispose */
+export function prefetchOn(el: Element, urlOrFn: string | ((target: Element) => string | null | undefined), opts?: { on?: 'hover' | 'tap' | 'visible'; /** 'auto' — horizon by scroll speed (400 / 1200 / 3000 px) */ rootMargin?: string; /** hover delay: ms | 'auto' */ delay?: number | 'auto'; /** cursor speed threshold (px/s): below it the user is “aiming”, warm up immediately */ velocity?: number; /** probability of use (or a function of the target) for the usefulness threshold */ p?: number | ((target: Element) => number); staleTime?: number; kind?: string }): () => void;
 
-/** Курсорная пагинация: страницы копятся, loadMore дедуплицируется */
+/** Cursor pagination: pages accumulate, loadMore is deduplicated */
 export function infiniteResource<P = unknown, T = unknown>(urlFor: (cursor: unknown) => string | null, opts?: {
     getNext?: (page: P) => unknown;
     select?: (page: P) => T[];
@@ -823,100 +823,100 @@ export interface CacheEvent { t: number; reason: 'mount' | 'url' | 'refresh' | '
 export interface CacheExplain {
     key: string; state: CacheState; why: string;
     age?: number | null; staleTime?: number; cacheTime?: number | null; subscribers?: number;
-    /** мс до сборки мусора (null — есть подписчики, Infinity — cacheTime: Infinity) */
+    /** ms until garbage collection (null — there are subscribers, Infinity — cacheTime: Infinity) */
     gcIn?: number | null; fetches?: number; unchanged?: number;
-    /** наблюдаемый интервал изменений / обращений, мс */
+    /** observed change / access interval, ms */
     changeInterval?: number | null; readInterval?: number | null;
-    /** staleTime по наблюдениям (≈5% устаревших чтений) */
+    /** staleTime from observations (≈5% stale reads) */
     suggestedStaleTime?: number | null;
-    tags?: string[] | null; prefetched?: string | null; /** ETag последнего ответа (If-None-Match → 304) */ etag?: string | null; staleTimeMode?: 'http' | 'auto' | string | null; history: CacheEvent[];
+    tags?: string[] | null; prefetched?: string | null; /** ETag of the last response (If-None-Match → 304) */ etag?: string | null; staleTimeMode?: 'http' | 'auto' | string | null; history: CacheEvent[];
 }
 export interface CacheEntryStats { key: string; state: CacheState; age: number | null; staleTime: number; subscribers: number; inflight: boolean; error: string | null; size: number; gcIn: number | null; fetches: number; unchanged: number; suggestedStaleTime: number | null; prefetched: string | null; tags: string[] | null }
 export interface CacheStats { entries: CacheEntryStats[]; prefetch: { fired: number; used: number; wasted: number; byKind: Record<string, { p: number; n: number }>; hoverDelay: number }; speculation: { inflight: number; queued: number; fired: number; skipped: number; aborted: number }; ghost: number; bytes: number; evictions: number; limits: { maxEntries: number; maxBytes: number }; now: number }
-/** Публичный доступ к кэшу ресурсов — ключи нормализуются как в resource() */
+/** Public access to the resource cache — keys are normalised as in resource() */
 export const cache: {
     get<T = unknown>(key: string | CacheKeyPart[] | Record<string, unknown>): T | undefined;
     has(key: string | CacheKeyPart[] | Record<string, unknown>): boolean;
-    /** Logout: снести персист (все принципалы или только чужие при others: true) и офлайн-очередь */
+    /** Logout: wipe the persist store (all principals, or only foreign ones with others: true) and the offline queue */
     purge(opts?: { persist?: boolean; queue?: boolean; others?: boolean }): Promise<void>;
     /** = seed(key, data, { age, staleTime }) */
     set(key: string | CacheKeyPart[] | Record<string, unknown>, data: unknown, opts?: { age?: number; staleTime?: number }): unknown;
-    /** удалить записи по шаблону (без аргумента — все); возвращает число удалённых */
+    /** remove entries by pattern (no argument — all); returns the number removed */
     remove(pattern?: InvalidatePattern): number;
     keys(prefix?: string | CacheKeyPart[]): string[];
     entry(key: string | CacheKeyPart[]): { key: string; data: Signal<any>; error: Signal<unknown>; inflight: Signal<boolean>; refCount: number; age(): number | null } | null;
-    /** подписка на данные записи (держит её живой); возвращает unsubscribe */
+    /** subscribe to an entry's data (keeps it alive); returns unsubscribe */
     subscribe<T = unknown>(key: string | CacheKeyPart[], fn: (data: T | null) => void): () => void;
-    /** события решений кэша: fetch / fresh / joined / set — для assertions в тестах */
+    /** cache decision events: fetch / fresh / joined / set — for assertions in tests */
     on(fn: (key: string, ev: CacheEvent) => void): () => void;
-    /** явная сборка мусора по часам (тесты с fakeClock, low-memory); возвращает число удалённых */
+    /** explicit garbage collection by the clock (tests with fakeClock, low memory); returns the number removed */
     gc(now?: number): number;
-    /** обновить сущность во всех записях кэша (configure({ identify })); возвращает число изменённых записей */
+    /** update an entity in every cache entry (configure({ identify })); returns the number of entries changed */
     patchEntity(entityKey: string, fn: (node: any) => any): number;
-    /** трёхстороннее слияние объектов */
+    /** three-way merge of objects */
     merge3<T = any>(base: T, local: T, server: T): { value: T; conflicts: string[] };
-    /** запись persist-хранилища (IndexedDB): { data, at, v, n } | null */
+    /** the persist-store record (IndexedDB): { data, at, v, n } | null */
     persisted(key: string | CacheKeyPart[]): Promise<{ data: unknown; at: number; v: number; n: number; etag?: string | null } | null>;
-    /** дождаться гидрации записи с диска: true — данные пришли из persist */
+    /** await hydration of the entry from disk: true — the data came from persist */
     hydrated(key: string | CacheKeyPart[]): Promise<boolean>;
-    /** записи, байты (при maxBytes), вытеснения и лимиты */
+    /** entries, bytes (with maxBytes), evictions and limits */
     size(): { entries: number; bytes: number; evictions: number; maxEntries: number; maxBytes: number };
-    /** почему запись свежая/устаревшая, кто её запрашивал, что рекомендовать */
+    /** why the entry is fresh/stale, who requested it, what to recommend */
     explain(key: string | CacheKeyPart[]): CacheExplain;
     stats(): CacheStats;
 };
-/** Подменить часы кэша (staleTime, cacheTime, explain): useClock(() => t); возвращает restore. См. fakeClock() в aegis/test */
+/** Replace the cache clock (staleTime, cacheTime, explain): useClock(() => t); returns restore. See fakeClock() in aegis/test */
 export function useClock(now?: (() => number) | null): () => void;
-/** Шаблон ключей: точный ключ, 'prefix*', ['users'] (иерархический префикс), предикат или { prefix, exact, tags, refetch } */
+/** Key pattern: an exact key, 'prefix*', ['users'] (hierarchical prefix), a predicate or { prefix, exact, tags, refetch } */
 export type InvalidatePattern = string | CacheKeyPart[] | ((key: string, entry?: unknown) => boolean) | { prefix?: string; exact?: string | CacheKeyPart[]; tags?: string | string[]; refetch?: 'active' | 'all' | 'none' };
-/** Сбросить свежесть и перезапросить живые записи; Promise ждёт перезапросы. cancel: false — дождаться летящего запроса и перезапросить после него */
+/** Reset freshness and refetch live entries; the Promise waits for the refetches. cancel: false — wait for the in-flight request and refetch after it */
 export function invalidate(pattern: InvalidatePattern, opts?: { cancel?: boolean; refetch?: 'active' | 'all' | 'none' }): Promise<void>;
 
-/** Положить данные в кэш cachedResource() вручную (ответ мутации, серверный payload). age — возраст данных в мс */
-/** Положить данные в кэш: age — возраст в мс, staleTime — сколько они считаются свежими (default 0: SWR-ревалидация при монтировании) */
+/** Put data into the cachedResource() cache by hand (a mutation response, a server payload). age — the age of the data in ms */
+/** Put data into the cache: age — age in ms, staleTime — how long it counts as fresh (default 0: SWR revalidation on mount) */
 export function seed(key: string | CacheKeyPart[], data: unknown, opts?: { age?: number; staleTime?: number }): unknown;
 /**
- * Засеять кэш из серверного HTML:
+ * Seed the cache from server HTML:
  *   <script type="application/json" data-aegis-cache="/api/users" data-aegis-age="120">[…]</script>
- * Идемпотентна; hydrate() вызывает её сама. Возвращает число засеянных записей.
+ * Idempotent; hydrate() calls it itself. Returns the number of seeded entries.
  */
 export function seedFrom(root?: Document | Element): number;
-/** Предиктор переходов: марковская цепь 1-го порядка по паттернам маршрутов с забыванием (decay), серверным prior (kappa pseudo-counts) и persist в storage */
+/** Navigation predictor: a first-order Markov chain over route patterns with forgetting (decay), a server prior (kappa pseudo-counts) and persistence in storage */
 export interface Predictor {
     learn(from: string, to: string): void;
-    /** ранжировать кандидатов: p = (счётчик + kappa·prior + alpha) / (n + kappa + alpha·|candidates|) */
+    /** rank the candidates: p = (count + kappa·prior + alpha) / (n + kappa + alpha·|candidates|) */
     next(from: string, candidates: string[]): Array<{ key: string; p: number }>;
     p(from: string, to: string): number;
-    /** серверный prior для from: { to: p } — или <script type="application/json" data-aegis-predict="from"> через seedFrom()/hydrate() */
+    /** server prior for from: { to: p } — or <script type="application/json" data-aegis-predict="from"> via seedFrom()/hydrate() */
     prior(from: string, map: Record<string, number>): void;
     reset(): void;
 }
 export function predictor(opts?: { decay?: number; alpha?: number; kappa?: number; storage?: Storage | { getItem(k: string): string | null; setItem(k: string, v: string): void; removeItem(k: string): void } | null; key?: string; max?: number }): Predictor;
-/** Speculation Rules для server-first страниц: один <script type="speculationrules"> с document-rules (prefetch / prerender по eagerness); без поддержки — <link rel="prefetch"> по намерению. Возвращает dispose */
+/** Speculation Rules for server-first pages: one <script type="speculationrules"> with document rules (prefetch / prerender by eagerness); without support — <link rel="prefetch"> on intent. Returns dispose */
 export function speculate(opts?: { prefetch?: boolean; prerender?: boolean | 'conservative' | 'moderate' | 'eager'; eagerness?: 'conservative' | 'moderate' | 'eager'; select?: string; exclude?: string; urls?: string[] }): () => void;
-/** Лидер среди вкладок (Web Locks): true ровно в одной вкладке, лок переходит при её закрытии; .release() — отдать; без Web Locks — fallback */
+/** Leader among tabs (Web Locks): true in exactly one tab, the lock moves when it closes; .release() — hand it over; without Web Locks — a fallback */
 export function leader(name?: string, opts?: { fallback?: boolean }): ReadonlySignal<boolean> & { release(): void };
 
 // ── Form ───────────────────────────────────────────────────────
 
-export type ValidationRule<V = unknown> = (value: V, key: string, fields: Record<string, Signal<unknown>>, ctx?: { signal: AbortSignal | null; /** true — внутри computed истины (issues): правило должно быть чистым */ live?: boolean }) => string | null;
-/** Правило может быть Standard Schema (zod/valibot/arktype): первый issue.message; async-схема — async-правило */
+export type ValidationRule<V = unknown> = (value: V, key: string, fields: Record<string, Signal<unknown>>, ctx?: { signal: AbortSignal | null; /** true — inside the computed truth (issues): the rule must be pure */ live?: boolean }) => string | null;
+/** A rule may be a Standard Schema (zod/valibot/arktype): the first issue.message; an async schema — an async rule */
 export type RuleLike<V = any> = ValidationRule<V> | AsyncValidationRule<V> | StandardSchemaV1<V, any>;
 export type FormStatus = 'idle' | 'validating' | 'submitting' | 'success' | 'error';
-/** Ссылка на поле: bind:field=${f.field('email')} — bind + touched + aria-invalid + aria-describedby + контейнер ошибки одной строкой */
+/** Field reference: bind:field=${f.field('email')} — bind + touched + aria-invalid + aria-describedby + the error container in one line */
 export interface FieldRef<T = any> {
     key: string;
     value: Signal<T>;
-    /** показанная ошибка */
+    /** the shown error */
     error: Signal<string | null>;
-    /** истина: результат правил от текущего значения, независимо от показа */
+    /** the truth: the result of the rules for the current value, regardless of display */
     issue: ReadonlySignal<string | null>;
     touched: Signal<boolean>;
     validating: ReadonlySignal<boolean>;
     id: string;
     errorId: string;
 }
-/** Поле формы: { value, rules } — правила типизированы значением: minLen(3) на числовом поле — ошибка типов */
+/** Form field: { value, rules } — rules are typed by the value: minLen(3) on a numeric field is a type error */
 export interface FieldDef<V = any> { value: V; rules?: Array<ValidationRule<V> | AsyncValidationRule<V>> }
 
 export interface FormResult<T extends Record<string, { value: any; rules?: any[] }>> {
@@ -938,7 +938,7 @@ export interface FormSubmitState {
     submitError: ReadonlySignal<unknown>;
     result: ReadonlySignal<unknown>;
 }
-/** Standard Schema (zod v4 / valibot / arktype / …) — без зависимости */
+/** Standard Schema (zod v4 / valibot / arktype / …) — no dependency */
 export interface StandardSchemaV1<I = unknown, O = I> {
     readonly '~standard': {
         readonly version: 1;
@@ -947,85 +947,85 @@ export interface StandardSchemaV1<I = unknown, O = I> {
     };
 }
 export type StandardResult<O> = { value: O; issues?: undefined } | { issues: ReadonlyArray<{ message: string; path?: ReadonlyArray<PropertyKey | { key: PropertyKey }> }> };
-/** Правило: (value, key, fields, { signal }) → строка ошибки | null | Promise (async — с debounce, отменой и validating[key]) */
+/** Rule: (value, key, fields, { signal }) → error string | null | Promise (async — with debounce, cancellation and validating[key]) */
 export type AsyncValidationRule<V = any> = (value: V, key: string, fields: Record<string, Signal<any>>, ctx: { signal: AbortSignal | null }) => string | null | undefined | Promise<string | null | undefined>;
 export interface FormCore {
-    /** вложенный объект значений: items[0][qty] → { items: [{ qty }] } */
+    /** nested object of values: items[0][qty] → { items: [{ qty }] } */
     values: ReadonlySignal<any>;
-    /** истина по полям: результат sync-правил и Standard Schema от текущих значений, пересчитывается реактивно; $any — есть хоть одна */
+    /** truth per field: the result of sync rules and the Standard Schema for the current values, recomputed reactively; $any — at least one */
     issues: Record<string, ReadonlySignal<string | null>> & { $any: ReadonlySignal<boolean>; $form: ReadonlySignal<string | null> };
     touched: Record<string, Signal<boolean>>;
-    /** valid и ничего не валидируется/не отправляется — для disabled кнопки */
+    /** valid and nothing is validating/submitting — for a disabled button */
     canSubmit: ReadonlySignal<boolean>;
-    /** был хоть один submit */
+    /** there was at least one submit */
     submitted: ReadonlySignal<boolean>;
-    /** жизненный цикл отправки; submitting — computed от него */
+    /** submit lifecycle; submitting — a computed of it */
     status: Signal<FormStatus>;
-    /** прервать текущий submit (handler получает ctx.signal) */
+    /** abort the current submit (the handler receives ctx.signal) */
     abort(): void;
-    /** фокус на первую показанную ошибку */
+    /** focus the first shown error */
     focusFirstError(): boolean;
-    /** привязать инпут к полю (per-input слой: two-way, touched, режим показа, aria, :user-invalid); f.wire('email') — директива для html`` */
+    /** bind an input to a field (per-input layer: two-way, touched, display mode, aria, :user-invalid); f.wire('email') — a directive for html`` */
     wire(el: HTMLElement, key?: string): () => void;
     wire(key: string): Attachment<any>;
-    /** ссылка на поле для bind:field=${f.field('email')} */
+    /** field reference for bind:field=${f.field('email')} */
     field(key: string): FieldRef;
-    /** оживить <form> целиком — все [name], как wireForm */
+    /** bring a whole <form> to life — every [name], like wireForm */
     attach(formEl: HTMLFormElement): HTMLFormElement;
-    /** ключи полей (реактивно: форма растёт) */
+    /** field keys (reactive: the form grows) */
     keys: ReadonlySignal<string[]>;
-    /** вывод Standard Schema (coerce / trim / default) — уходит в submit вместо сырых values; null при issues */
+    /** Standard Schema output (coerce / trim / default) — goes into submit instead of the raw values; null while there are issues */
     parsed: ReadonlySignal<any>;
-    /** форма растёт: добавить поле (правила — явные или по шаблону 'items[].qty'), удалить, переименовать (сигналы переезжают) */
+    /** the form grows: add a field (rules — explicit or by the 'items[].qty' pattern), remove, rename (signals move along) */
     addField(key: string, initial?: unknown, rules?: RuleLike[], opts?: { initial?: unknown }): Signal<any>;
     removeField(key: string): void;
     renameField(from: string, to: string): void;
-    /** сводка ошибок GOV.UK: role=alert, заголовок с числом ошибок, ссылки на поля; при провале submit фокус идёт на неё */
+    /** GOV.UK-style error summary: role=alert, a heading with the error count, links to the fields; on a failed submit focus goes to it */
     summary(target?: string | Element, opts?: { heading?: 'h2' | 'h3' | 'p' }): Element;
-    /** показанные ошибки: [{ key, message, el }] — для своей сводки */
+    /** shown errors: [{ key, message, el }] — for your own summary */
     errorList: ReadonlySignal<Array<{ key: string; message: string; el: HTMLElement | null }>>;
-    /** защита от потери правок: beforeunload + перехват Navigation API с подтверждением; возвращает dispose */
+    /** protection against losing edits: beforeunload + Navigation API interception with confirmation; returns dispose */
     guard(opts?: GuardOptions): () => void;
     validating: Record<string, ReadonlySignal<boolean>> & { $any: ReadonlySignal<boolean> };
     dirtyFields: ReadonlySignal<Record<string, true>>;
-    /** только изменённые поля (для PATCH) */
+    /** changed fields only (for PATCH) */
     changes: ReadonlySignal<any>;
-    /** sync-правила + schema; async-правила запускаются в фоне */
+    /** sync rules + schema; async rules run in the background */
     validate(): boolean;
     validateField(key: string): boolean;
     /** sync + async + schema */
     validateAsync(): Promise<boolean>;
-    /** новые «начальные» значения (объект или сигнал, например resource().data) */
+    /** new “initial” values (an object or a signal, e.g. resource().data) */
     setInitial(values: Record<string, any> | ReadonlySignal<any> | Signal<any>): void;
-    /** текущие значения становятся начальными (после успешного PATCH) */
+    /** the current values become the initial ones (after a successful PATCH) */
     commit(): void;
-    /** beforeunload при dirty; возвращает dispose */
+    /** beforeunload while dirty; returns dispose */
     guardUnload(): () => void;
     setErrors(errors: Record<string, any> | Array<{ path?: string | string[]; pointer?: string; message: string }>): void;
     reset(): void;
 }
 export interface GuardOptions {
-    /** своё подтверждение (диалог) — Promise<boolean>; по умолчанию window.confirm */
+    /** your own confirmation (a dialog) — Promise<boolean>; window.confirm by default */
     confirm?: (toUrl: string) => boolean | Promise<boolean>;
-    /** считать переход по якорю (#) уходом */
+    /** treat an anchor (#) navigation as leaving */
     hash?: boolean;
 }
-/** a11y-политика формы: field — как объявлять ошибку поля ('blur' — одно polite-объявление при blur, 'live' — span становится role=status, 'off'), summary — одно объявление при провале submit */
+/** Form a11y policy: field — how to announce a field error ('blur' — one polite announcement on blur, 'live' — the span becomes role=status, 'off'), summary — one announcement on a failed submit */
 export interface FormA11y { field?: 'blur' | 'live' | 'off'; summary?: boolean }
 export interface FormOptions {
     a11y?: FormA11y;
-    /** при провале submit фокус на сводку (если есть) или на первое поле */
+    /** on a failed submit focus the summary (if any) or the first field */
     focusOnError?: 'summary' | 'field' | false;
     types?: Record<string, typeof Date | typeof Number | typeof Array | typeof Boolean | typeof String>;
     rules?: Record<string, RuleLike[]>;
     schema?: StandardSchemaV1<any, any>;
     asyncDebounce?: number;
-    /** когда ПОКАЗЫВАТЬ ошибки правил (истина всегда в issues): blur, затем live для полей с ошибкой (default) | live | только после submit */
+    /** when to SHOW rule errors (the truth is always in issues): blur, then live for fields with an error (default) | live | only after submit */
     mode?: 'blur-then-live' | 'live' | 'submit';
-    /** false — не трогать нативную валидацию (noValidate / setCustomValidity) */
+    /** false — do not touch native validation (noValidate / setCustomValidity) */
     native?: boolean;
 }
-/** form(defaults, { rules, schema }) — форма из значений по умолчанию: form({ name: '', age: 0 }) */
+/** form(defaults, { rules, schema }) — a form from default values: form({ name: '', age: 0 }) */
 export function form<T extends Record<string, any>>(defaults: T & { [K in keyof T]: T[K] extends { value: any } ? never : T[K] }, opts?: FormOptions): FormResult<{ [K in keyof T]: { value: T[K] } }> & FormSubmitState & FormCore & {
     submit(handler: (values: T, ctx: { signal: AbortSignal; submitter: HTMLElement | null; event: SubmitEvent | null }) => unknown | Promise<unknown>, opts?: { submitter?: HTMLElement; event?: SubmitEvent }): Promise<unknown>;
     submit(url: string, opts?: { headers?: HeadersInit; transform?: (v: T) => unknown; fetchOpts?: RequestOptions; submitter?: HTMLElement; onRedirect?: 'assign' | 'router' | 'none' | ((r: Response) => void) }): Promise<{ ok: boolean; status?: number; data?: any; error?: unknown; aborted?: boolean; redirected?: boolean }>;
@@ -1043,7 +1043,7 @@ export function matches(otherKey: string, msg?: string): ValidationRule<any>;
 
 // ── WireForm ───────────────────────────────────────────────────
 
-/** Строка fieldArray(): key стабилен при перенумерации (ключ для list()), index — текущая позиция */
+/** A fieldArray() row: key is stable across renumbering (the key for list()), index — the current position */
 export interface FieldArrayRow { key: number; index: number; value(sub: string): Signal<any>; field(sub: string): FieldRef }
 export interface FieldArray<R extends Record<string, any> = Record<string, any>> {
     rows: ReadonlySignal<FieldArrayRow[]>;
@@ -1058,8 +1058,8 @@ export interface FieldArray<R extends Record<string, any> = Record<string, any>>
     nameOf(i: number, sub?: string): string;
 }
 /**
- * Массив полей поверх form()/wireForm(): items[i][sub] с устойчивыми ключами строк и перенумерацией имён.
- *   const items = fieldArray(f, 'items', { row: { qty: 1, sku: '' } });   // правила формы: { 'items[].qty': [min(1)] }
+ * An array of fields on top of form()/wireForm(): items[i][sub] with stable row keys and name renumbering.
+ *   const items = fieldArray(f, 'items', { row: { qty: 1, sku: '' } });   // form rules: { 'items[].qty': [min(1)] }
  *   list(items.rows, row => html`<input bind:field=${row.field('qty')}>`, r => r.key)
  */
 export interface WizardStep { index: number; keys(): string[]; valid: ReadonlySignal<boolean>; dirty: ReadonlySignal<boolean>; done: ReadonlySignal<boolean> }
@@ -1067,7 +1067,7 @@ export interface Wizard {
     step: Signal<number>;
     steps: WizardStep[];
     count: number;
-    /** валидирует поля текущего шага (sync + async + схема только для них) и идёт дальше */
+    /** validates the fields of the current step (sync + async + schema for them only) and moves on */
     next(): Promise<boolean>;
     prev(): Promise<boolean>;
     go(i: number, opts?: { validate?: boolean }): Promise<boolean>;
@@ -1078,23 +1078,23 @@ export interface Wizard {
     dispose(): void;
 }
 /**
- * Мастер поверх form()/wireForm(): шаги — группы ключей ('address.*') или [data-step] у формы; фокус на новый шаг, announce «Шаг n из N»,
- * [data-step-nav] дети получают aria-current="step"; history: true — ?step=i через Navigation API; persist: 'key' — шаг в sessionStorage
+ * A wizard on top of form()/wireForm(): steps are groups of keys ('address.*') or [data-step] in the form; focus on the new step, announce “Step n of N”,
+ * [data-step-nav] children get aria-current="step"; history: true — ?step=i through the Navigation API; persist: 'key' — the step in sessionStorage
  */
 export function wizard(f: FormCore | WireFormResult, opts?: { steps?: string[][]; persist?: string; history?: boolean; focus?: boolean }): Wizard;
-/** Черновик формы в sessionStorage: изменённые поля без password/file, восстановление при создании (dirty остаётся), очистка при успехе */
+/** A form draft in sessionStorage: changed fields without password/file, restored on creation (dirty stays), cleared on success */
 export function draft(f: FormCore | WireFormResult, key: string, opts?: { storage?: Storage | { getItem(k: string): string | null; setItem(k: string, v: string): void; removeItem(k: string): void }; debounce?: number; ttl?: number; exclude?: (key: string, value: unknown) => boolean; restore?: (values: Record<string, unknown>, apply: () => void) => void }): { restored: boolean; clear(): void; stop(): void; key: string };
 export function fieldArray<R extends Record<string, any>>(f: FormCore | WireFormResult, path: string, opts?: { row?: R; rules?: { [K in keyof R]?: RuleLike[] }; name?: (i: number, sub?: string) => string; initial?: Partial<R>[] }): FieldArray<R>;
 export interface WireFormResult {
-    /** сама <form> */
+    /** the <form> itself */
     el: HTMLFormElement;
     keys: ReadonlySignal<string[]>;
     parsed: ReadonlySignal<any>;
-    /** подключить input, появившийся после wireForm(); отключить поле; пересканировать форму (после swap/morph/list) */
+    /** attach an input that appeared after wireForm(); detach a field; rescan the form (after swap/morph/list) */
     wire(input: HTMLElement): void;
     unwire(key: string): void;
     rewire(): void;
-    /** прочитать ошибки из (серверной) разметки формы в errors; true — есть хоть одна */
+    /** read errors from the (server) form markup into errors; true — there is at least one */
     adoptErrors(root?: ParentNode): boolean;
     addField(key: string, initial?: unknown, rules?: RuleLike[]): Signal<any>;
     removeField(key: string): void;
@@ -1105,7 +1105,7 @@ export interface WireFormResult {
     summary(target?: string | Element, opts?: { heading?: 'h2' | 'h3' | 'p' }): Element;
     errorList: ReadonlySignal<Array<{ key: string; message: string; el: HTMLElement | null }>>;
     guard(opts?: GuardOptions): () => void;
-    /** истина по полям (sync-правила + схема), независимо от показа */
+    /** truth per field (sync rules + schema), regardless of display */
     issues: Record<string, ReadonlySignal<string | null>> & { $any: ReadonlySignal<boolean>; $form: ReadonlySignal<string | null> };
     touched: Record<string, Signal<boolean>>;
     dirty: ReadonlySignal<boolean>;
@@ -1124,7 +1124,7 @@ export interface WireFormResult {
     validate(): boolean;
     reset(): void;
     setErrors(errors: Record<string, any> | Array<{ path?: string | string[]; pointer?: string; message: string }>): void;
-    /** handler(values, { signal, submitter, event }); без handler — серверный submit (FormData, 422 → ошибки полей, 303 → переход) */
+    /** handler(values, { signal, submitter, event }); without a handler — a server submit (FormData, 422 → field errors, 303 → navigation) */
     submit(handler?: ((values: Record<string, unknown>, ctx: { signal: AbortSignal; submitter: HTMLElement | null; event: SubmitEvent | undefined }) => unknown | Promise<unknown>) | { as?: 'json'; headers?: HeadersInit; onSuccess?: (data: any, r: Response) => void; onRedirect?: 'assign' | 'router' | 'none' | ((r: Response) => void); announceSuccess?: boolean; html?: 'morph' | 'replace' | false; intents?: Record<string, (f: WireFormResult, e: SubmitEvent) => void> }): (e?: Event) => Promise<any>;
     step: Signal<number> | null;
     stepCount: number | null;
@@ -1133,40 +1133,40 @@ export interface WireFormResult {
 }
 
 /**
- * Оживить серверную <form>: signals, валидация (нативные ограничения через Constraint Validation API с сообщениями браузера,
- * правила, Standard Schema, async-правила), a11y, wizard, серверный submit.
- *   const f = wireForm(el, { schema: zodSchema, rules: { login: [unique] }, submit: true });   // submit: true — FormData на action формы
+ * Bring a server <form> to life: signals, validation (native constraints through the Constraint Validation API with browser messages,
+ * rules, Standard Schema, async rules), a11y, wizard, server submit.
+ *   const f = wireForm(el, { schema: zodSchema, rules: { login: [unique] }, submit: true });   // submit: true — FormData to the form's action
  *   on(el, 'submit', f.submit(values => api.post('/save', values)));
  */
 export function wireForm(formEl: HTMLFormElement, opts?: {
     schema?: Record<string, RuleLike[]> | StandardSchemaV1<any, any>;
     rules?: Record<string, RuleLike[]>;
-    /** когда показывать ошибки; истина всегда в issues */
+    /** when to show errors; the truth is always in issues */
     mode?: 'blur-then-live' | 'live' | 'submit';
     native?: boolean;
     asyncDebounce?: number;
-    /** 'browser' — input.validationMessage на языке браузера; 'page' — коды ValidityState → словарь на языке страницы */
+    /** 'browser' — input.validationMessage in the browser's language; 'page' — ValidityState codes → a dictionary in the page's language */
     messages?: 'browser' | 'page';
     submit?: boolean | ((values: Record<string, unknown>, ctx: { signal: AbortSignal; submitter: HTMLElement | null; event: SubmitEvent | undefined }) => unknown);
     onRedirect?: 'assign' | 'router' | 'none' | ((r: Response) => void);
     announceSuccess?: boolean;
-    /** Escape во время отправки прерывает её */
+    /** Escape during submission aborts it */
     escapeAborts?: boolean;
-    /** следить за появлением/удалением полей (MutationObserver) */
+    /** watch fields appear/disappear (MutationObserver) */
     observe?: boolean;
-    /** приведение значений: { birthday: Date, qty: Number, tags: Array, agree: Boolean } */
+    /** value coercion: { birthday: Date, qty: Number, tags: Array, agree: Boolean } */
     types?: Record<string, typeof Date | typeof Number | typeof Array | typeof Boolean | typeof String>;
     a11y?: FormA11y;
     focusOnError?: 'summary' | 'field' | false;
-    /** сразу отрендерить сводку ошибок (true — контейнер перед формой) */
+    /** render the error summary right away (true — a container before the form) */
     summary?: boolean | string | Element;
-    /** guard() сразу */
+    /** guard() right away */
     guard?: boolean | GuardOptions;
-    /** черновик в sessionStorage: ключ или true (action + id формы); также data-aegis-draft на <form> */
+    /** draft in sessionStorage: a key or true (the form's action + id); also data-aegis-draft on <form> */
     draft?: string | boolean;
-    /** HTML-ответ сервера (Rails 422 render, Django form_invalid): 'morph' (default) — форма морфится на место и ошибки читаются из разметки; 'replace'; false — не трогать */
+    /** an HTML response from the server (Rails 422 render, Django form_invalid): 'morph' (default) — the form is morphed in place and errors are read from the markup; 'replace'; false — leave it */
     html?: 'morph' | 'replace' | false;
-    /** <button name="intent" value="add"> или data-intent — локальное действие без запроса; без JS та же кнопка уходит на сервер */
+    /** <button name="intent" value="add"> or data-intent — a local action without a request; without JS the same button goes to the server */
     intents?: Record<string, (f: WireFormResult, e: SubmitEvent) => void>;
 }): WireFormResult;
 
@@ -1179,8 +1179,8 @@ export function wireForm(formEl: HTMLFormElement, opts?: {
 export interface ComponentContext<E extends Element = HTMLElement> {
     el: E;
     /**
-     * Серверные дети компонента (снимок до setup). Без селектора — все оставшиеся,
-     * с селектором ('[slot=footer]') — только совпадающие. Узлы переносятся, не копируются.
+     * Server-rendered children of the component (a snapshot before setup). Without a selector — all remaining ones,
+     * with a selector ('[slot=footer]') — only the matching ones. Nodes are moved, not copied.
      */
     slot(selector?: string): DocumentFragment;
     signal: typeof signal;
@@ -1210,22 +1210,22 @@ export interface ComponentContext<E extends Element = HTMLElement> {
     selector: typeof selector;
     /** Pre-bound guardedFetch — already tied to this component's scope */
     guardedFetch: GuardedFetch;
-    /** Состояние, переживающее гибернацию и page-out острова (onSaveInstanceState): сигнал восстанавливается из снимка при повторном mount */
+    /** State that survives island hibernation and page-out (onSaveInstanceState): the signal is restored from the snapshot on remount */
     state<T>(key: string, init: T): Signal<T>;
-    /** то же, короткое имя */
+    /** the same, short name */
     fetch: GuardedFetch;
-    /** scope компонента (для кода после await: scope.run(() => …)) */
+    /** the component's scope (for code after await: scope.run(() => …)) */
     scope: Scope;
-    /** errorBoundary без расширения браузера: ошибки эффектов компонента */
+    /** errorBoundary without a browser extension: errors of the component's effects */
     onError(fn: (error: any) => void): () => void;
     debounced: typeof debounced;
     throttled: typeof throttled;
     poll: typeof poll;
-    /** Возвращает unregister — снять cleanup досрочно */
+    /** Returns unregister — remove the cleanup early */
     onDispose(fn: () => void): () => void;
 }
 
-/** Результат component(): если setup вернул шаблон (Node) — он вставлен в el, наружу отдаётся { el, destroy } */
+/** The result of component(): if setup returned a template (Node) it is inserted into el and { el, destroy } is returned */
 export type ComponentResult<R> = R extends Node ? { el: Element; destroy(): void } : R;
 
 /** @deprecated Use `mount(el, Component)` — the same setup contract, accepts an element or a selector. `component()` stays as an alias. */
@@ -1245,27 +1245,27 @@ export function mount<R = void>(
     setup: (ctx: ComponentContext<HTMLElement>) => R
 ): ComponentResult<R> | undefined;
 
-/** D — форма data-* атрибутов элемента (JSON-значения парсятся); каст непроверяемый, как defineProps<T>() */
-/** Компонент = функция (ctx) => Node | api | void; ctx.props — reactive()-объект props */
+/** D — the shape of the element's data-* attributes (JSON values are parsed); the cast is unchecked, like defineProps<T>() */
+/** Component = a function (ctx) => Node | api | void; ctx.props — a reactive() object of props */
 export type Component<P = Record<string, any>, R = void | object | Node> = (ctx: ComponentContext & { props: P & ReactiveExtras<P> }) => R | Promise<R>;
-/** Остров из компонента-функции: data-* (с types) → ctx.props */
-/** ctx.props острова: объявленные types → типизированы, остальные data-* — unknown */
+/** An island from a component function: data-* (with types) → ctx.props */
+/** ctx.props of an island: declared types are typed, other data-* — unknown */
 export type IslandProps<T> = { [K in keyof T]: PropValue<{ type: T[K] }> } & Record<string, unknown>;
 export function island<T extends Record<string, PropType> = {}>(name: string, component: Component<IslandProps<T>>, opts?: { types?: T }): void;
-/** ctx.props custom element: { count: Number } → number | null, { count: { type: Number, default: 0 } } → number */
+/** ctx.props of a custom element: { count: Number } → number | null, { count: { type: Number, default: 0 } } → number */
 export type ElementProps<P> = { [K in keyof P]: PropValue<P[K] extends PropType ? { type: P[K] } : P[K]> };
-/** Custom element из того же компонента: атрибуты → ctx.props (реактивно) */
+/** A custom element from the same component: attributes → ctx.props (reactive) */
 export function element<P extends Record<string, PropType | { type: PropType; default?: unknown; reflect?: boolean }> = {}>(tag: `${string}-${string}`, component: Component<ElementProps<P>>, opts?: { props?: P; shadow?: boolean; styles?: CSSStyleSheet | string; formAssociated?: boolean }): void;
 export type IslandSetup<D = Record<string, unknown>> = (el: HTMLElement, data: D, ctx: ComponentContext<HTMLElement>) => void | object | Node | Promise<void | object | Node>;
 /**
- * Зарегистрировать компонент по имени; { load } — код острова грузится import()-ом при монтировании
- * (для visible — за 400px до viewport). Без регистрации работает data-aegis-src="/js/islands/x.js".
+ * Register a component by name; { load } — the island code is loaded with import() on mount
+ * (for visible — 400px before the viewport). Without registration data-aegis-src="/js/islands/x.js" works.
  */
 export type PropType = NumberConstructor | BooleanConstructor | StringConstructor | JSON | ObjectConstructor | ArrayConstructor | ((raw: string) => unknown);
 /**
- * Зарегистрировать компонент по имени; { load } — код острова грузится import()-ом при монтировании.
- * data-* передаются строками (JSON-литералы парсятся); types объявляет приведение: { count: Number, on: Boolean, tags: JSON }.
- * JSON-блок <script type="application/json"> внутри острова (или data-aegis-props="#id") → data.props и поля data.
+ * Register a component by name; { load } — the island code is loaded with import() on mount.
+ * data-* are passed as strings (JSON literals are parsed); types declares coercion: { count: Number, on: Boolean, tags: JSON }.
+ * A <script type="application/json"> block inside the island (or data-aegis-props="#id") → data.props and fields of data.
  */
 /** Low-level positional form. Prefer `island(name, Component, { types })`; keep `register()` for `{ load }` (lazy island modules). */
 export function register<D = Record<string, unknown>>(
@@ -1274,37 +1274,37 @@ export function register<D = Record<string, unknown>>(
     opts?: { types?: Record<string, PropType> }
 ): void;
 export interface HydrateOptions {
-    /** MutationObserver: вставленные острова оживают, удалённые уничтожаются (htmx/Turbo/jQuery) */
+    /** MutationObserver: inserted islands come alive, removed ones are destroyed (htmx/Turbo/jQuery) */
     watch?: boolean;
-    /** перемонтировать уже живые */
+    /** remount the ones already alive */
     force?: boolean;
-    /** переопределить data-aegis-load для всех (тесты: 'eager'). Стратегии с аргументами: 'visible(300px)', 'idle(1500)', 'interaction(click,keydown)' */
+    /** override data-aegis-load for all (tests: 'eager'). Strategies with arguments: 'visible(300px)', 'idle(1500)', 'interaction(click,keydown)' */
     load?: 'eager' | 'visible' | 'idle' | 'interaction' | string;
-    /** без предупреждений о незарегистрированных компонентах */
+    /** no warnings about unregistered components */
     quiet?: boolean;
-    /** мс синхронной работы до scheduler.yield(); Infinity — всё синхронно. Default 8 */
+    /** ms of synchronous work before scheduler.yield(); Infinity — everything synchronous. Default 8 */
     budget?: number;
-    /** Working-set paging visible-островов: margin — как далеко от экрана остров выгружается со снимком (или data-aegis-resident), max — размер резидентного набора (CLOCK) */
+    /** Working-set paging of visible islands: margin — how far from the screen an island is paged out with a snapshot (or data-aegis-resident), max — the resident set size (CLOCK) */
     resident?: { margin?: string; max?: number };
-    /** дедлайн для idle-островов, мс. Default 2000 */
+    /** deadline for idle islands, ms. Default 2000 */
     idleTimeout?: number;
 }
 export interface HydrateHandle {
     el: HTMLElement;
     name: string;
-    /** undefined, пока остров ждёт своей стратегии загрузки */
+    /** undefined while the island waits for its loading strategy */
     api: unknown;
     ready: Promise<unknown>;
 }
 /**
- * Оживить серверный HTML: [data-aegis] (включая сам root). Идемпотентна.
- * Сначала засевает кэш из <script type="application/json" data-aegis-cache>.
- * События: aegis:hydrate (cancelable), aegis:hydrated (detail: { name, api }), aegis:destroy.
- * Первый кусок монтируется синхронно; handles.ready — Promise завершения eager-части.
+ * Bring server HTML to life: [data-aegis] (including root itself). Idempotent.
+ * Seeds the cache from <script type="application/json" data-aegis-cache> first.
+ * Events: aegis:hydrate (cancelable), aegis:hydrated (detail: { name, api }), aegis:destroy.
+ * The first chunk mounts synchronously; handles.ready — a Promise for the completion of the eager part.
  */
 export function hydrate(root?: Document | Element, opts?: HydrateOptions): HydrateHandle[] & { ready: Promise<void> };
 export namespace hydrate {
-    /** Авто-hydrate(document) после register(). Default true */
+    /** Auto-hydrate(document) after register(). Default true */
     let auto: boolean;
 }
 export function destroy(el: Element): void;
@@ -1331,9 +1331,9 @@ export function errorBoundary<R = void>(
 export function portal(
     target: Element,
     contentFn: (() => DocumentFragment | Element) | DocumentFragment | Element,
-    /** popover: 'auto' | 'manual' | true — контейнер в top layer (light-dismiss, :popover-open); anchor + placement — CSS anchor positioning */
+    /** popover: 'auto' | 'manual' | true — the container in the top layer (light-dismiss, :popover-open); anchor + placement — CSS anchor positioning */
     opts?: { popover?: 'auto' | 'manual' | boolean; anchor?: Element; placement?: string }
-): { container: HTMLDivElement; dispose(): void; /** открыт ли popover-портал (toggle) */ open: ReadonlySignal<boolean> };
+): { container: HTMLDivElement; dispose(): void; /** whether the popover portal is open (toggle) */ open: ReadonlySignal<boolean> };
 
 /**
  * CSS enter/leave transition driven by a reactive condition.
@@ -1344,7 +1344,7 @@ export function portal(
  * @param opts — CSS class names and optional duration
  * @returns effect disposer
  */
-/** Анимированный show/hide через CSS-контракт `${name}-enter-*` / `${name}-leave-*` (interrupt-safe); legacy { enter, enterActive, leave, leaveActive, duration } поддерживаются */
+/** Animated show/hide through the CSS contract `${name}-enter-*` / `${name}-leave-*` (interrupt-safe); legacy { enter, enterActive, leave, leaveActive, duration } is supported */
 export function transition(
     el: Element,
     condition: Signal<boolean> | (() => boolean) | boolean,
@@ -1373,86 +1373,86 @@ export interface SpringOptions {
 }
 
 export function spring(el: Element, props: Record<string, [from: string | number, to: string | number]>, opts?: SpringOptions): Animation;
-/** Пружина как значение: target пишем, current читаем; скорость сохраняется при смене цели */
+/** A spring as a value: write target, read current; velocity is kept when the target changes */
 export function springSignal<T extends number | number[] | Record<string, number>>(initial: T, opts?: { stiffness?: number; damping?: number; mass?: number; precision?: number }): { target: Signal<T>; current: ReadonlySignal<T>; set(v: T, opts?: { hard?: boolean }): void };
-/** Твин как значение */
+/** A tween as a value */
 export function tween<T extends number | number[] | Record<string, number>>(initial: T, opts?: { duration?: number; easing?: (t: number) => number }): { target: Signal<T>; current: ReadonlySignal<T>; set(v: T, opts?: { hard?: boolean }): void };
 export function flip(nodes: ArrayLike<Element>, opts?: { stiffness?: number; damping?: number }): () => void;
 export function animate(target: Element, mutate: () => void, opts?: { name?: string; cls?: string }): Promise<void>;
 
 // ── Accessibility ──────────────────────────────────────────────
 
-/** Нативная модалка: open → showModal(); Esc/close → open = false */
+/** Native modal: open → showModal(); Esc/close → open = false */
 export function modal(dialog: HTMLDialogElement, open: Signal<boolean>): () => void;
-/** Каркас register() для острова по его серверной разметке (dev) */
+/** A register() scaffold for an island from its server markup (dev) */
 export function scaffold(el: HTMLElement): string;
 /**
- * Focus trap: Tab-цикл, autoFocus, возврат фокуса; escape / outside (release или свой обработчик); inert для фона (кроме allow)
+ * Focus trap: Tab cycle, autoFocus, focus return; escape / outside (release or your own handler); inert for the background (except allow)
  */
 export interface TrapOptions {
-    /** true / 'first' — [data-autofocus] → первый tabbable → контейнер; 'container' — статичный контейнер (длинный текст, APG); селектор — свой элемент */
+    /** true / 'first' — [data-autofocus] → the first tabbable → the container; 'container' — a static container (long text, APG); a selector — your own element */
     autoFocus?: boolean | 'first' | 'container' | string;
-    /** фокус, ушедший наружу (программно, из виджета), возвращается внутрь; default true */
+    /** focus that left (programmatically, from a widget) is brought back inside; default true */
     recapture?: boolean;
-    /** Escape: true — release(), функция — свой обработчик */
-    /** true — Esc/Android back/AT close request через CloseWatcher (стек платформы; <dialog>/popover не закрываются вместе с ловушкой); 'key' — только keydown; функция — свой обработчик */
+    /** Escape: true — release(), a function — your own handler */
+    /** true — Esc/Android back/AT close request through CloseWatcher (the platform stack; <dialog>/popover do not close together with the trap); 'key' — keydown only; a function — your own handler */
     escape?: boolean | 'key' | ((e: Event) => void);
-    /** клик вне контейнера (и вне allow) */
+    /** a click outside the container (and outside allow) */
     outside?: boolean | ((e: PointerEvent) => void);
-    /** inert для фона */
+    /** inert for the background */
     inert?: boolean;
     allow?: string;
-    /** true — на элемент, активный до trap(); Element | () => Element — свой; если триггер удалён (строка list()) — ближайший живой сосед */
+    /** true — to the element active before trap(); Element | () => Element — your own; if the trigger was removed (a list() row) — the nearest living neighbour */
     returnFocus?: boolean | Element | (() => Element | null);
 }
 export function trap(container: Element, opts?: TrapOptions): (() => void) & { dispose(): void; refresh(): void };
-/** Tabbable-элементы в порядке документа, включая открытые shadow root и <slot>; inert/hidden/disabled/tabindex<0/закрытые <details> исключены */
+/** Tabbable elements in document order, including open shadow roots and <slot>; inert/hidden/disabled/tabindex<0/closed <details> are excluded */
 export function tabbables(root: Element | ShadowRoot): HTMLElement[];
 export interface RovingOptions {
     selector?: string;
-    /** 'grid' — Left/Right по ячейкам, Up/Down по строкам, Home/End в строке, Ctrl+Home/End, PageUp/Down */
+    /** 'grid' — Left/Right by cells, Up/Down by rows, Home/End within the row, Ctrl+Home/End, PageUp/Down */
     orientation?: 'horizontal' | 'vertical' | 'both' | 'grid';
     wrap?: boolean;
-    /** grid: число колонок или 'auto' (по геометрии первой строки) */
+    /** grid: number of columns or 'auto' (from the geometry of the first row) */
     cols?: number | 'auto';
-    /** шаг PageUp/PageDown (строк для grid) */
+    /** PageUp/PageDown step (rows for grid) */
     page?: number;
-    /** буква → ближайший элемент по тексту / aria-label, буфер 500 мс */
+    /** a letter → the nearest item by text / aria-label, 500 ms buffer */
     typeahead?: boolean;
-    /** инверсия горизонтали; 'auto' — по computed direction */
+    /** horizontal inversion; 'auto' — by computed direction */
     dir?: 'ltr' | 'rtl' | 'auto';
-    /** tab-stop: 'selected' — [aria-selected/checked/current], 'first', индекс */
+    /** tab stop: 'selected' — [aria-selected/checked/current], 'first', an index */
     initial?: 'selected' | 'first' | number;
-    /** aria-activedescendant-режим (combobox): фокус остаётся на этом input, клавиши слушаются на нём */
+    /** aria-activedescendant mode (combobox): focus stays on this input, keys are listened to on it */
     virtual?: HTMLElement | null;
-    /** MutationObserver: refresh при смене детей; удалённый активный → фокус на элемент с тем же индексом */
+    /** MutationObserver: refresh when children change; a removed active item → focus the element with the same index */
     observe?: boolean;
-    /** tree: ArrowRight раскрывает (aria-expanded), ArrowLeft сворачивает или идёт к родителю */
+    /** tree: ArrowRight expands (aria-expanded), ArrowLeft collapses or goes to the parent */
     tree?: boolean;
     onActivate?: (el: Element, index: number) => void;
 }
 export function roving(container: Element, opts?: RovingOptions): { dispose(): void; moveFocus(delta: number): void; refresh(): void; active: ReadonlySignal<number>; setActive(i: number): void };
 /**
- * Объявление для скринридера: два постоянных региона (polite → role=status, assertive → role=alert), очередь без потерь,
- * дедуп одинакового текста 500 мс, авто-очистка 7 с. Возвращает clear(). announce.init() создаёт регионы заранее.
+ * Screen-reader announcement: two permanent regions (polite → role=status, assertive → role=alert), a lossless queue,
+ * dedup of identical text within 500 ms, auto-clear after 7 s. Returns clear(). announce.init() creates the regions in advance.
  */
 export function announce(message: string, politeness?: 'polite' | 'assertive'): () => void;
 export function announce(message: string, opts: { politeness?: 'polite' | 'assertive'; clearAfter?: number | false; dedupe?: number; native?: boolean }): () => void;
-/** реактивная форма: сигнал/функция → регион (в текущем scope); начальное значение не объявляется */
+/** reactive form: a signal/function → the region (in the current scope); the initial value is not announced */
 export function announce<T>(source: ReadonlySignal<T> | (() => T), opts?: { politeness?: 'polite' | 'assertive'; debounce?: number; format?: (v: T) => string | null | false; immediate?: boolean }): () => void;
 export namespace announce { function init(): void; function clear(politeness?: 'polite' | 'assertive'): void; }
-/** Реактивное объявление сигнала/функции с debounce: live(() => `${n.value} результатов`) */
+/** Reactive announcement of a signal/function with debounce: live(() => `${n.value} results`) */
 export function live<T>(source: ReadonlySignal<T> | (() => T), opts?: { politeness?: 'polite' | 'assertive'; debounce?: number; format?: (v: T) => string | null | false; immediate?: boolean; clearAfter?: number | false }): () => void;
-/** Занятость без disabled: aria-busy + aria-disabled + data-busy, клики/Enter глушатся, фокус остаётся на элементе */
+/** Busy without disabled: aria-busy + aria-disabled + data-busy, clicks/Enter are muted, focus stays on the element */
 export function busy(el: Element, pending: ReadonlySignal<boolean> | (() => boolean)): () => void;
 
 // ── CSS ────────────────────────────────────────────────────────
 
 export function css(strings: TemplateStringsArray | string, ...values: unknown[]): CSSStyleSheet;
 export function adoptStyles(root: Document | ShadowRoot, ...sheets: CSSStyleSheet[]): void;
-/** Стили в каскадном слое: css.layer('components')`.card { … }` */
+/** Styles in a cascade layer: css.layer('components')`.card { … }` */
 export namespace css { function layer(name: string): (strings: TemplateStringsArray | string, ...values: unknown[]) => CSSStyleSheet; }
-/** Scoped-стили без мутации id: атрибут data-aegis-css, один sheet на текст (refcount), снятие при dispose scope */
+/** Scoped styles without mutating id: the data-aegis-css attribute, one sheet per text (refcount), removed on scope dispose */
 export function scopedStyle(el: Element, cssText: string): CSSStyleSheet;
 
 // ── Custom Elements ────────────────────────────────────────────
@@ -1464,7 +1464,7 @@ export interface PropDefinition<T = unknown> {
     attribute?: string;
 }
 
-/** Тип значения prop из { type, default }: { type: Number } → number | null, { type: Number, default: 0 } → number */
+/** The value type of a prop from { type, default }: { type: Number } → number | null, { type: Number, default: 0 } → number */
 export type PropValue<P> = P extends { type: BooleanConstructor } ? boolean
     : P extends { type: NumberConstructor } ? (P extends { default: number } ? number : number | null)
     : P extends { type: StringConstructor } ? (P extends { default: string } ? string : string | null)
@@ -1487,7 +1487,7 @@ export interface ElementDefinition<P extends Record<string, PropDefinition> = Re
     extends?: string;
 }
 
-/** tagName должен содержать дефис (иначе DOMException в рантайме — и ошибка типов здесь) */
+/** tagName must contain a hyphen (otherwise a DOMException at runtime — and a type error here) */
 /** @deprecated Use `element(tag, Component, { props })` — the same component function as islands and mount(). `defineElement()` stays as the low-level form. */
 export function defineElement<P extends Record<string, PropDefinition>>(tagName: `${string}-${string}`, def: ElementDefinition<P>): typeof HTMLElement;
 
@@ -1503,11 +1503,11 @@ export function anchor(floating: Element, reference: Element, opts?: {
 
 export interface RouteInfo { path: string | null; params: Record<string, string>; query: Record<string, string>; search?: string }
 export interface RouteContext<D = unknown> {
-    /** результат loader */
+    /** loader result */
     data: D;
     params: Record<string, string>;
     query: Record<string, string>;
-    /** элемент для дочерних маршрутов (layout) */
+    /** the element for child routes (layout) */
     outlet: Element | null;
     signal: AbortSignal | undefined;
     route: RouteInfo;
@@ -1518,52 +1518,52 @@ export type RouteParams<P extends string> = P extends `${string}:${infer Name}/$
     ? { [K in Name | keyof RouteParams<`/${Rest}`>]: string }
     : P extends `${string}:${infer Name}` ? { [K in Name]: string } : Record<string, string>;
 export type RouteHandler<D = unknown, P extends string = string> = (params: RouteParams<P>, ctx: RouteContext<D>) => void | Promise<void>;
-/** props маршрута-компонента: params + { data: результат loader, query } */
+/** props of a route component: params + { data: the loader result, query } */
 export type RouteComponentProps<P extends string = string, D = unknown> = RouteParams<P> & { data: D; query: Record<string, string> };
 export interface RouteDef<D = unknown> {
     handler?: RouteHandler<D>;
-    /** компонент-страница (контракт island()/mount()); монтируется в router({ outlet }) или в outlet родительского layout */
+    /** page component (the island()/mount() contract); mounted into router({ outlet }) or into the parent layout's outlet */
     component?: Component<RouteComponentProps<string, D>>;
-    /** данные до dispose старой страницы; отменяется через signal при новой навигации */
-    loader?: (params: Record<string, string>, ctx: { signal: AbortSignal | undefined; query: Record<string, string>; params: Record<string, string>; /** true — прогрев до перехода (hover / predict / r.preload): можно снизить priority */ speculative?: boolean }) => D | Promise<D>;
-    /** true — идём; false — отменить (sync); строка — redirect; Promise — ждём */
+    /** data before the old page is disposed; cancelled through signal on a new navigation */
+    loader?: (params: Record<string, string>, ctx: { signal: AbortSignal | undefined; query: Record<string, string>; params: Record<string, string>; /** true — a warm-up before the navigation (hover / predict / r.preload): priority can be lowered */ speculative?: boolean }) => D | Promise<D>;
+    /** true — go on; false — cancel (sync); a string — redirect; a Promise — wait */
     guard?: (to: RouteInfo, from: RouteInfo) => boolean | string | void | Promise<boolean | string | void>;
     redirect?: string | ((to: RouteInfo, from: RouteInfo) => string);
-    /** ленивый маршрут: default export модуля = handler */
+    /** lazy route: the module's default export = handler */
     load?: () => Promise<RouteHandler<D> | { default: RouteHandler<D> }>;
-    /** прогрев данных при hover/visible (router({ preload })) */
+    /** data warm-up on hover/visible (router({ preload })) */
     preload?: (params: Record<string, string>) => void;
-    /** layout переживает смену дочернего маршрута; получает живой outlet */
+    /** the layout survives a change of the child route; receives a live outlet */
     layout?: (ctx: RouteContext<D>) => void | Promise<void>;
     children?: Record<string, RouteHandler | RouteDef>;
 }
 export interface RouterOptions {
     base?: string;
     root?: Element | Document;
-    /** View Transitions между страницами: true → types ['page', 'back'|'forward'] в data-vt-type на <html>; функция — свои types; false */
+    /** View Transitions between pages: true → types ['page', 'back'|'forward'] in data-vt-type on <html>; a function — your own types; false */
     transition?: boolean | ((info: { back: boolean }) => string[] | false);
-    /** класс активной ссылки (aria-current="page" ставится всегда) */
+    /** class of the active link (aria-current="page" is always set) */
     activeClass?: string;
-    /** прогрев кода и loader маршрута по намерению: 'hover' (замедление курсора или delay) | 'visible' | 'tap' | { on, delay: 80 | 'auto', velocity, rootMargin } */
+    /** warm-up of the route's code and loader on intent: 'hover' (cursor slowdown or delay) | 'visible' | 'tap' | { on, delay: 80 | 'auto', velocity, rootMargin } */
     preload?: 'hover' | 'visible' | 'tap' | boolean | { on?: 'hover' | 'visible' | 'tap'; delay?: number | 'auto'; velocity?: number; rootMargin?: string };
-    /** сколько мс прогретый loader ждёт перехода (default 30000) */
+    /** how many ms a warmed loader waits for the navigation (default 30000) */
     preloadTTL?: number;
-    /** false — preload греет только код маршрута, не loader */
+    /** false — preload warms only the route code, not the loader */
     preloadData?: boolean;
-    /** предиктор переходов: после каждого маршрута учится (pattern → pattern) и в idle греет top-K вероятных ссылок страницы (p ≥ minP, полезность > 0) */
+    /** navigation predictor: learns after every route (pattern → pattern) and warms the page's top-K likely links in idle time (p ≥ minP, usefulness > 0) */
     predict?: boolean | { predictor?: Predictor; topK?: number; minP?: number };
     scroll?: 'after-transition' | 'manual';
-    /** false / Promise<false> — отменить переход (форма с guard); строка — редирект */
+    /** false / Promise<false> — cancel the navigation (a form with guard); a string — redirect */
     beforeEach?: (to: RouteInfo, from: RouteInfo) => void | boolean | string | Promise<void | boolean | string>;
-    /** пересоздавать scope при изменении только search (старое поведение) */
+    /** recreate the scope when only search changes (the old behaviour) */
     searchReload?: boolean;
-    /** маршруты в location.hash ('#/users/42', ссылки <a href="#/users/42">) — статический хостинг без rewrite-правил */
+    /** routes in location.hash ('#/users/42', links <a href="#/users/42">) — static hosting without rewrite rules */
     hash?: boolean;
-    /** куда монтировать маршруты { component } верхнего уровня */
+    /** where to mount top-level { component } routes */
     outlet?: string | Element;
-    /** фокус после перехода: 'auto' — #fragment | [autofocus] | outlet/main/h1 с временным tabindex=-1; селектор | Element | функция | false */
+    /** focus after navigation: 'auto' — #fragment | [autofocus] | outlet/main/h1 with a temporary tabindex=-1; a selector | Element | a function | false */
     focus?: 'auto' | string | Element | ((root: Element | null) => Element | null) | false;
-    /** объявление заголовка страницы после перехода (дедуп); функция — свой текст */
+    /** announce the page title after navigation (dedup); a function — your own text */
     announce?: boolean | ((to: RouteInfo, from: RouteInfo | null) => string | null);
 }
 export interface SearchOptions<T> {
@@ -1582,31 +1582,31 @@ export interface Router {
     error: ReadonlySignal<unknown>;
     state: ReadonlySignal<unknown>;
     transitioning: ReadonlySignal<boolean>;
-    /** search-параметр как двусторонний сигнал (URL = state); scope маршрута не пересоздаётся */
+    /** a search parameter as a two-way signal (URL = state); the route scope is not recreated */
     search<T = string>(name: string, opts?: SearchOptions<T>): Signal<T>;
     search<T = string>(name: string, opts: SearchOptions<T> & { multi: true }): Signal<T[]>;
     navigate(path: string, opts?: { replace?: boolean; state?: unknown }): Promise<unknown>;
     back(): void;
     forward(): void;
-    /** per-entry state без навигации */
+    /** per-entry state without navigation */
     setState(state: unknown): void;
-    /** первый маршрут отрендерен */
+    /** the first route has rendered */
     ready: Promise<unknown>;
-    /** есть ли маршрут для пути (boost() уступает роутеру) */
+    /** is there a route for the path (boost() yields to the router) */
     matches(path: string): boolean;
-    /** прогреть маршрут (код + loader) до перехода в рамках бюджета сети; p — вероятность для порога полезности */
+    /** warm a route (code + loader) before navigation within the network budget; p — the probability for the usefulness threshold */
     preload(path: string, p?: number): Promise<void>;
     cleanup(): void;
     dispose(): void;
 }
 /**
- * Роутер поверх Navigation API (fallback: popstate + перехват <a>).
- * Вложенные маршруты с layout, async handler/loader (нативный индикатор, scroll после данных, отмена гонок),
- * guard/redirect как данные, search-параметры как сигналы, ленивые маршруты через import().
- * Не перехватывает: hash-ссылки, формы, download, data-aegis-reload, несовпавшие пути (уходят на сервер).
+ * A router on top of the Navigation API (fallback: popstate + <a> interception).
+ * Nested routes with layout, async handler/loader (native indicator, scroll after data, race cancellation),
+ * guard/redirect as data, search parameters as signals, lazy routes through import().
+ * Does not intercept: hash links, forms, download, data-aegis-reload, unmatched paths (they go to the server).
  */
 export function router<R extends Record<string, unknown>>(routes: { [K in keyof R]: K extends string ? RouteHandler<any, K> | (RouteDef & { handler?: RouteHandler<any, K>; component?: Component<RouteComponentProps<K, any>> }) : never }, opts?: RouterOptions): Router;
-/** Идёт View Transition роутера */
+/** The router's View Transition is in progress */
 export const transitioning: ReadonlySignal<boolean>;
 
 // ── Commands ───────────────────────────────────────────────────
@@ -1619,14 +1619,14 @@ export function command(root: Element, commands?: Record<string, (trigger: Eleme
 // ── Virtual Scroll ─────────────────────────────────────────────
 
 export function virtualScroll<T>(parent: Element, items: T[] | Signal<T[]> | ReadonlySignal<T[]> | (() => T[]), opts: {
-    /** 'cv' (default) — все строки в DOM под content-visibility; 'window' — DOM recycling, в DOM только видимые + overscan */
+    /** 'cv' (default) — all rows in the DOM under content-visibility; 'window' — DOM recycling, only the visible rows + overscan in the DOM */
     mode?: 'cv' | 'window';
     overscan?: number;
-    /** высота контейнера для mode 'window' */
+    /** container height for mode 'window' */
     height?: number | string;
     itemHeight?: number;
     chunkSize?: number;
-    /** ключ строки (по умолчанию "id"); строки keyed, со своим scope */
+    /** row key ("id" by default); rows are keyed, with their own scope */
     key?: string | ((item: T, index: number) => string | number);
     renderItem: (item: T, index: number) => Element | DocumentFragment;
 }): { container: HTMLElement; refresh(): void; dispose(): void; /** mode 'window' */ range?: ReadonlySignal<{ start: number; end: number; total: number }>; scrollToIndex?(i: number, opts?: { align?: 'start' | 'center' | 'end' }): void };
@@ -1641,13 +1641,13 @@ export function offlineResource<T = unknown>(source: string | (() => string), op
 
 export type SwapMode = 'inner' | 'outer' | 'append' | 'prepend' | 'before' | 'after' | 'morph';
 /**
- * Вставить серверный HTML аккуратно: dispose островов в заменяемом поддереве, вставка, hydrate новых,
- * снятие data-cloak, восстановление фокуса и курсора. mode 'morph' — точечный патч (id-aware), узлы не пересоздаются.
- * Если ответ — целая страница, берётся селектор target (или select).
+ * Insert server HTML carefully: dispose islands in the replaced subtree, insert, hydrate new ones,
+ * remove data-cloak, restore focus and caret. mode 'morph' — a targeted patch (id-aware), nodes are not recreated.
+ * If the response is a whole page, the target's selector (or select) is taken from it.
  */
 export function swap(target: Element, html: string | Response | Document | DocumentFragment | Element, opts?: {
     mode?: SwapMode;
-    /** true — Sanitizer API (Element.setHTML) или минимальная чистка script/iframe/on*-атрибутов/javascript: с S012 в dev; объект — SanitizerConfig */
+    /** true — Sanitizer API (Element.setHTML) or a minimal clean-up of script/iframe/on*-attributes/javascript: with S012 in dev; an object — SanitizerConfig */
     sanitize?: boolean | object;
     select?: string;
     transition?: boolean | { name?: string; cls?: string };
@@ -1655,22 +1655,22 @@ export function swap(target: Element, html: string | Response | Document | Docum
 }): Promise<{ inserted: Node[] }>;
 
 /**
- * MPA-навигация без перезагрузки: fetch страницы → morph root → View Transitions.
- * Острова вне root переживают переход. Opt-out: data-no-boost; ссылки router()-а не трогаются (routers: [r]).
+ * MPA navigation without a reload: fetch the page → morph root → View Transitions.
+ * Islands outside root survive the navigation. Opt-out: data-no-boost; router() links are left alone (routers: [r]).
  */
 export function boost(opts?: {
     root?: string | Element;
     mode?: SwapMode;
     transition?: boolean;
     prefetch?: 'hover' | 'visible' | 'tap' | boolean | { on?: 'hover' | 'visible' | 'tap'; delay?: number | 'auto'; velocity?: number; rootMargin?: string };
-    /** предиктор: учится на aegis:load (пути нормализуются: числа → :id), в idle греет HTML top-K вероятных страниц */
+    /** predictor: learns from aegis:load (paths are normalised: numbers → :id), warms the HTML of the top-K likely pages in idle time */
     predict?: boolean | { predictor?: Predictor; topK?: number; minP?: number };
     scroll?: 'restore' | 'preserve';
     head?: 'title' | 'title+styles' | false;
     routers?: Router[];
     focus?: 'auto' | string | Element | false;
     announce?: boolean | ((to: { path: string }, from: null) => string | null);
-}): { pending: ReadonlySignal<boolean>; visit(url: string): Promise<boolean>; /** прогреть HTML страницы в рамках бюджета сети */ prefetch(url: string, p?: number): Promise<void>; dispose(): void };
+}): { pending: ReadonlySignal<boolean>; visit(url: string): Promise<boolean>; /** warm a page's HTML within the network budget */ prefetch(url: string, p?: number): Promise<void>; dispose(): void };
 
 export type SlotSpec = Reactive<Displayable> | {
     text?: Reactive<Displayable>;
@@ -1680,17 +1680,17 @@ export type SlotSpec = Reactive<Displayable> | {
     prop?: Record<string, Reactive<unknown>>;
     on?: Record<string, (e: Event) => void>;
 };
-/** Серверный <template> со слотами [data-slot] как источник разметки для list()/show(); HTML не парсится (CSP) */
+/** A server <template> with [data-slot] slots as the markup source for list()/show(); no HTML parsing (CSP) */
 export function tpl(target: string | HTMLTemplateElement, root?: Document | Element): (slots?: Record<string, SlotSpec>) => DocumentFragment;
 
 /**
- * Привязать html``-шаблон к уже отрендеренному сервером DOM без перерисовки (0 мутаций):
+ * Bind an html`` template to DOM already rendered by the server without re-rendering (0 mutations):
  *   adopt(el)`<span class="value">${count}</span><button @click=${inc}>+</button>`
- * Структура элементов должна совпадать; текстовые значения — единственный ребёнок элемента.
+ * The element structure must match; text values are the only child of their element.
  */
 export function adopt(root: Element, opts?: { trust?: boolean }): (strings: TemplateStringsArray, ...values: unknown[]) => Element;
 
-/** JSON из <script type="application/json"> (Django json_script) — кэш по элементу */
+/** JSON from <script type="application/json"> (Django json_script) — cached per element */
 export function jsonScript<T = unknown>(target: string | Element, root?: Document | Element): T | undefined;
 
 // ── i18n ───────────────────────────────────────────────────────
@@ -1700,12 +1700,12 @@ export function jsonScript<T = unknown>(target: string | Element, root?: Documen
  */
 export type PluralForms = Partial<Record<'zero' | 'one' | 'two' | 'few' | 'many' | 'other', string>>;
 export interface I18nOptions {
-    /** начальная локаль (default: <html lang> или 'en') */
+    /** initial locale (default: <html lang> or 'en') */
     locale?: string;
-    /** локаль-запас для отсутствующих ключей */
+    /** fallback locale for missing keys */
     fallback?: string;
     pluralOpts?: Intl.PluralRulesOptions;
-    /** писать t.locale в <html lang> */
+    /** write t.locale into <html lang> */
     syncLang?: boolean;
 }
 export interface TranslationFunction<K extends string = string> {
@@ -1717,7 +1717,7 @@ export interface TranslationFunction<K extends string = string> {
     merge(extra: Record<string, unknown>): void;
     /** The reactive dictionary signal */
     dict: Signal<Record<string, unknown>>;
-    /** реактивная локаль; запись переключает словарь (ленивая подгрузка → t.loading) */
+    /** reactive locale; a write switches the dictionary (lazy loading → t.loading) */
     locale: Signal<string>;
     loading: ReadonlySignal<boolean>;
     num(v: number | bigint, o?: Intl.NumberFormatOptions): string;
@@ -1733,16 +1733,16 @@ export interface TranslationFunction<K extends string = string> {
  *
  * @param dict — flat key→translation map (single language)
  */
-/** Сообщения встроенных правил валидации: словарь по кодам или (code, params) => string; null — дефолт по <html lang> */
-/** Сообщения правил: словарь (строка или plural-формы { one, few, many, other }), функция (code, params) => string | null, или t из i18n() — ключи <prefix><code>, локаль следует за t.locale */
+/** Messages of the built-in validation rules: a dictionary by code or (code, params) => string; null — the default by <html lang> */
+/** Rule messages: a dictionary (a string or plural forms { one, few, many, other }), a function (code, params) => string | null, or t from i18n() — keys <prefix><code>, the locale follows t.locale */
 export function setValidationMessages(dict: Record<string, string | Record<string, string>> | ((code: string, params?: Record<string, unknown>) => string | null) | TranslationFunction<any> | null, prefix?: string): void;
 export function maxSize(size: number | string, msg?: string): ValidationRule<any>;
 export function mime(types: string | string[], msg?: string): ValidationRule<any>;
 export function maxFiles(n: number, msg?: string): ValidationRule<any>;
 /**
- * Переводы: plural через Intl.PluralRules ({ one, few, many, other } по params.n/count), вложенные ключи,
- * реактивная локаль t.locale с ленивой подгрузкой (t.loading), Intl-форматтеры t.num/t.date/t.rel/t.list.
- * i18n(flatDict) — плоский словарь одной локали.
+ * Translations: plural through Intl.PluralRules ({ one, few, many, other } by params.n/count), nested keys,
+ * reactive locale t.locale with lazy loading (t.loading), Intl formatters t.num/t.date/t.rel/t.list.
+ * i18n(flatDict) — a flat dictionary of one locale.
  */
 export function i18n<D extends Record<string, string>>(dict: D, opts?: I18nOptions): TranslationFunction<keyof D & string>;
 export function i18n(dicts?: Record<string, unknown>, opts?: I18nOptions): TranslationFunction;
@@ -1761,8 +1761,8 @@ export const VERSION: string;
 // ── Default Export ─────────────────────────────────────────────
 
 /**
- * Сделать Aegis глобальным (window.Aegis) для inline-скриптов без import.
- * Не делается автоматически: модуль-левел глобал ломает tree-shaking.
+ * Make Aegis global (window.Aegis) for inline scripts without import.
+ * Not done automatically: a module-level global breaks tree-shaking.
  */
 export function expose(target?: object): typeof Aegis;
 

@@ -1,19 +1,23 @@
-/* aegisjs.com — palette: ink / paper / gold / teal */
+/* aegisjs.com — palette from the logo: petrol blue mark (#184C64), graphite wordmark (#49494B), light "js" (#ACACAC) */
 :root {
-    --ink: #0B1020; --ink-2: #121A2F; --paper: #FBFAF6; --surface: #FFFFFF; --surface-2: #F3F1EA;
-    --gold: #E8B42E; --gold-2: #C99A18; --gold-soft: #FFF4D6; --teal: #1FB7A6; --teal-2: #14907F;
-    --text: #1A2233; --muted: #6B7280; --line: #E6E3DA; --danger: #E5484D; --ok: #2E9E5B;
-    --code-bg: #0F1730; --code-text: #E6EAF2; --kw: #F2C15C; --str: #8CE0B0; --cm: #7C8AA5; --fn: #8FB8FF; --tag: #F28C7C; --attr: #F2C15C; --num: #C7A6FF;
+    --ink: #0E2A38; --ink-2: #143A4D; --paper: #F7F9FA; --surface: #FFFFFF; --surface-2: #EEF3F6;
+    --gold: #184C64; --gold-2: #123A4D; --gold-soft: #E3EEF4; --teal: #1F7FA6; --teal-2: #184C64;
+    --text: #2B2F36; --muted: #6B7280; --line: #E1E6EA; --danger: #E5484D; --ok: #2E9E5B; --js: #ACACAC;
+    --code-bg: #12303F; --code-text: #E8EEF2; --kw: #8FD3F4; --str: #A8E6B8; --cm: #8FA3AF; --fn: #FFD79A; --tag: #F5A48F; --attr: #8FD3F4; --num: #D4B5FF;
     --radius: 10px; --shadow: 0 1px 2px rgba(11,16,32,.06), 0 8px 24px -12px rgba(11,16,32,.18);
     --sans: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
     --mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
     color-scheme: light;
 }
 :root[data-theme="dark"] {
-    --paper: #0B1020; --surface: #121A2F; --surface-2: #182238; --text: #E6EAF2; --muted: #98A2B3; --line: #243049;
-    --gold-soft: #2A2410; --code-bg: #0A0F1E; --shadow: 0 1px 2px rgba(0,0,0,.4), 0 8px 24px -12px rgba(0,0,0,.6);
+    --paper: #0B1A23; --surface: #112733; --surface-2: #17313F; --text: #E6EEF2; --muted: #93A4B0; --line: #22404F;
+    --gold: #5FB3DC; --gold-2: #8FD3F4; --gold-soft: #163847; --teal: #5FB3DC; --teal-2: #8FD3F4; --ink: #061219;
+    --code-bg: #0A1820; --shadow: 0 1px 2px rgba(0,0,0,.4), 0 8px 24px -12px rgba(0,0,0,.6);
     color-scheme: dark;
 }
+.btn.primary { color: #fff }
+:root[data-theme="dark"] .btn.primary { color: #061219 }
+.logo .js { color: var(--js); font-weight: 400 }
 * { box-sizing: border-box }
 html { scroll-behavior: smooth; scroll-padding-top: 76px }
 body { margin: 0; background: var(--paper); color: var(--text); font: 16px/1.6 var(--sans); -webkit-font-smoothing: antialiased }
@@ -83,7 +87,9 @@ footer { border-top: 1px solid var(--line); margin-top: 40px; padding: 28px 0; c
 .hero .install { display: inline-flex; align-items: center; gap: 10px; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 8px 12px; font: 13.5px var(--mono); color: var(--muted) } .hero .install b { color: var(--text); font-weight: 500 }
 .demo { background: var(--surface); border: 1px solid var(--line); border-radius: 14px; box-shadow: var(--shadow); overflow: hidden }
 .demo .bar { display: flex; gap: 6px; padding: 10px 14px; border-bottom: 1px solid var(--line); background: var(--surface-2); font-size: 12.5px; color: var(--muted) } .demo .bar i { width: 10px; height: 10px; border-radius: 50%; background: var(--line); display: inline-block } .demo .bar i:nth-child(1) { background: #f26d6d } .demo .bar i:nth-child(2) { background: var(--gold) } .demo .bar i:nth-child(3) { background: var(--teal) }
-.demo pre { margin: 0; border-radius: 0; font-size: 12.8px } .demo .live { padding: 14px 16px; border-top: 1px solid var(--line); display: flex; align-items: center; gap: 12px; flex-wrap: wrap } .demo .live button { font: 600 14px var(--sans); background: var(--gold); border: 0; color: var(--ink); padding: 8px 14px; border-radius: 8px; cursor: pointer } .demo .live small { color: var(--muted) }
+.demo pre { margin: 0; border-radius: 0; font-size: 12.8px } .demo .live { padding: 14px 16px; border-top: 1px solid var(--line); display: flex; align-items: center; gap: 12px; flex-wrap: wrap } .demo .live button { font: 600 14px var(--sans); background: var(--gold); border: 0; color: #fff; padding: 8px 14px; border-radius: 8px; cursor: pointer }
+:root[data-theme="dark"] .demo .live button { color: #061219 }
+.logo img { height: 30px; width: auto; display: block } .demo .live small { color: var(--muted) }
 .stats { display: flex; gap: 28px; flex-wrap: wrap; padding: 22px 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); margin: 20px 0 48px } .stats div b { display: block; font-size: 1.6rem; letter-spacing: -.02em } .stats div span { color: var(--muted); font-size: 13.5px }
 .grid3 { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 18px; margin: 20px 0 48px }
 .card { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 20px 22px } .card h3 { margin: 0 0 8px; font-size: 1.05rem; display: flex; align-items: center; gap: 10px } .card h3 .ic { width: 30px; height: 30px; border-radius: 8px; background: var(--gold-soft); color: var(--gold-2); display: inline-flex; align-items: center; justify-content: center; font-size: 15px } .card p { margin: 0; color: var(--muted); font-size: 14.5px } .card a.more { display: inline-block; margin-top: 10px; font-size: 14px; font-weight: 600 }
