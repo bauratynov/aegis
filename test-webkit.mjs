@@ -8,7 +8,7 @@ import { join, extname } from 'node:path';
 const ROOT = new URL('.', import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1');
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.mjs': 'text/javascript', '.css': 'text/css', '.json': 'application/json' };
 // no visible, focused window in a headless CI run: same list as test-browsers.mjs
-const KNOWN_ENV_ONLY = new Set(['size(): реактивен', 'trap: focus moved inside (or bg tab)', 'offlineResource: data loaded', 'offlineResource: optimistic update', 'leader: лок получен']);
+const KNOWN_ENV_ONLY = new Set(['size(): реактивен', 'trap: focus moved inside (or bg tab)', 'offlineResource: data loaded', 'offlineResource: optimistic update', 'leader: лок получен', 'sync: ответ разослан другим вкладкам с Lamport-меткой']);   // the last one: a BroadcastChannel round-trip between tabs that a loaded CI runner sometimes misses
 
 let pw;
 try { pw = await import('playwright'); } catch (e) { console.log('webkit: skipped — playwright is not installed (npx playwright install --with-deps webkit)'); process.exit(0); }

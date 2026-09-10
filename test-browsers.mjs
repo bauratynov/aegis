@@ -14,7 +14,7 @@ const FULL = existsSync(join(ROOT, 'aegis_full.js'));
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.mjs': 'text/javascript', '.css': 'text/css', '.json': 'application/json' };
 // Headless runs: tests that need a visible, focused window or IndexedDB. Chrome headless lacks all of them;
 // Firefox headless on a CI runner has no window focus either. They pass in a real browser.
-const KNOWN_ENV_ONLY = new Set(['size(): реактивен', 'trap: focus moved inside (or bg tab)', 'offlineResource: data loaded', 'offlineResource: optimistic update', 'leader: лок получен']);
+const KNOWN_ENV_ONLY = new Set(['size(): реактивен', 'trap: focus moved inside (or bg tab)', 'offlineResource: data loaded', 'offlineResource: optimistic update', 'leader: лок получен', 'sync: ответ разослан другим вкладкам с Lamport-меткой']);   // the last one: a BroadcastChannel round-trip between tabs that a loaded CI runner sometimes misses
 
 const candidates = {
     chrome: [process.env.CHROME, 'C:/Program Files/Google/Chrome/Application/chrome.exe', 'C:/Program Files (x86)/Google/Chrome/Application/chrome.exe', '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome', '/usr/bin/google-chrome', '/usr/bin/chromium', '/usr/bin/chromium-browser'],
