@@ -7,7 +7,7 @@
     --accent: #184C64; --accent-strong: #123A4D; --accent-soft: #E3EEF4; --accent-2: #1F7FA6;
     --link: #184C64; --on-accent: #FFFFFF; --brand: #184C64;
     --gold: var(--accent); --gold-2: var(--accent-strong); --gold-soft: var(--accent-soft); --teal: var(--accent-2); --teal-2: var(--link);
-    --text: #2B2F36; --muted: #6B7280; --line: #E1E6EA; --danger: #C8353B; --ok: #24884D; --js: #767B83;
+    --text: #2B2F36; --muted: #5F6670; --line: #E1E6EA; --danger: #C8353B; --ok: #24884D; --js: #6B7280;
     --code-bg: #12303F; --code-line: transparent; --code-text: #E8EEF2;
     --kw: #8FD3F4; --str: #F3C97C; --cm: #8FA3AF; --fn: #DCE6EC; --tag: #E9A28F; --attr: #B9D6E6; --num: #F3C97C; --tpl: #F3C97C;
     --fs-xs: .75rem; --fs-sm: .8125rem; --fs-md: .875rem; --fs-ui: .9375rem; --fs-base: 1rem; --fs-code: .8125rem;
@@ -182,3 +182,4 @@ footer { border-top: 1px solid var(--line); margin-top: var(--sp-6); padding: va
 }
 @media (max-width: 420px) { .wrap { padding: 0 14px } .top .in { gap: 6px } .icon-btn { width: 34px; height: 34px } }
 [data-cloak] { visibility: hidden }
+.section-sub a, footer a, .card p a, small a { text-decoration: underline; text-decoration-color: color-mix(in srgb, var(--link) 45%, transparent); text-underline-offset: .15em }
