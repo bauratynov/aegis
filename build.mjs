@@ -95,6 +95,25 @@ if (process.argv.includes('--subsets')) {
     }
 }
 
+
+// ── SRI для zero-build/CDN: dist/importmap.json (imports + integrity), dist/importmap.html (snippet + modulepreload), dist/integrity.json
+{
+    const { createHash } = await import('node:crypto');
+    const { mkdirSync } = await import('node:fs');
+    const pkg = JSON.parse(readFileSync('package.json', 'utf8'));
+    const sri = (buf) => 'sha384-' + createHash('sha384').update(buf).digest('base64');
+    const files = ['aegis.js', 'aegis.min.js', 'aegis.core.min.js', 'aegis-devtools.js', 'aegis-test.js'].filter(existsSync);
+    const base = `https://cdn.jsdelivr.net/npm/${pkg.name}@${pkg.version}/`;
+    const integrity = {};
+    for (const f of files) integrity[base + f] = sri(readFileSync(f));
+    const map = { imports: { aegis: base + 'aegis.min.js', 'aegis/core': base + 'aegis.core.min.js', 'aegis/test': base + 'aegis-test.js' }, integrity };
+    mkdirSync('dist', { recursive: true });
+    writeFileSync('dist/importmap.json', JSON.stringify(map, null, 2) + '\n');
+    writeFileSync('dist/integrity.json', JSON.stringify(Object.fromEntries(files.map(f => [f, integrity[base + f]])), null, 2) + '\n');
+    writeFileSync('dist/importmap.html', `<script type="importmap">${JSON.stringify(map)}</script>\n` + files.map(f => `<link rel="modulepreload" href="${base + f}" integrity="${integrity[base + f]}" crossorigin="anonymous">`).join('\n') + '\n');
+    console.log(`dist/importmap.json — ${files.length} files with sha384 integrity (import maps: Chrome 127+ / Safari 18 / Firefox 138)`);
+}
+
 console.log(`${src} → aegis.min.js      ${kb(readFileSync('aegis.min.js'))}`);
 console.log(`core   → aegis.core.js     ${kb(core)}  (readable)`);
 console.log(`core   → aegis.core.min.js ${kb(readFileSync('aegis.core.min.js'))}`);

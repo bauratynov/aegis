@@ -42,7 +42,7 @@
         defineElement, anchor, router, command, virtualScroll,
         offlineResource,
         lazy, nextTick, i18n, uncloak, injectStyles,
-        VERSION, mount, cache, withRetry, leader, predictor, speculate, prefetchOn, onError, lens, signals, fieldArray, min, wizard, draft, live, busy, tabbables, startTransition, deferred, transaction } from './aegis.js';
+        VERSION, mount, cache, withRetry, leader, predictor, speculate, prefetchOn, onError, lens, signals, fieldArray, min, wizard, draft, live, busy, tabbables, startTransition, deferred, transaction, trusted } from './aegis.js';
 
     const results = document.getElementById('results');
     const sandbox = document.getElementById('sandbox');
@@ -2633,7 +2633,7 @@
         assert('warn: where — путь scope, el — элемент', seen.every(w => 'where' in w && 'el' in w));
         scope.dispose();
 
-        html('<p>plain</p>');                                          // E036
+        try { html('<p>plain</p>'); } catch (e) { /* E036 теперь бросает: строка не может стать HTML */ }   // E036
         assert('E036: html() без тега', codes().includes('E036'));
 
         const sc2 = createScope();
@@ -5278,6 +5278,115 @@
         hydrate(first, { load: 'eager', force: true, resident: { margin: '0px', max: 3 } });
         assert('paging: page-in — remount со снимком, ctx.state восстановлен без дубликатов разметки', first.dataset.aegisState === 'hydrated' && first.querySelectorAll('i').length === 1 && first.querySelector('i').textContent === 'v0');
         box.remove();
+        reset();
+    })();
+
+    section('💎 фаза C1 — безопасность: sink-и по префиксу, Trusted Types, зоны доверия, origin-scoped заголовки, scope персиста, prototype pollution');
+
+    await (async () => {
+        const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+        const codes = []; const off = onWarn(w => codes.push(w.code));
+        // 1. URL-sink: значение выбирает схему → блок; закрытый префикс — без проверки и без S002
+        const payloads = ['javascript:alert(1)', 'JaVaScRiPt:alert(1)', 'java\tscript:alert(1)', ' javascript:alert(1)', 'data:text/html,<b>x</b>', 'vbscript:msgbox'];
+        let blocked = 0;
+        for (const p of payloads) { const f = html`<a href=${p}>x</a>`; if (f.firstChild.protocol === 'about:') blocked++; }
+        assert('S002: все опасные схемы в href=${v} заблокированы (about:blank)', blocked === payloads.length && codes.includes('S002'));
+        codes.length = 0;
+        const ok1 = html`<a href=${'https://example.com/x'}>a</a><a href=${'/rel?q=1'}>b</a><a href=${'mailto:a@b.c'}>c</a>`;
+        assert('S002: https / относительный / mailto проходят', [...ok1.querySelectorAll('a')].every(a => a.protocol !== 'about:') && !codes.includes('S002'));
+        const closed = html`<a href="/u/${'javascript:alert(1)'}">x</a>`;
+        assert('sink: закрытый префикс href="/u/${v}" не проверяется — значение не может выбрать схему', closed.firstChild.getAttribute('href') === '/u/javascript:alert(1)' && !codes.includes('S002'));
+        const tr = html`<a href=${trusted('myapp://open')}>x</a>`;
+        assert('trusted(): автор ручается за схему', tr.firstChild.getAttribute('href') === 'myapp://open');
+        const sig = signal('javascript:1');
+        const rs = html`<a href=${sig}>x</a>`;
+        assert('sink: сигнальная привязка href тоже через _safeUrl', rs.firstChild.protocol === 'about:');
+        sig.value = 'https://ok.example/';
+        assert('sink: после смены на https — записано', rs.firstChild.getAttribute('href') === 'https://ok.example/');
+        const fn = signal('javascript:2');
+        const rf = html`<a href=${() => fn.value}>x</a>`;
+        assert('sink: fused-функция href тоже через _safeUrl', rf.firstChild.protocol === 'about:');
+        const img = html`<img src=${'data:image/png;base64,iVBOR'}>`;
+        assert('sink: data:image/ для <img> разрешён', img.firstChild.getAttribute('src').startsWith('data:image/'));
+
+        // 2. on*-строка и srcdoc
+        codes.length = 0;
+        const ev = html`<div onclick=${'alert(1)'}>x</div>`;
+        assert('S003: onclick=${строка} не записан', ev.firstChild.getAttribute('onclick') === null && codes.includes('S003'));
+        const sd = html`<iframe srcdoc=${'<b>x</b>'}></iframe><iframe srcdoc=${trusted('<b>ok</b>')}></iframe>`;
+        assert('S004: srcdoc со строкой отброшен, с trusted() — записан', !sd.firstChild.hasAttribute('srcdoc') && sd.lastChild.getAttribute('srcdoc') === '<b>ok</b>' && codes.includes('S004'));
+        const ih = html`<div .innerHTML=${'<b>x</b>'}></div><div .innerHTML=${trusted('<b>ok</b>')}></div>`;
+        assert('S004: .innerHTML=${строка} отброшен, trusted() — применён', ih.firstChild.innerHTML === '' && ih.lastChild.innerHTML === '<b>ok</b>');
+        let threw = false; try { html('<p>raw</p>'); } catch (e) { threw = true; }
+        assert('E036: html() без тега бросает — строка не может стать HTML', threw);
+        off();
+
+        // 3. Prototype pollution
+        const before = Object.getOwnPropertyNames(Object.prototype).length;
+        let s001 = false; const off2 = onWarn(w => { if (w.code === 'S001') s001 = true; });
+        const fm = document.createElement('form'); fm.innerHTML = '<input name="__proto__[polluted]" value="1"><input name="ok" value="2">'; sandbox.appendChild(fm);
+        let wf = null; try { wf = wireForm(fm); } catch (e) { /* S001 */ }
+        assert('S001: wireForm с name="__proto__[x]" не заражает Object.prototype', ({}).polluted === undefined && Object.getOwnPropertyNames(Object.prototype).length === before);
+        if (wf) wf.dispose && wf.dispose(); fm.remove(); off2();
+        register('pp-island', (el, data) => { el.textContent = String(data.admin) + '/' + String(({}).admin); });
+        const box = document.createElement('div'); box.innerHTML = '<div data-aegis="pp-island"><script type="application/json">{"__proto__":{"admin":true},"x":1}<\/script></div>'; sandbox.appendChild(box);
+        hydrate(box);
+        assert('S001: __proto__ из JSON-props острова отброшен', box.firstElementChild.textContent === 'undefined/undefined' && ({}).admin === undefined);
+        box.remove();
+        const rx = reactive({});
+        let defThrew = false; try { Object.defineProperty(rx, '__proto__', { value: { hacked: 1 } }); } catch (e) { defThrew = true; }
+        assert('S001: defineProperty(__proto__) на reactive-прокси отвергнут', defThrew && ({}).hacked === undefined);
+
+        // 4. Зоны доверия островов
+        codes.length = 0; const off3 = onWarn(w => codes.push(w.code));
+        const z = document.createElement('div');
+        z.innerHTML = '<div data-aegis="ext-island" data-aegis-src="https://evil.example/x.js"></div><section data-aegis-untrusted><div data-aegis="pp-island"></div></section><div data-aegis="pp-island" data-aegis-props="#nowhere"></div>';
+        const far = document.createElement('div'); far.innerHTML = '<script type="application/json" id="nowhere">{"admin":true}<\/script>'; sandbox.appendChild(far);
+        sandbox.appendChild(z);
+        hydrate(z);
+        await sleep(0);
+        const ext = z.querySelector('[data-aegis="ext-island"]'), zoned = z.querySelector('section [data-aegis]'), propsEl = z.querySelector('[data-aegis-props]');
+        assert('S006: data-aegis-src с чужого origin не импортируется', codes.includes('S006') && ext.dataset.aegisState === undefined);
+        assert('S007: остров внутри [data-aegis-untrusted] без allow-list не смонтирован', codes.includes('S007') && zoned.dataset.aegisState === undefined);
+        assert('S008: data-aegis-props вне острова проигнорирован', codes.includes('S008') && propsEl.textContent === 'undefined/undefined');
+        configure({ islands: { allow: ['pp-island'] } });
+        hydrate(z.querySelector('section'));
+        assert('islands.allow: остров из allow-list монтируется в недоверенной зоне', zoned.dataset.aegisState === 'hydrated');
+        configure({ islands: { allow: [] } });
+        z.remove(); far.remove(); off3();
+
+        // 5. Origin-scoped заголовки и CSRF
+        const seen = [];
+        configure({ fetch: async (url, init) => { seen.push({ url: String(url), headers: Object.fromEntries(new Headers(init && init.headers)) }); return new Response('{"ok":1}', { headers: { 'content-type': 'application/json' } }); } });
+        configure({ headers: { Authorization: 'Bearer t', 'https://other.test': { 'X-Partner': 'p' } } });
+        await request('https://other.test/api');
+        await request('/api/mine');
+        const ext1 = seen.find(s => s.url.startsWith('https://other.test')), mine = seen.find(s => s.url.includes('/api/mine'));
+        assert('origins: Authorization и X-Requested-With не уходят чужому origin, per-origin заголовок — уходит', !!ext1 && !ext1.headers.authorization && !ext1.headers['x-requested-with'] && ext1.headers['x-partner'] === 'p' && !!mine && mine.headers.authorization === 'Bearer t');
+        configure({ origins: ['https://other.test'] });
+        seen.length = 0; await request('https://other.test/api');
+        assert('origins: после configure({ origins }) плоские заголовки уходят и туда', !!seen[0] && seen[0].headers.authorization === 'Bearer t');
+        configure({ origins: [], headers: { Authorization: undefined, 'https://other.test': undefined }, fetch: null });
+
+        // 6. Scope персиста и redact
+        configure({ cache: { redact: ['access_token'] } });
+        cache.set('/api/s?access_token=SECRET&x=1', { v: 1 });
+        assert('redact: значение токена в ключе кэша заменяется на *', cache.has('/api/s?access_token=*&x=1') && cache.keys().every(k => !String(k).includes('SECRET')));
+        cache.remove('/api/s?access_token=*&x=1');
+        configure({ cache: { redact: [] } });
+
+        // 7. DSD в swap и sanitize
+        const host = document.createElement('div'); sandbox.appendChild(host);
+        await swap(host, '<x-dsd><template shadowrootmode="open"><b>hi</b><slot></slot></template>light</x-dsd>');
+        const xd = host.querySelector('x-dsd');
+        assert('DSD: swap() создаёт shadow root из <template shadowrootmode>', xd && xd.shadowRoot && xd.shadowRoot.querySelector('b').textContent === 'hi' && !xd.querySelector('template'));
+        await swap(host, '<div><x-dsd><template shadowrootmode="open"><b>hi2</b><slot></slot></template>light</x-dsd></div>', { mode: 'morph' });
+        assert('DSD: morph обновляет теневое дерево, хост сохранён', host.querySelector('x-dsd') === xd && xd.shadowRoot.querySelector('b').textContent === 'hi2');
+        window.__x = undefined;
+        await swap(host, '<img src=x onerror="window.__x=1"><script>window.__x=2<\/script><a href="javascript:window.__x=3">z</a><p>ok</p>', { sanitize: true });
+        await sleep(30);
+        assert('sanitize: script/on*/javascript: удалены', window.__x === undefined && !host.querySelector('script') && !host.querySelector('[onerror]') && host.querySelector('p').textContent === 'ok');
+        host.remove();
         reset();
     })();
 

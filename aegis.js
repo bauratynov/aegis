@@ -175,6 +175,18 @@ function _overlayNotify(info) { _devtoolsModule().then(m => { if (m && typeof m.
 
 // Prototype pollution deny-list (используется proxy-обёртками store/reactive)
 const _DENIED_KEYS = new Set(['__proto__', 'prototype', 'constructor']);
+/** JSON.parse с reviver: ключи __proto__/constructor/prototype выбрасываются — единственная точка разбора данных снаружи */
+const _reviver = (k, v) => (_DENIED_KEYS.has(k) ? undefined : v);
+function _safeParse(text) { return JSON.parse(text, _reviver); }
+/** Снять опасные ключи с уже разобранного объекта (данные из сторонних парсеров) */
+function _stripDenied(o, depth = 0) {
+    if (!o || typeof o !== 'object' || depth > 32) return o;
+    for (const k of Object.keys(o)) { if (_DENIED_KEYS.has(k)) delete o[k]; else if (o[k] && typeof o[k] === 'object') _stripDenied(o[k], depth + 1); }
+    return o;
+}
+const _TRUST = /*#__PURE__*/ Symbol('aegis.trusted');
+/** Автор ручается за значение (URL с нестандартной схемой, TrustedHTML-подобное): trusted(v) обходит sink-проверки html`` */
+export function trusted(v) { return { [_TRUST]: v }; }
 
 // ============================================================================
 // 1. REACTIVE CORE — Signals, Computed, Effect, Batch

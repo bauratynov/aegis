@@ -35,7 +35,7 @@ if (full) {
     ok('admin 15 exports: без when() нет и announce / a11y-строк', !b.decls.has('_MSG_A11Y') && !b.decls.has('announce') && !b.decls.has('_fmsg'));
     ok('admin 15 exports: request-слой не тянется через ctx.fetch / defaults.fetcher', has(b, 'request', 'HttpError', 'guardedFetch', 'withRetry').length === 0, has(b, 'request', 'HttpError', 'guardedFetch', 'withRetry').join(','));
     ok('admin 15 exports: транзишены и reducedMotion не тянутся без transition()', has(b, '_runTransition', 'reducedMotion', 'media').length === 0);
-    ok('admin 15 exports: ≤ 30 KB gzip (dev)', b.gz <= 30, b.gz.toFixed(1) + ' KB');
+    ok('admin 15 exports: ≤ 32 KB gzip (dev; C1: sink-и, TT, зоны доверия)', b.gz <= 32, b.gz.toFixed(1) + ' KB');
     const w = await bundle('signal, component, when');
     ok('+ when: a11y-строки и announce подключаются, таблица форм — нет', w.decls.has('_MSG_A11Y') && w.decls.has('announce') && !w.decls.has('_fmsg'));
     // привязанная регистрация (@__PURE__ _reg): попадает в бандл только вместе со своей функцией
@@ -50,11 +50,11 @@ if (full) {
     const p = await bundle('signal, effect, computed, component, mount, html, text, attr, cls, show, list, bind, on, debounced, batch', true);
     ok('prod admin: ни одного what/why/fix', !/\b(?:what|why|fix):\s*["'`]/.test(p.minJs), String((p.minJs.match(/\bwhat:/g) || []).length));
     ok('prod admin: dev-инспекторы выкинуты (_lev, _nearest, _snippet, _zombieCheck, _inspectScope)', has(p, '_lev', '_nearest', '_snippet', '_zombieCheck', '_inspectScope').length === 0, has(p, '_lev', '_nearest', '_snippet', '_zombieCheck', '_inspectScope').join(','));
-    ok('prod admin: ≤ 21 KB gzip (фазы B1–B2: committers, программа обхода, fusion, list с дельтами/планером/гибернацией)', p.gz <= 21, p.gz.toFixed(1) + ' KB');
+    ok('prod admin: ≤ 22.5 KB gzip (B1–B2 + C1 безопасность)', p.gz <= 22.5, p.gz.toFixed(1) + ' KB');
     const ps = await bundle('signal, computed, effect, batch, createScope', true);
     ok('prod signals only: ≤ 6.5 KB gzip (долг фазы K: бюджеты секций)', ps.gz <= 6.5, ps.gz.toFixed(1) + ' KB');
     const pi = await bundle('island, mount, html, list, show, when, signal, computed, effect, on, bind, hydrate', true);
-    ok('prod islands: ≤ 29.5 KB gzip', pi.gz <= 29.5, pi.gz.toFixed(1) + ' KB');
+    ok('prod islands: ≤ 31 KB gzip', pi.gz <= 31, pi.gz.toFixed(1) + ' KB');
     // прод-бандл работает: сигналы/эффекты живут, предупреждения молчат
     const { writeFileSync, mkdtempSync } = await import('node:fs');
     const { tmpdir } = await import('node:os');
@@ -73,7 +73,7 @@ if (full) {
     const a = await bundle('island, mount, html, list, show, when, signal, computed, effect, on, bind, hydrate');
     const bad = has(a, '_cacheEntry', '_fetchEntry', '_idb', '_MESSAGES', 'router');
     ok('islands + hydrate: кэш не тянется без resource', bad.length === 0, bad.join(','));
-    ok('islands + hydrate: ≤ 39.5 KB gzip', a.gz <= 39.5, a.gz.toFixed(1) + ' KB');
+    ok('islands + hydrate: ≤ 41.5 KB gzip', a.gz <= 41.5, a.gz.toFixed(1) + ' KB');
     const c = await bundle('island, mount, html, list, show, when, signal, computed, effect, on, bind, hydrate, resource');
     ok('+ resource: кэш, seedFrom и prefetch подключены (регистрация через _ext)', has(c, '_cacheEntry', 'seedFrom', 'prefetch', '_cacheReady').length === 4);
     ok('+ resource: таблица сообщений форм всё ещё не нужна', !c.decls.has('_MESSAGES'));

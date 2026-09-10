@@ -244,6 +244,10 @@ export function onDispose(fn: () => void): () => void;
 /** Что можно вставить в html``: текст, узел, сигнал, функция (реактивно), ref/attach, class/style-объект, массив. Promise/Date — нет (${String(date)}, when()/resource()) */
 export type HtmlValue = Displayable | Node | ReadonlySignal<any> | ((...args: any[]) => unknown) | Ref<any> | Attachment<any> | ClassValue | Record<string, Reactive<unknown>> | FunctionBinding | FieldRef | HtmlValue[];
 export function html(strings: TemplateStringsArray, ...values: HtmlValue[]): DocumentFragment;
+/** Автор ручается за значение: обходит sink-проверки html`` (URL с нестандартной схемой, готовый HTML для srcdoc/.innerHTML) */
+export function trusted<T = string>(v: T): { readonly __aegisTrusted: T };
+/** Конфиг DOMPurify для зон пользовательского HTML: без data-aegis*, on*, script/template/iframe */
+export const sanitizeConfig: Readonly<{ FORBID_ATTR: string[]; FORBID_TAGS: string[] }>;
 export function render(target: Element, content: DocumentFragment | Element): void;
 
 export function text(el: Element, value: Reactive<Displayable>): () => void;
@@ -484,10 +488,22 @@ export interface CsrfConfig {
     decode?: boolean;
 }
 export interface AegisConfig {
+    /** Доверенные origin (кроме своего и baseURL): только им уходят плоские headers и CSRF-токен */
+    origins?: string[];
+    /** Разрешённые нестандартные схемы для URL-атрибутов (myapp:, intent:) */
+    urlSchemes?: string[];
+    /** Острова: политика origin для data-aegis-src ('same-origin' | функция | RegExp | префиксы) и allow-list имён внутри [data-aegis-untrusted] */
+    islands?: { src?: 'same-origin' | ((url: string) => boolean) | RegExp | string[]; allow?: string[] };
+    /** Trusted Types: имя passthrough-политики для литералов html`` (default 'aegis') и политика для серверного HTML (swap/boost/wireForm) */
+    trustedTypes?: { name?: string; server?: ((html: string, who: string) => any) | string };
     /** делегирование событий: один listener на document для перечисленных типов (только всплывающие; capture/passive/once и @ev.direct — напрямую) */
     delegateEvents?: string[] | null;
     /** ёмкость SWR-кэша: maxEntries (default 500, SIEVE-вытеснение среди незанятых записей), maxBytes (default 0 — без лимита) */
-    cache?: { maxEntries?: number; maxBytes?: number };
+    cache?: { maxEntries?: number;
+    /** Принципал персиста: записи и офлайн-мутации другого scope не гидрируются и не воспроизводятся (logout: cache.purge()) */
+    scope?: () => string | null | undefined;
+    /** Имена query-параметров, значения которых заменяются на * в ключах кэша, BroadcastChannel и истории */
+    redact?: string[]; maxBytes?: number };
     /** заголовок ответа с шаблонами ключей для invalidate() — 'Aegis-Invalidate: /api/users*, /api/stats' (same-origin); false — выключить */
     invalidateHeader?: string | false;
     /** circuit breaker per origin: после threshold retryable-ошибок подряд запросы падают сразу (e.circuit, e.retryAt) на cooldown, затем один probe */
@@ -821,6 +837,8 @@ export interface CacheStats { entries: CacheEntryStats[]; prefetch: { fired: num
 export const cache: {
     get<T = unknown>(key: string | CacheKeyPart[] | Record<string, unknown>): T | undefined;
     has(key: string | CacheKeyPart[] | Record<string, unknown>): boolean;
+    /** Logout: снести персист (все принципалы или только чужие при others: true) и офлайн-очередь */
+    purge(opts?: { persist?: boolean; queue?: boolean; others?: boolean }): Promise<void>;
     /** = seed(key, data, { age, staleTime }) */
     set(key: string | CacheKeyPart[] | Record<string, unknown>, data: unknown, opts?: { age?: number; staleTime?: number }): unknown;
     /** удалить записи по шаблону (без аргумента — все); возвращает число удалённых */
@@ -1626,6 +1644,8 @@ export type SwapMode = 'inner' | 'outer' | 'append' | 'prepend' | 'before' | 'af
  */
 export function swap(target: Element, html: string | Response | Document | DocumentFragment | Element, opts?: {
     mode?: SwapMode;
+    /** true — Sanitizer API (Element.setHTML) или минимальная чистка script/iframe/on*-атрибутов/javascript: с S012 в dev; объект — SanitizerConfig */
+    sanitize?: boolean | object;
     select?: string;
     transition?: boolean | { name?: string; cls?: string };
     hydrate?: boolean;
