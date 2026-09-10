@@ -89,7 +89,7 @@ marked.use({
     renderer: {
         code({ text, lang }) { return `<pre data-lang="${esc(lang || '')}"><code>${hl(text, lang)}</code></pre>`; },
         heading({ tokens, depth }) {
-            const inner = this.parser.parseInline(tokens); const text = inner.replace(/<[^>]+>/g, '');
+            const inner = this.parser.parseInline(tokens); const text = inner.replace(/<[^>]+>/g, '').replace(/&#39;/g, "'").replace(/&quot;/g, '"').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
             const id = slug(text); headings.push({ depth, text, id });
             return `<h${depth} id="${id}">${inner}${depth > 1 ? `<a class="anchor" href="#${id}" aria-label="Link to ${esc(text)}">#</a>` : ''}</h${depth}>\n`;
         },
@@ -323,18 +323,38 @@ DOCS.forEach((d, i) => {
 
 // examples: recipes + demo + bench
 const RECIPES = [
-    ['island', 'Island on a server page', 'island(), typed data-* props, mutation with optimistic update'],
-    ['search', 'Search with debounce', 'resource() from a query signal, when() with an empty state, keepPrevious'],
-    ['form', 'Progressive form', 'wireForm() over a plain <form>: validation, a mock server error, submit state'],
-    ['modal', 'Modal', '<dialog> driven by a signal, focus trap, Escape and backdrop click'],
-    ['table', 'Sortable, filterable table', 'reactive() + list() keyed rows, computed sort'],
+    ['island', 'Island on a server page', 'island(), typed data-* props, mutation with optimistic update', {
+        notice: ['The server already rendered <code>12 likes</code>; the island replaces it with a live template without a flash.', 'Props come from <code>data-*</code> attributes and are typed once in <code>{ types }</code>.', 'The heart click writes the signal first and sends the request after; a failed request rolls the number back.'],
+        try: 'Click the heart a few times, then reload: the server markup is the starting point every time.',
+        api: ['island', 'mutation', 'api'],
+    }],
+    ['search', 'Search with debounce', 'resource() from a query signal, when() with an empty state, keepPrevious', {
+        notice: ['The URL is a function of the query signal: an empty query means no request at all.', 'A new query aborts the previous request; <code>keepPrevious</code> keeps the old list on screen while the next one loads.', '<code>when()</code> renders loading, empty, error and data in one place.'],
+        try: 'Type “lo” then “lon”: the list dims instead of flickering, and “xyz” shows the empty state.',
+        api: ['resource', 'when', 'list'],
+    }],
+    ['form', 'Progressive form', 'wireForm() over a plain <form>: validation, a mock server error, submit state', {
+        notice: ['The form works without JavaScript; <code>wireForm()</code> adds live validation on top of the browser\'s own rules.', 'Errors appear after you leave a field, then update live: the <code>blur-then-live</code> mode.', 'The submit handler is a mock server; a real app passes <code>submit: true</code> and lets the 422 → field-errors path do this.'],
+        try: 'Register with <code>me@taken.com</code> to see a server-side error land on the email field.',
+        api: ['wireForm', 'required', 'emailRule', 'minLen', 'matches'],
+    }],
+    ['modal', 'Modal', '<dialog> driven by a signal, focus trap, Escape and backdrop click', {
+        notice: ['A native <code>&lt;dialog&gt;</code>: <code>modal()</code> calls <code>showModal()</code>/<code>close()</code> as the signal changes.', 'Escape, the backdrop and the Cancel button all write the same signal back to <code>false</code>.', 'Focus returns to the button that opened the dialog.'],
+        try: 'Open it, press Escape, open it again and click outside: the status reads “Kept” both times.',
+        api: ['modal', 'mount'],
+    }],
+    ['table', 'Sortable, filterable table', 'reactive() + list() keyed rows, computed sort', {
+        notice: ['State is one <code>reactive()</code> object; the visible rows are a getter, so sorting and filtering are derived, never duplicated.', '<code>list()</code> keys rows by id: sorting moves DOM nodes instead of re-rendering 200 rows.', 'Column headers toggle the sort field and direction with a single write.'],
+        try: 'Filter by “1”, then sort by price: only the matching rows move.',
+        api: ['reactive', 'list', 'mount'],
+    }],
 ];
 const b64u = (buf) => Buffer.from(buf).toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 {
     cpSync(join(ROOT, 'recipes'), join(DIST, 'recipes'), { recursive: true });
     rmSync(join(DIST, 'recipes', 'index.html'), { force: true });
     // the recipes are deliberately unstyled in the repo; on the site they get a small base sheet in the palette (copies only)
-    const RECIPE_CSS = `<style>body{font:14px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;padding:14px;color:#2B2F36;margin:0;color-scheme:light}input,select,textarea{font:inherit;padding:6px 9px;border:1px solid #CFD8DE;border-radius:6px;margin:2px 0}button{font:inherit;font-weight:600;padding:6px 12px;border:1px solid #123A4D;border-radius:6px;background:#184C64;color:#fff;cursor:pointer}button[value=cancel],button.secondary{background:#fff;color:#184C64}button:disabled{opacity:.5;cursor:default}table{border-collapse:collapse}td,th{padding:4px 8px;border-bottom:1px solid #E1E6EA;text-align:left}ul{padding-left:20px}dialog{border:1px solid #E1E6EA;border-radius:10px;padding:18px}dialog::backdrop{background:rgba(11,26,35,.45)}label{display:block;margin:6px 0}[aria-invalid=true]{border-color:#C8353B}.error,[role=alert]{color:#C8353B;font-size:13px}p{margin:8px 0}</style>`;
+    const RECIPE_CSS = `<link rel="stylesheet" href="/recipe.css?v=${BUILD}">`;   // shared stage sheet, also used by the playground frame
     const NOINDEX = '<meta name="robots" content="noindex">';   // iframe stages and demos: not landing pages
     for (const f of readdirSync(join(DIST, 'recipes'))) if (f.endsWith('.html')) { const p = join(DIST, 'recipes', f); writeFileSync(p, read(p).replace('</head>', RECIPE_CSS + NOINDEX + '</head>')); }
     cpSync(join(ROOT, 'demo'), join(DIST, 'demo'), { recursive: true });
@@ -342,19 +362,24 @@ const b64u = (buf) => Buffer.from(buf).toString('base64').replace(/\+/g, '-').re
     for (const f of ['aegis.min.js', 'aegis.min.js.map', 'aegis.core.js', 'aegis.core.min.js', 'aegis.d.ts', 'aegis-devtools.js', 'aegis-test.js', 'aegis-test.d.ts', 'llms.txt', 'ERRORS.md']) if (existsSync(join(ROOT, f))) cpSync(join(ROOT, f), join(DIST, f));
     write('bench.html', read(join(ROOT, 'bench.html')).replace('<html lang="ru">', '<html lang="en">').replace(/<\/head>/i, NOINDEX + '</head>').replace(/<body>/, '<body><p id="bench-status" style="font:14px system-ui;color:#6B7280">Running 5 rounds… numbers land below and in window.__bench</p>'));
     cpSync(join(ROOT, existsSync(join(ROOT, 'aegis_full.js')) ? 'aegis_full.js' : 'aegis.js'), join(DIST, 'aegis.js'));
-    const cards = RECIPES.map(([file, title, sub]) => {
+    const cards = RECIPES.map(([file, title, sub, info], n) => {
         const src = read(join(ROOT, 'recipes', file + '.html'));
         const bodyPart = (src.match(/<body>([\s\S]*?)<\/body>/) || [, src])[1].replace(/^\s*\n/, '').trimEnd();
         const shown = bodyPart.split('\n').filter(l => !/recipeError/.test(l)).join('\n');
         const module = (src.match(/<script type="module">([\s\S]*?)<\/script>/) || [, ''])[1].trim().replace(/from '\.\.\/aegis\.js'/g, "from 'aegis'");
         const markup = shown.replace(/<script type="module">[\s\S]*?<\/script>/, '').replace(/<style>[\s\S]*?<\/style>/, '').trim();
-        const playCode = (markup ? `// server HTML of this recipe:\ndocument.body.insertAdjacentHTML('afterbegin', ${JSON.stringify(markup)});\n\n` : '') + module;
-        const packed = b64u(gzipSync(Buffer.from(playCode, 'utf8')));
-        return `<figure class="ex" id="${file}"><header><div><b>${title}</b><span>${esc(sub)}</span></div><div class="tabs" role="tablist"><button class="on" role="tab" aria-selected="true" data-tab="result">Result</button><button role="tab" aria-selected="false" data-tab="source">Source · ${shown.split('\n').length} lines</button><a href="/play/#code=${packed}" title="Edit in the playground"><i class="fa-solid fa-pen-to-square" aria-hidden="true"></i> Edit</a><a href="/recipes/${file}.html" target="_blank" rel="noopener" title="Open in a new tab"><i class="fa-solid fa-arrow-up-right-from-square" aria-hidden="true"></i></a></div></header>
-            <div class="pane" data-pane="result"><iframe src="/recipes/${file}.html" title="${title}" loading="lazy"></iframe></div>
-            <div class="pane" data-pane="source" hidden><pre data-lang="html"><code>${hlHtml(shown)}</code></pre></div></figure>`;
+        const style = (shown.match(/<style>([\s\S]*?)<\/style>/) || [, ''])[1].trim();
+        const packed = b64u(gzipSync(Buffer.from(JSON.stringify({ js: module, html: markup + (style ? `\n<style>${style}</style>` : '') }), 'utf8')));
+        return `<figure class="ex" id="${file}"><header><div><span class="n">${String(n + 1).padStart(2, '0')}</span><b>${title}</b><span>${esc(sub)}</span></div><div class="tabs"><a href="/play/#code=${packed}" title="Edit in the playground"><i class="fa-solid fa-pen-to-square" aria-hidden="true"></i> Edit in playground</a><a href="/recipes/${file}.html" target="_blank" rel="noopener" title="Open in a new tab"><i class="fa-solid fa-arrow-up-right-from-square" aria-hidden="true"></i> Open</a></div></header>
+            <div class="ex-body">
+                <div class="ex-stage">
+                    <div class="ex-code"><div class="ex-label"><i class="fa-solid fa-code" aria-hidden="true"></i> ${file}.html · ${shown.split('\n').length} lines</div><pre data-lang="html"><code>${hlHtml(shown)}</code></pre></div>
+                    <div class="ex-result"><div class="ex-label"><i class="fa-solid fa-display" aria-hidden="true"></i> Result</div><iframe src="/recipes/${file}.html" title="${title}" loading="lazy"></iframe></div>
+                </div>
+                <aside class="ex-notes"><h4>What to notice</h4><ul>${info.notice.map(x => `<li>${x}</li>`).join('')}</ul><p class="try"><i class="fa-solid fa-hand-pointer" aria-hidden="true"></i> ${info.try}</p><div class="chips">${info.api.map(a => `<a href="/api/#${a}"><code>${a}</code></a>`).join('')}</div></aside>
+            </div></figure>`;
     }).join('');
-    const main = `<div class="wrap"><h1 style="margin-top:36px">Examples</h1><p class="lead" style="color:var(--muted);max-width:720px">Every recipe is one self-contained HTML file that imports <code>aegis.js</code> directly, no build. Read the source, open it in a new tab, or press Edit to continue in the playground.</p>
+    const main = `<div class="wrap"><h1 style="margin-top:36px">Examples</h1><p class="lead" style="color:var(--muted);max-width:720px">Every recipe is one self-contained HTML file that imports <code>aegis.js</code> directly, no build. Each card runs live: read what to notice, try the interaction, then open the source or continue in the playground.</p>
         <div class="ex-grid">${cards}</div>
         <h2 class="section-title">Bigger things</h2>
         <div class="grid3">
@@ -368,15 +393,19 @@ const b64u = (buf) => Buffer.from(buf).toString('base64').replace(/\+/g, '-').re
 
 // playground
 {
-    const main = `<div class="play"><div class="bar"><b>Playground</b><select id="preset" title="Preset" aria-label="Preset"></select><button id="run" class="primary">Run <kbd>Ctrl+Enter</kbd></button><button id="share">Share link</button><span id="msg" role="status"></span><span id="status" class="status"></span><span class="grow"></span><span class="hint">Sandboxed frame, dev warnings on. Tab indents, Esc leaves the editor.</span></div>
-        <div class="panes"><textarea id="code" spellcheck="false" aria-label="Code"></textarea><div class="out"><iframe id="frame" title="result" sandbox="allow-scripts allow-forms allow-modals"></iframe><pre id="console" aria-live="polite" aria-label="Console"></pre></div></div></div>`;
-    write('play/index.html', layout({ title: 'Playground: run Aegis code in the browser · Aegis', description: 'Edit and run Aegis code in a sandboxed frame with dev warnings on, switch between presets (counter, island, todos, resource, mutation, form, router, reactive) and share a link. No build, no account.', path: '/play/', main, jsonld: crumbs([['Aegis', '/'], ['Playground', '/play/']]), scripts: `<script type="module" src="/play.js?v=${BUILD}"></script>` }).replace('<footer>', '<footer hidden>'));
+    const main = `<div class="play"><div class="bar"><b>Playground</b><select id="preset" title="Preset" aria-label="Preset"></select><button id="run" class="primary"><i class="fa-solid fa-play" aria-hidden="true"></i> Run <kbd>Ctrl+Enter</kbd></button><button id="share"><i class="fa-solid fa-link" aria-hidden="true"></i> Share</button><span id="msg" role="status"></span><span id="status" class="status"></span><span class="grow"></span><span class="hint">index.html is what your server renders, app.js is the module. Sandboxed frame, dev warnings on.</span></div>
+        <div class="panes">
+            <section class="pane-editor" aria-label="Editor"><div class="ftabs" role="tablist"><button class="ftab on" role="tab" aria-selected="true" data-file="js"><i class="fa-brands fa-js" aria-hidden="true"></i> app.js</button><button class="ftab" role="tab" aria-selected="false" data-file="html"><i class="fa-brands fa-html5" aria-hidden="true"></i> index.html</button></div><div id="editor"></div></section>
+            <div id="resizer" class="resizer" role="separator" aria-orientation="vertical" aria-label="Resize panes"></div>
+            <section class="out" aria-label="Result"><div class="ftabs"><span class="ftab on"><i class="fa-solid fa-display" aria-hidden="true"></i> Result</span></div><iframe id="frame" title="result" sandbox="allow-scripts allow-forms allow-modals"></iframe><div class="ftabs"><span class="ftab on"><i class="fa-solid fa-terminal" aria-hidden="true"></i> Console</span></div><pre id="console" aria-live="polite" aria-label="Console"></pre></section>
+        </div></div>`;
+    write('play/index.html', layout({ title: 'Playground: run Aegis code in the browser · Aegis', description: 'Edit and run Aegis code in a sandboxed frame with dev warnings on, switch between presets (counter, island, todos, resource, mutation, form, router, reactive) and share a link. No build, no account.', path: '/play/', main, jsonld: crumbs([['Aegis', '/'], ['Playground', '/play/']]), extraHead: `<link rel="modulepreload" href="/cm.js?v=${BUILD}">`, scripts: `<script type="module" src="/play.js?v=${BUILD}"></script>` }).replace('<footer>', '<footer hidden>'));
 }
 
 // landing
 {
     const example = intro.match(/```html\n([\s\S]*?)```/)[1].replace(/^<!--.*-->\n/, '')
-        .replace(/(return html`<button[^>]*>)(Clicked \$\{count\} times)(<\/button>`;)/, '$1\n        $2\n    $3');
+        .replace(/(return html`<button .*?\}>)(Clicked \$\{count\} times)(<\/button>`;)/, '$1\n        $2\n    $3');
     const rules = sec('Mental model').body.split('\n').filter(l => /^\d+\. /.test(l)).map(l => `<li>${marked.parseInline(l.replace(/^\d+\. /, ''))}</li>`).join('');
     const benchRows = Object.fromEntries(sec('Benchmarks').body.split('\n').filter(l => l.startsWith('|')).slice(2).map(l => l.split('|').map(x => x.trim())).flatMap(c => [[c[1], c[2]], [c[3], c[4]]]));
     const num = (k) => (benchRows[k] || '').replace(/\s*\(.*$/, '');
@@ -387,7 +416,7 @@ const b64u = (buf) => Buffer.from(buf).toString('base64').replace(/\+/g, '-').re
             <h1>The reactive UI engine<br>with <em>zero build</em>.</h1>
             <p class="lead">One ES module, no compiler, no npm. Your server renders the HTML; Aegis wakes up only the parts that need to be alive.</p>
             <div class="cta"><a class="btn primary" href="/docs/introduction/">Get started</a><a class="btn" href="/play/">Try in the playground</a></div>
-            <div class="install"><span>&lt;script type="module"&gt;</span><b>import { island } from 'https://aegisjs.com/aegis.js'</b></div>
+            <div class="install"><b>import { island } from 'https://aegisjs.com/aegis.js'</b></div>
         </div>
         <div class="demo"><div class="bar"><i></i><i></i><i></i><span>page.html — rendered by Django / Rails / Laravel / Go / PHP …</span></div><pre data-lang="html"><code>${hlHtml(example)}</code></pre>
             <div class="live" data-aegis="counter" data-start="5"><button>Clicked 5 times</button></div></div>
@@ -441,8 +470,12 @@ island('users', ({ props, html, when, list }) => {
 
 // static: css, js, fonts, search index, favicon, robots, sitemap, 404
 cpSync(join(SITE, 'src', 'theme.css'), join(DIST, 'theme.css'));
+cpSync(join(SITE, 'src', 'recipe.css'), join(DIST, 'recipe.css'));
 write('site.js', read(join(SITE, 'src', 'site.js')).replace("from '/aegis-site.js'", `from '/aegis-site.js?v=${BUILD}'`));
-cpSync(join(SITE, 'src', 'play.js'), join(DIST, 'play.js'));
+write('play.js', read(join(SITE, 'src', 'play.js')).replace("from '/cm.js'", `from '/cm.js?v=${BUILD}'`));
+// CodeMirror bundle for the playground (self-hosted, loaded only on /play/)
+try { execSync(`node "${join(ROOT, 'node_modules', 'esbuild', 'bin', 'esbuild')}" "${join(SITE, 'src', 'cm-entry.js')}" --bundle --format=esm --minify --outfile="${join(DIST, 'cm.js')}"`, { stdio: 'pipe' }); }
+catch (e) { console.error('cm.js build failed:', String(e.stderr || e.message).slice(0, 400)); process.exit(1); }
 if (existsSync(join(SITE, 'src', 'fonts'))) cpSync(join(SITE, 'src', 'fonts'), join(DIST, 'fonts'), { recursive: true });
 if (existsSync(join(SITE, 'src', 'og.png'))) cpSync(join(SITE, 'src', 'og.png'), join(DIST, 'og.png'));
 write('search.json', JSON.stringify(search));
