@@ -4992,6 +4992,78 @@
         reset();
     })();
 
+    section('💎 фаза B1 — шаблонизатор: программа обхода, пробелы, committers, inline-кэш, hole fusion');
+
+    await (async () => {
+        const sleep = (ms) => new Promise(r => setTimeout(r, 0));
+        // 1. Whitespace: под <tr>/<ul> пробельных текстовых узлов нет, между инлайн-элементами перевод строки → один пробел, <pre> нетронут
+        const t1 = html`<table>
+            <tbody>
+                <tr>
+                    <td>${1}</td>
+                    <td>${2}</td>
+                </tr>
+            </tbody>
+        </table>`;
+        const tr = t1.querySelector('tr');
+        assert('whitespace: в tr/tbody нет пробельных текстовых узлов', [...tr.childNodes].every(n => n.nodeType === 1) && [...tr.parentNode.childNodes].every(n => n.nodeType === 1));
+        const t2 = html`<div><b>a</b>
+            <i>b</i></div>`;
+        assert('whitespace: перевод строки между инлайн-элементами схлопнут в один пробел', t2.firstChild.textContent === 'a b');
+        const t3 = html`<pre>x
+  y</pre>`;
+        assert('whitespace: <pre> сохраняет переводы строк', t3.firstChild.textContent === 'x\n  y');
+
+        // 2. Программа обхода: части после статического комментария и в глубокой вложенности резолвятся верно
+        const n1 = signal('N'), n2 = signal('M');
+        const t4 = html`<div><!-- c --><span>${n1}</span><p><em>${n2}</em><u>${() => n1.value + n2.value}</u></p></div>`;
+        const root4 = t4.firstChild;
+        assert('программа обхода: части после комментария и в глубине резолвятся', root4.querySelector('span').textContent === 'N' && root4.querySelector('em').textContent === 'M' && root4.querySelector('u').textContent === 'NM');
+        n1.value = 'X';
+        assert('программа обхода: привязки живые', root4.querySelector('span').textContent === 'X' && root4.querySelector('u').textContent === 'XM');
+
+        // 3. Custom element: объект/массив уходит в свойство, строка — в атрибут; property-only имена — свойство
+        if (!customElements.get('x-b1')) customElements.define('x-b1', class extends HTMLElement { constructor() { super(); this.items = null; } });
+        const t5 = html`<x-b1 items=${[1, 2]} label=${'hi'}></x-b1><input indeterminate=${true}>`;
+        const xb = t5.firstChild;
+        assert('custom element: массив → свойство el.items, строка → атрибут', Array.isArray(xb.items) && xb.items.length === 2 && !xb.hasAttribute('items') && xb.getAttribute('label') === 'hi');
+        assert('property-only: indeterminate — свойство, не атрибут', t5.querySelector('input').indeterminate === true);
+
+        // 4. Inline-кэш: примитив дважды подряд впекается в мастер, промах — unfold, дальше generic
+        const tpl = (v) => html`<p title=${v}>${v}</p>`;
+        const a = tpl('b'), b = tpl('b'), c = tpl('b'), d = tpl('c'), e = tpl('b'), f = tpl('d');
+        const txt = (frag) => frag.firstChild.textContent, ttl = (frag) => frag.firstChild.getAttribute('title');
+        assert('IC: три экземпляра с "b" верны', txt(a) === 'b' && txt(b) === 'b' && txt(c) === 'b' && ttl(c) === 'b');
+        assert('IC: промах guard — "c" рендерится верно, дальше "b" и "d" тоже', txt(d) === 'c' && ttl(d) === 'c' && txt(e) === 'b' && ttl(e) === 'b' && txt(f) === 'd' && ttl(f) === 'd');
+
+        // 5. Hole fusion: один эффект на экземпляр, соседний геттер не пишет DOM повторно, демоушен при Node
+        const s1 = signal(1), s2 = signal('t'), sw = signal(false);
+        const effBefore = stats().effects;
+        const t6 = html`<div data-a=${() => s1.value} title=${() => s2.value}>${() => s1.value * 2}</div><p>${() => sw.value ? html`<b>node</b>` : 'text'}</p>`;
+        const dv = t6.firstChild, pp = t6.lastChild;
+        sandbox.append(t6);
+        const effAfter = stats().effects - effBefore;
+        assert('fusion: три чистые дырки + одна блок-дырка → не больше 2 эффектов', effAfter <= 2 && dv.getAttribute('data-a') === '1' && dv.getAttribute('title') === 't' && dv.textContent === '2');
+        let sets = 0; const orig = dv.setAttribute; dv.setAttribute = function (n, v) { sets++; return orig.call(this, n, v); };
+        s1.value = 5;
+        assert('fusion: изменение одной дырки пишет только её слоты (title не тронут)', dv.getAttribute('data-a') === '5' && dv.textContent === '10' && sets === 1);
+        sw.value = true;
+        assert('fusion: дырка, вернувшая Node, понижена до своего эффекта и рендерит узел', pp.querySelector('b') && pp.textContent === 'node');
+        sw.value = false;
+        assert('fusion: понижённая дырка продолжает работать как реактивный child', pp.textContent === 'text' && !pp.querySelector('b'));
+        t6.firstChild && t6.firstChild.remove(); dv.remove(); pp.remove();
+
+        // 6. Модификаторы событий скомпилированы один раз: .prevent.enter работает на каждом экземпляре
+        let hits = 0;
+        const mk = () => html`<input @keydown.prevent.enter=${() => hits++}>`;
+        const i1 = mk().firstChild, i2 = mk().firstChild;
+        sandbox.append(i1, i2);
+        for (const el of [i1, i2]) { el.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })); el.dispatchEvent(new KeyboardEvent('keydown', { key: 'a', bubbles: true })); }
+        assert('события: скомпилированный дескриптор .prevent.enter — по одному срабатыванию на экземпляр', hits === 2);
+        i1.remove(); i2.remove();
+        reset();
+    })();
+
     section('component() & destroy()');
 
     (() => {
