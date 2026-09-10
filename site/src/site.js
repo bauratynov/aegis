@@ -81,8 +81,24 @@ for (const pre of document.querySelectorAll('pre')) {
     b.onclick = async () => { try { await navigator.clipboard.writeText(pre.querySelector('code')?.innerText ?? pre.innerText); b.textContent = 'Copied'; b.classList.add('done'); } catch { b.textContent = 'Select & copy'; } setTimeout(() => { b.textContent = 'Copy'; b.classList.remove('done'); }, 1500); };
     pre.appendChild(b);
 }
-const burger = document.querySelector('.burger'), side = document.querySelector('.side');
-if (burger && side) burger.onclick = () => side.classList.toggle('open');
+// mobile menu: the site sections (hidden nav) + the docs/API sidebar when the page has one
+const burger = document.querySelector('.burger');
+if (burger) {
+    let menu = null;
+    const build = () => {
+        menu = document.createElement('div'); menu.className = 'mnav';
+        const primary = document.createElement('nav'); primary.className = 'primary';
+        for (const a of document.querySelectorAll('.top nav a')) primary.appendChild(a.cloneNode(true));
+        menu.appendChild(primary);
+        const side = document.querySelector('.side');
+        if (side) { const s = side.cloneNode(true); s.className = 'side-copy'; menu.appendChild(s); }
+        document.body.appendChild(menu);
+    };
+    const set = (open) => { if (!menu) build(); menu.classList.toggle('open', open); burger.setAttribute('aria-expanded', String(open)); document.body.classList.toggle('menu-open', open); burger.querySelector('i')?.classList.toggle('fa-bars', !open); burger.querySelector('i')?.classList.toggle('fa-xmark', open); };
+    burger.addEventListener('click', () => set(!(menu && menu.classList.contains('open'))));
+    document.addEventListener('click', (e) => { if (menu && menu.classList.contains('open') && e.target.closest('.mnav a')) set(false); });
+    document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && menu && menu.classList.contains('open')) set(false); });
+}
 const toc = document.querySelector('.toc');
 if (toc) {
     const links = [...toc.querySelectorAll('a')], byId = new Map(links.map(a => [a.getAttribute('href').slice(1), a]));
