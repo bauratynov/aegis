@@ -144,7 +144,23 @@ import { island, html } from 'aegis';
 </script>
 ```
 
+The `integrity` key of an import map is enforced in Chrome 127+ and Safari 18+; an older browser ignores the key and loads the same file, still pinned by its URL. Nothing breaks either way, and the hash is checked wherever the browser knows how.
+
 The same files with hashes for every version: [aegisjs.com/docs/installation](https://aegisjs.com/docs/installation/). `https://aegisjs.com/aegis.js` without a version is the latest release, for experiments only. The files on the site are the files in this repository at the tag; the jsDelivr mirror works too: `https://cdn.jsdelivr.net/gh/bauratynov/aegis@v0.7.0/aegis.min.js`.
+
+### Which size is which
+
+One file is served, but you rarely ship all of it. Every number on this page is real; they measure different things:
+
+| Number | What it is |
+|---|---|
+| **4 KB** gzip | `signal`, `computed`, `effect`, `batch`, `createScope` after a production build: the reactive core alone |
+| **21 KB** gzip | the usual page: islands, `html` templates, lists, events and two-way binding, production build |
+| **91 KB** gzip | every export, production build (`node build.mjs --from app.js` strips the developer layer) |
+| **109 KB** gzip | `aegis.min.js` as served from the pinned URL: the same code plus the 60+ dev warnings, which only fire on localhost |
+| **11 KB** gzip | `aegis.core.min.js`, the signals + scope file for non-DOM code |
+
+The pinned URL is the whole file, so a page that imports five names still downloads 109 KB. If that matters, build the subset once (below) or let a bundler tree-shake it; the per-subset numbers are in [`docs/distribution.md`](./docs/distribution.md).
 
 ### Vendored
 
