@@ -234,4 +234,4 @@ Bug reports and pull requests are welcome; see [CONTRIBUTING.md](./CONTRIBUTING.
 
 [MIT](LICENSE). Free for commercial use, attribution appreciated.
 
-Created by Baurzhan Atinov (Kazakhstan) · [aegisjs.com](https://aegisjs.com) · bauratynov@gmail.com
+Created by Baurzhan Atinov (Kazakhstan) · [aegisjs.com](https://aegisjs.com) · baurzhanatinov@gmail.com

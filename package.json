@@ -18,7 +18,7 @@
     "build.mjs"
   ],
   "license": "MIT",
-  "author": "Baurzhan Atinov <bauratynov@gmail.com>",
+  "author": "Baurzhan Atinov <baurzhanatinov@gmail.com>",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/bauratynov/aegis.git"

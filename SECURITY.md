@@ -6,7 +6,7 @@ The latest release on `main` receives security fixes. Older tags do not.
 
 ## Reporting a vulnerability
 
-Please do not open a public issue for security problems. Email **bauratynov@gmail.com** with:
+Please do not open a public issue for security problems. Email **baurzhanatinov@gmail.com** with:
 
 - what you found and where (file, function, warning code if any),
 - a minimal reproduction (an HTML page that imports `aegis.js` is ideal),

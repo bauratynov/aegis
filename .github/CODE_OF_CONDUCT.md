@@ -7,4 +7,4 @@ Be kind, be specific, assume good intent.
 - Newcomers get the same patience as maintainers expect for themselves.
 - No harassment, no discrimination, no personal attacks, in issues, pull requests, discussions or anywhere the project is represented.
 
-Reports go to bauratynov@gmail.com and are handled privately. The maintainer may edit, hide or remove content and block accounts that break these rules.
+Reports go to baurzhanatinov@gmail.com and are handled privately. The maintainer may edit, hide or remove content and block accounts that break these rules.
