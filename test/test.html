@@ -6543,6 +6543,97 @@
     }
 
     // ======= VERSION =======
+    // ======= СТРАНИЦА, А НЕ ГРАФ: остров на серверной разметке под чужими руками =======
+    section('страница: morph при живом острове, чужой innerHTML, запись в DOM во время flush');
+
+    // 1. morph не крадёт фокус и не теряет набранное: поле в фокусе остаётся тем же узлом с тем же выделением
+    await (async () => {
+        const host = document.createElement('div');
+        host.innerHTML = '<form id="f"><input id="q" name="q" value="ab"><span id="n">1</span></form>';
+        document.body.appendChild(host);   // не в #sandbox: он display:none, focus() там не работает
+        const q = host.querySelector('#q');
+        q.focus(); q.value = 'typed'; q.setSelectionRange(2, 5);
+        await swap(host.querySelector('#f'), '<form id="f"><input id="q" name="q" value="server"><span id="n">2</span></form>', { mode: 'morph' });
+        const still = host.querySelector('#q');
+        assert('morph: поле в фокусе — тот же узел, фокус и набранный текст целы', still === q && document.activeElement === q && q.value === 'typed' && q.selectionStart === 2 && q.selectionEnd === 5);
+        assert('morph: соседний узел обновлён сервером', host.querySelector('#n').textContent === '2');
+        q.blur();
+        host.remove();
+    })();
+
+    // 2. открытый <details> и состояние острова переживают morph, если разметка острова не менялась
+    await (async () => {
+        let mounts = 0, disposed = 0;
+        register('pg-counter', (el, data, { html, signal, onDispose }) => {
+            mounts++; onDispose(() => disposed++);
+            const n = signal(Number(data.start));
+            el.__bump = () => { n.value++; };
+            return html`<button>${n} likes</button>`;
+        }, { types: { start: Number } });
+        const host = document.createElement('div');
+        host.innerHTML = '<section id="s"><details id="d" open><summary>more</summary><p>body</p></details>'
+            + '<div data-aegis="pg-counter" data-start="12"><button>12 likes</button></div></section>';
+        sandbox.appendChild(host);
+        hydrate(host);
+        const details = host.querySelector('#d'), island = host.querySelector('[data-aegis]');
+        island.__bump(); island.__bump();
+        await wait(0);
+        assert('остров: гидрация заменила серверную кнопку на живую, дубля нет', host.querySelectorAll('button').length === 1 && host.querySelector('button').textContent === '14 likes');
+        const mountsBefore = mounts;
+        await swap(host.querySelector('#s'), '<section id="s"><details id="d" open><summary>more</summary><p>body changed</p></details>'
+            + '<div data-aegis="pg-counter" data-start="12"><button>12 likes</button></div></section>', { mode: 'morph' });
+        assert('morph: открытый <details> остался открытым и тем же узлом', host.querySelector('#d') === details && details.open && host.querySelector('#d p').textContent === 'body changed');
+        assert('morph: остров с теми же data-* не пересоздан — состояние 14 живо', host.querySelector('[data-aegis]') === island && mounts === mountsBefore && disposed === 0 && host.querySelector('button').textContent === '14 likes');
+        destroy(island);
+        sandbox.innerHTML = '';
+    })();
+
+    // 3. htmx-подобная вставка: чужой innerHTML под hydrate({ watch: true }) — остров встаёт, удаление убивает scope
+    await (async () => {
+        let ticks = 0, disposed = 0;
+        register('pg-ticker', (el, data, { html, interval, onDispose }) => {
+            onDispose(() => disposed++);
+            interval(() => { ticks++; }, 5);
+            return html`<i>tick</i>`;
+        });
+        const root = document.createElement('div');
+        sandbox.appendChild(root);
+        hydrate(root, { watch: true });
+        root.innerHTML = '<div id="frag"><div data-aegis="pg-ticker"></div></div>';   // как hx-swap="innerHTML"
+        await wait(20);
+        assert('чужой innerHTML: остров под watch ожил', !!root.querySelector('i'));
+        const seen = ticks;
+        assert('чужой innerHTML: таймер острова идёт', seen > 0);
+        root.innerHTML = '';                                                           // фрагмент удалён сервером
+        await wait(30);
+        assert('чужой innerHTML: удаление фрагмента убило scope — таймер больше не капает', disposed === 1 && ticks === seen || ticks - seen <= 1);
+        const after = ticks;
+        await wait(30);
+        assert('чужой innerHTML: после dispose тиков нет совсем', ticks === after);
+        sandbox.innerHTML = '';
+    })();
+
+    // 4. эффект пишет в DOM, пока идёт flush соседнего: без бесконечного цикла и без полурендеренного кадра
+    await (async () => {
+        const a = signal(0), b = signal(0);
+        const host = document.createElement('div');
+        host.innerHTML = '<p id="pa">–</p><p id="pb">–</p>';
+        sandbox.appendChild(host);
+        const pa = host.querySelector('#pa'), pb = host.querySelector('#pb');
+        const sc = createScope();
+        let runs = 0;
+        sc.run(() => {
+            effect(() => { runs++; pa.textContent = String(a.value); if (a.value && b.peek() !== a.value) b.value = a.value; }, 'writer');
+            effect(() => { runs++; pb.textContent = String(b.value); }, 'reader');
+        });
+        batch(() => { a.value = 1; });
+        await settled();
+        assert('запись в DOM из эффекта во время flush: оба узла согласованы после flush', pa.textContent === '1' && pb.textContent === '1');
+        assert('запись в DOM из эффекта во время flush: раундов конечное число, зависания нет', runs <= 6 && stats().queued === 0);
+        sc.dispose();
+        sandbox.innerHTML = '';
+    })();
+
     section('Version');
     assert('VERSION = 0.6.0', VERSION === '0.7.0');
 

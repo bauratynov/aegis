@@ -20,7 +20,7 @@ One ES module, no build step, no npm. Django, Laravel, Rails, Go, PHP: keep your
   <img src="https://img.shields.io/badge/dependencies-0-blue" alt="No dependencies">
   <img src="https://img.shields.io/badge/signals%20core-11%20KB%20gzip-orange" alt="Size">
   <a href="https://github.com/bauratynov/aegis/actions/workflows/ci.yml"><img src="https://github.com/bauratynov/aegis/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <img src="https://img.shields.io/badge/tests-1074%20passing-brightgreen" alt="Tests">
+  <img src="https://img.shields.io/badge/tests-1085%20passing-brightgreen" alt="Tests">
   <img src="https://img.shields.io/badge/license-MIT-green" alt="License">
 </p>
 
