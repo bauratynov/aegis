@@ -8,7 +8,7 @@
  *   /** @type {import('./aegis.js')} *​/
  *   import { signal, computed, effect } from './aegis.js';
  *
- * @version 0.7.0
+ * @version 0.7.1
  * @license MIT
  *
  * API tiers — where to start:

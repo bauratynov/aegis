@@ -31,7 +31,7 @@ One ES module, no build step, no npm. Django, Laravel, Rails, Go, PHP: keep your
 </div>
 
 <script type="module">
-import { island } from 'https://aegisjs.com/0.7.0/aegis.min.js';
+import { island } from 'https://aegisjs.com/0.7.1/aegis.min.js';
 
 island('counter', ({ props, signal, html }) => {
     const count = signal(props.start);
@@ -135,8 +135,8 @@ Every release is served from `https://aegisjs.com/<version>/` and never changes;
 ```html
 <script type="importmap">
 {
-  "imports": { "aegis": "https://aegisjs.com/0.7.0/aegis.min.js" },
-  "integrity": { "https://aegisjs.com/0.7.0/aegis.min.js": "sha384-IlZI8EunTsg50qmYrO6AIH/tIHqkkD1bZZIIln8MQrwlRKLz8NuE+aW5umJBGDgu" }
+  "imports": { "aegis": "https://aegisjs.com/0.7.1/aegis.min.js" },
+  "integrity": { "https://aegisjs.com/0.7.1/aegis.min.js": "sha384-TRw0Ldu1KRRhdY7q6JaRsEz6tXTRO+/JcHkbpwXGeko5513JvgUSOcMygEmylEpX" }
 }
 </script>
 <script type="module">
@@ -146,7 +146,7 @@ import { island, html } from 'aegis';
 
 The `integrity` key of an import map is enforced in Chrome 127+ and Safari 18+; an older browser ignores the key and loads the same file, still pinned by its URL. Nothing breaks either way, and the hash is checked wherever the browser knows how.
 
-The same files with hashes for every version: [aegisjs.com/docs/installation](https://aegisjs.com/docs/installation/). `https://aegisjs.com/aegis.js` without a version is the latest release, for experiments only. The files on the site are the files in this repository at the tag; the jsDelivr mirror works too: `https://cdn.jsdelivr.net/gh/bauratynov/aegis@v0.7.0/aegis.min.js`.
+The same files with hashes for every version: [aegisjs.com/docs/installation](https://aegisjs.com/docs/installation/). `https://aegisjs.com/aegis.js` without a version is the latest release, for experiments only. The files on the site are the files in this repository at the tag; the jsDelivr mirror works too: `https://cdn.jsdelivr.net/gh/bauratynov/aegis@v0.7.1/aegis.min.js`.
 
 ### Which size is which
 
@@ -198,7 +198,7 @@ The `exports` map (`.`, `./min`, `./core`, `./core/min`, `./devtools`, `./test`)
 Every example here and on the site imports `from 'aegis'`. That name is not magic: it comes from the import map in your base template (the pinned block above). With a bundler it comes from `node_modules` instead — install under that name with `npm i aegis@npm:@aegisjs/engine`, or import `'@aegisjs/engine'` directly. Without either, import the URL directly:
 
 ```js
-import { island } from 'https://aegisjs.com/0.7.0/aegis.min.js';
+import { island } from 'https://aegisjs.com/0.7.1/aegis.min.js';
 ```
 
 ---

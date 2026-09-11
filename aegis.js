@@ -5,7 +5,7 @@
  * attribute sinks are typed at compile time. What the architecture cannot prevent, the dev build reports
  * with a code, a why and a fix (ERRORS.md); 'strict' mode turns those warnings into exceptions.
  *
- * @version 0.7.0
+ * @version 0.7.1
  * @license MIT
  */
 
@@ -11822,7 +11822,7 @@ export function adopt(rootEl, aopts = {}) {
 // 35. VERSION & EXPORT
 // ============================================================================
 
-export const VERSION = '0.7.0';
+export const VERSION = '0.7.1';
 
 // Пространство имён (default export / Aegis.expose()) строится лениво: объект со всеми экспортами
 // удерживал бы весь модуль при tree-shaking подмножеств (import { signal } from 'aegis/core')

@@ -1,6 +1,6 @@
 {
   "name": "@aegisjs/engine",
-  "version": "0.7.0",
+  "version": "0.7.1",
   "description": "Zero-build reactive UI engine for server-rendered pages: your server renders the HTML, Aegis makes parts of it alive. Signals, islands, html templates, an HTTP-aware cache, forms and a router in one ES module with no dependencies.",
   "type": "module",
   "main": "aegis.js",

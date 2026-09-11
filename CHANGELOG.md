@@ -2,7 +2,13 @@
 
 All notable changes to Aegis are documented in this file, in the [Keep a Changelog](https://keepachangelog.com/) shape: what a user of the file sees. Internal phases and the reasoning behind them are in [`CHANGELOG.internal.md`](./CHANGELOG.internal.md).
 
-## [Unreleased]
+## [0.7.1] — 2026-09-11
+
+The first release on npm: `@aegisjs/engine`. The bare name `aegisjs` is refused by the registry as too close to `aegis-js`, so the scope carries the brand; `npm i aegis@npm:@aegisjs/engine` keeps `from 'aegis'` resolving under a bundler.
+
+### Fixed (packaging)
+- The banner of every built file pointed at `github.com/atynov/aegis`, which is a 404; it now points at `github.com/bauratynov/aegis`. `aegis.min.js` and any custom build made with `build.mjs` carry the corrected line, so the hash of `aegis.min.js` changed — the pinned import map in the README was re-measured.
+- The contact address in `package.json`, the README, `SECURITY.md` and the code of conduct is `baurzhanatinov@gmail.com`; the shorter spelling was a typo.
 
 ### Removed
 - The deprecated aliases `clsMap()`, `store()`, `cachedResource()`, `offlineResource()` and `component()`. Replacements, one to one: `cls(el, { … })`, `reactive(obj, { shallow: true })`, `resource(url, { cache: true })`, `resource(url, { offline: true })`, `mount(el, Component)`. `defineElement()` stays as the documented low-level form under `element()`; nothing in `aegis.d.ts` is marked `@deprecated` any more.

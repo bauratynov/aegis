@@ -38,7 +38,7 @@ if (argv.includes('--exports') || argv.includes('--from')) {
         stdin: { contents: `export { ${names.join(', ')} } from './${src}';`, resolveDir: '.', sourcefile: 'aegis.custom.entry.js', loader: 'js' },
         outfile: out, bundle: true, minify, format: 'esm', target: ['es2022'], legalComments: 'none', define,
         sourcemap: argv.includes('--map'),
-        banner: { js: `/*! Aegis — MIT — https://github.com/atynov/aegis — custom build: ${names.join(', ')} */` },
+        banner: { js: `/*! Aegis — MIT — https://github.com/bauratynov/aegis — custom build: ${names.join(', ')} */` },
     });
     const built = readFileSync(out);
     console.log(`${src} → ${out}  ${(built.length / 1024).toFixed(1)} KB raw / ${kb(built)}  (${names.length} exports${minify ? ', min' : ''}${define['globalThis.AEGIS_PROD'] === 'true' ? ', prod: без dev-текстов' : ', dev'})`);
@@ -67,7 +67,7 @@ await build({
     target: ['es2022'],
     sourcemap: true,
     legalComments: 'none',
-    banner: { js: '/*! Aegis — MIT — https://github.com/atynov/aegis */' },
+    banner: { js: '/*! Aegis — MIT — https://github.com/bauratynov/aegis */' },
 });
 await build({
     stdin: { contents: core, resolveDir: '.', sourcefile: 'aegis.core.js', loader: 'js' },

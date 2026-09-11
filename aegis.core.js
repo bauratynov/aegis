@@ -5,7 +5,7 @@
  * attribute sinks are typed at compile time. What the architecture cannot prevent, the dev build reports
  * with a code, a why and a fix (ERRORS.md); 'strict' mode turns those warnings into exceptions.
  *
- * @version 0.7.0
+ * @version 0.7.1
  * @license MIT
  */
 
