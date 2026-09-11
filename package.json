@@ -1,7 +1,7 @@
 {
-  "name": "aegis-engine",
+  "name": "aegisjs",
   "version": "0.7.0",
-  "description": "Zero-build reactive UI engine — signals, islands, html templates, data layer, routing, forms, animations, offline. One ES module, no dependencies.",
+  "description": "Zero-build reactive UI engine for server-rendered pages: your server renders the HTML, Aegis makes parts of it alive. Signals, islands, html templates, an HTTP-aware cache, forms and a router in one ES module with no dependencies.",
   "type": "module",
   "main": "aegis.js",
   "types": "aegis.d.ts",
