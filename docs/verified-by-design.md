@@ -13,7 +13,7 @@ The reactive core is the part of a framework that must be right, so it is the pa
 
 The properties behind the fuzzer: pull-based evaluation without glitches, write backdating inside `batch()`, an earliest-deadline-first scheduler, dispose as a transaction, and provenance ordering of effects (Kahn over writer → reader edges). Run the fuzzer yourself before trusting the README.
 
-The node suite covers the signal graph only. The DOM, templates, islands, lists and morph, the router, forms, the cache and offline are covered by the browser suite: `test.html`, 1 075 assertions in about 50 sections, run in headless Chrome and Firefox by `npm run test:browsers`. A green node run says the core is right; it says nothing about the UI layer.
+The node suite covers the signal graph only. The DOM, templates, islands, lists and morph, the router, forms, the cache and offline are covered by the browser suite: `test/test.html`, 1 074 assertions in about 50 sections, run in headless Chrome, Firefox and WebKit by `npm run test:browsers`. A green node run says the core is right; it says nothing about the UI layer.
 
 What the tests do **not** promise, so you do not have to find out yourself:
 

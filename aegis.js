@@ -37,6 +37,7 @@ function _dev() {
             console.info(`%c⚡ Aegis dev mode (${h || 'file'}). window.__AEGIS_DEV__ = false to silence.`, 'color:#58a6ff');
         }
     }
+    if (on) _maybeAutoDevtools();   // ?aegis-devtools opens the inspector; dev only, so a production bundle drops this path
     return (_devCache = on);
 }
 
@@ -173,8 +174,14 @@ const _overlayOff = () => { try { return localStorage.getItem('aegis:overlay') =
 let _overlayMod = null;
 const _devtoolsModule = () => _overlayMod || (_overlayMod = import(/* @vite-ignore */ new URL('./aegis-devtools.js', import.meta.url).href).catch(() => null));
 function _overlayNotify(info) { _devtoolsModule().then(m => { if (m && typeof m.notify === 'function') m.notify(info); }); }
-// ?aegis-devtools in the page URL loads the inspector next to the module; the module opens its panel by itself
-if (typeof location !== 'undefined' && /[?&]aegis-devtools\b/.test(location.search)) _devtoolsModule();
+// ?aegis-devtools in the page URL loads the inspector next to the module; the module opens its panel by itself.
+// Checked on the first dev-mode question, never at import time: a top-level statement here is a side effect no bundler can drop.
+let _devtoolsUrlChecked = false;
+function _maybeAutoDevtools() {
+    if (_devtoolsUrlChecked) return;
+    _devtoolsUrlChecked = true;
+    if (typeof location !== 'undefined' && /[?&]aegis-devtools\b/.test(location.search)) _devtoolsModule();
+}
 
 // Prototype pollution deny-list (используется proxy-обёртками store/reactive)
 const _DENIED_KEYS = new Set(['__proto__', 'prototype', 'constructor']);

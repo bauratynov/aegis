@@ -1,6 +1,6 @@
 ## Testing
 
-`aegis/test` is a dependency-free helper set for any browser runner (the repo's `test.html`, Vitest browser mode, Playwright, Web Test Runner):
+`aegis/test` is a dependency-free helper set for any browser runner (the repo's `test/test.html`, Vitest browser mode, Playwright, Web Test Runner):
 
 ```js
 import { render, fire, waitFor, mockFetch, cleanup } from 'aegis/test';

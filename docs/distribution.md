@@ -3,7 +3,7 @@
 | File | Use |
 |---|---|
 | `aegis.js` | readable source — read it, let an assistant modify it, debug with it |
-| `aegis.min.js` (+ `.map`) | everything with dev warnings — 108 KB gzip (91 KB as a production build, see below) |
+| `aegis.min.js` (+ `.map`) | everything with dev warnings — 108 KB gzip (93 KB as a production build, see below) |
 | `aegis.core.js` / `aegis.core.min.js` | signals + scope only — 11 KB gzip minified |
 
 ### With a bundler: pay for what you import
@@ -12,12 +12,14 @@ The source is one side-effect-free ES module (`"sideEffects": false`), so esbuil
 
 | You import | dev | production |
 |---|---|---|
-| `signal, computed, effect, batch, createScope` | 7.7 KB | 4.3 KB |
-| `island, mount, html, list, show, when, hydrate` + events and `bind` | 30 KB | 21 KB |
-| + `resource, mutation, api, settled` | 48 KB | 37 KB |
-| + `form, wireForm` and rules | 64 KB | 52 KB |
-| + `router` | 70 KB | 59 KB |
-| everything (`aegis.min.js`) | 108 KB | 91 KB |
+| `signal, computed, effect, batch, createScope` | 11.3 KB | 6.9 KB |
+| `island, mount, html, list, show, when, hydrate` + events and `bind` | 40.6 KB | 30.1 KB |
+| + `resource, mutation, api, settled` | 60.7 KB | 47.1 KB |
+| + `form, wireForm` and rules | 78.3 KB | 64.0 KB |
+| + `router` | 85.5 KB | 71.1 KB |
+| everything (`aegis.min.js`) | 107.4 KB | 93.2 KB |
+
+Measured with esbuild (minified, gzip -9) against the `aegis.js` in this repository; `npm test` re-measures every subset and fails if one grows past its budget.
 
 `npm test` includes `test-shake.mjs`, which fails the build if a light subset starts pulling in the cache, the form messages, the request layer or IndexedDB again.
 
@@ -34,7 +36,7 @@ node build.mjs --exports signal,effect,html,mount,list --out aegis.custom.js    
 node build.mjs --from app.js --list                                                # print what was kept
 ```
 
-A 15-export admin bundle comes out at 14 KB gzip. Unknown names fail the build instead of failing in the browser. Otherwise take `aegis.min.js` (warnings included, they only fire on localhost) or `aegis.core.min.js`; the full file is the same code, nothing is duplicated between the two. `globalThis.AEGIS_PROD = true` before the import silences warnings at runtime without a build.
+A 15-export admin bundle (signals, `mount`, `html`, lists, bindings, events) comes out at 26 KB gzip in production, 36 KB with the dev warnings. Unknown names fail the build instead of failing in the browser. Otherwise take `aegis.min.js` (warnings included, they only fire on localhost) or `aegis.core.min.js`; the full file is the same code, nothing is duplicated between the two. `globalThis.AEGIS_PROD = true` before the import silences warnings at runtime without a build.
 
 ```html
 <script type="importmap">{ "imports": { "aegis": "https://aegisjs.com/aegis.min.js" } }</script>

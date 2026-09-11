@@ -48,7 +48,7 @@ That is the whole setup. The server HTML is visible before JavaScript runs and i
 - **Server HTML stays the source of truth.** No Node SSR, no client tree that re-renders what the server already sent.
 - **A form works without JavaScript.** `wireForm()` only improves it: live validation, 422 errors on the right fields.
 - **An island hydrates inside htmx, Turbo or jQuery pages.** Markup inserted later wakes up too.
-- **21 KB gzip for islands + templates, zero dependencies, one file you can read.** Pin a version, add a hash, ship.
+- **30 KB gzip for islands + templates, zero dependencies, one file you can read.** Pin a version, add a hash, ship.
 
 Start here: [Getting started](https://aegisjs.com/docs/getting-started/) (a `base.html` for Django, Laravel, Rails and Go) · [from Alpine](https://aegisjs.com/docs/from-alpine/) · [with htmx](https://aegisjs.com/docs/with-htmx/) · [when not to use Aegis](https://aegisjs.com/docs/when-not-to-use/).
 
@@ -59,7 +59,7 @@ You have a server that renders HTML and you want parts of the page to be alive: 
 | | Aegis | Alpine | Petite-Vue | htmx | Stimulus | Lit |
 |---|---|---|---|---|---|---|
 | Build step | none | none | none | none | none (or a bundler) | usually a bundler |
-| Size, gzip | 21 KB islands + templates (4 KB signals, 91 KB everything) | 15 KB | 6 KB | 14 KB | 11 KB | 16 KB |
+| Size, gzip | 30 KB islands + templates (7 KB signals, 93 KB everything) | 15 KB | 6 KB | 14 KB | 11 KB | 16 KB |
 | Server HTML | adopted as is; `swap()` morphs fragments; islands survive swaps | directives on the markup | directives on the markup | swapped as strings | controllers on the markup | replaced by shadow DOM |
 | Reactivity | signals, computeds, effects; glitch-free, batched | proxy + directives | proxy + directives | none (server round-trip) | none (imperative) | properties → re-render |
 | Templates | `html``` in JavaScript, parsed once, CSP-safe; keyed `list()` | `x-for` / `x-text` in HTML | `v-for` / `{{ }}` in HTML | HTML from the server | targets in HTML | `html``` (lit-html) |
@@ -154,13 +154,13 @@ One file is served, but you rarely ship all of it. Every number on this page is 
 
 | Number | What it is |
 |---|---|
-| **4 KB** gzip | `signal`, `computed`, `effect`, `batch`, `createScope` after a production build: the reactive core alone |
-| **21 KB** gzip | the usual page: islands, `html` templates, lists, events and two-way binding, production build |
-| **91 KB** gzip | every export, production build (`node build.mjs --from app.js` strips the developer layer) |
-| **109 KB** gzip | `aegis.min.js` as served from the pinned URL: the same code plus the 60+ dev warnings, which only fire on localhost |
+| **7 KB** gzip | `signal`, `computed`, `effect`, `batch`, `createScope` after a production build: the reactive core alone |
+| **30 KB** gzip | the usual page: islands, `html` templates, lists, events and two-way binding, production build |
+| **93 KB** gzip | every export, production build (`node build.mjs --from app.js` strips the developer layer) |
+| **108 KB** gzip | `aegis.min.js` as served from the pinned URL: the same code plus the 60+ dev warnings, which only fire on localhost |
 | **11 KB** gzip | `aegis.core.min.js`, the signals + scope file for non-DOM code |
 
-The pinned URL is the whole file, so a page that imports five names still downloads 109 KB. If that matters, build the subset once (below) or let a bundler tree-shake it; the per-subset numbers are in [`docs/distribution.md`](./docs/distribution.md).
+The pinned URL is the whole file, so a page that imports five names still downloads 108 KB. If that matters, build the subset once (below) or let a bundler tree-shake it; the per-subset numbers are in [`docs/distribution.md`](./docs/distribution.md).
 
 ### Vendored
 
@@ -179,7 +179,7 @@ Three lines: the repo reads the `import { … } from 'aegis'` line of your app a
 ```sh
 git clone https://github.com/bauratynov/aegis && cd aegis
 node build.mjs --from ../app/static/js/admin.js --out ../app/static/js/aegis.js
-# → one file with exactly the exports admin.js imports (a 15-export admin bundle is 14 KB gzip); unknown names fail here, not in the browser
+# → one file with exactly the exports admin.js imports (a 15-export admin bundle is 26 KB gzip); unknown names fail here, not in the browser
 ```
 
 ### npm
