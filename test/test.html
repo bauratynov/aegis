@@ -4115,10 +4115,15 @@
         {
             const nested = { b: 1 };
             const st = reactive({ a: nested, list: [1], x: 1 });
+            // лень меряем относительно самой машины: построить массив из 100k объектов уже дороже, чем обернуть его reactive()
+            const rows = Array.from({ length: 100000 }, (_, i) => ({ i, done: false }));
+            const tb0 = performance.now();
+            const plain = rows.map(r => ({ i: r.i, done: r.done }));   // эталон: один проход с аллокацией на строку
+            const baseline = Math.max(performance.now() - tb0, 0.5);
             const tc0 = performance.now();
-            const huge = reactive({ rows: Array.from({ length: 100000 }, (_, i) => ({ i, done: false })) });
+            const huge = reactive({ rows });
             const create = performance.now() - tc0;
-            assert('$reset ленивый: reactive() на 100k строк не клонирует дерево при создании (< 15 мс)', create < 15 && huge.rows.length === 100000);
+            assert('$reset ленивый: reactive() на 100k строк не обходит дерево при создании (дешевле одного прохода по нему)', create < baseline && huge.rows.length === 100000 && plain.length === 100000);
             st.a.b = 2; st.list.push(2); st.x = 5; st.extra = true;
             const aRef = st.a;
             st.$reset();
