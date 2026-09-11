@@ -184,11 +184,18 @@ node build.mjs --from ../app/static/js/admin.js --out ../app/static/js/aegis.js
 
 ### npm
 
-The package is `aegisjs`, the same name as the site (`aegis` and `aegis-engine` on npm belong to other projects). Not published yet: the `exports` map (`.`, `./min`, `./core`, `./core/min`) is ready and `npm i aegisjs` lands with 0.8. Until then the pinned URL above is the release channel, and a bundler resolves it the same way after `npm i`.
+The package is `@aegisjs/engine` — the scope matches the site, and the bare names are taken: `aegis` and `aegis-engine` belong to other projects, and `aegisjs` is refused by npm as too close to `aegis-js` (last published 2022).
+
+```sh
+npm i aegis@npm:@aegisjs/engine   # keeps `from 'aegis'` working under a bundler
+npm i @aegisjs/engine             # or the real name, then import from '@aegisjs/engine'
+```
+
+The `exports` map (`.`, `./min`, `./core`, `./core/min`, `./devtools`, `./test`) resolves the same subpaths either way. The pinned URL above stays the release channel for pages without a bundler.
 
 ### How the bare name `aegis` resolves
 
-Every example here and on the site imports `from 'aegis'`. That name is not magic: it comes from the import map in your base template (the pinned block above). With a bundler it comes from `node_modules` instead. Without either, import the URL directly:
+Every example here and on the site imports `from 'aegis'`. That name is not magic: it comes from the import map in your base template (the pinned block above). With a bundler it comes from `node_modules` instead — install under that name with `npm i aegis@npm:@aegisjs/engine`, or import `'@aegisjs/engine'` directly. Without either, import the URL directly:
 
 ```js
 import { island } from 'https://aegisjs.com/0.7.0/aegis.min.js';
