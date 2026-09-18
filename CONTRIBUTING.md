@@ -18,7 +18,7 @@ npm run test:webkit         # the same suite in Playwright WebKit (npx playwrigh
 npm run build               # aegis.min.js, aegis.core.js and aegis.core.min.js
 ```
 
-`test/test.html` is the browser suite: about 1,077 assertions in ~50 sections, the number the README badge and the site quote comes from the last CI run. Open it over HTTP from the repository root (any static server, `http://localhost:8000/test/test.html`) to run it interactively. Firefox and WebKit must be green; Chrome headless reports a few environment-only failures (focus, IndexedDB) that the runner marks as such. `test/test-core.mjs` is the node suite for the reactive graph (42 tests plus a fuzzer).
+`test/test.html` is the browser suite: about 1,085 assertions in ~145 sections, the number the README badge and the site quote comes from the last CI run. Open it over HTTP from the repository root (any static server, `http://localhost:8000/test/test.html`) to run it interactively. Firefox and WebKit must be green; Chrome headless reports a few environment-only failures (focus, IndexedDB) that the runner marks as such. `test/test-core.mjs` is the node suite for the reactive graph (42 tests plus a fuzzer).
 
 ## Layout
 
@@ -35,40 +35,40 @@ npm run build               # aegis.min.js, aegis.core.js and aegis.core.min.js
 | Section | Line |
 |---|---|
 | `0. DEV MODE & DIAGNOSTICS` | 13 |
-| `1. REACTIVE CORE — Signals, Computed, Effect, Batch` | 195 |
-| `2. SCOPE — Lifecycle, Auto-cleanup` | 1249 |
-| `3. SCOPED UTILITIES — auto-cleanup обёртки` | 1429 |
-| `4. GUARD LAYER — Race protection, Smart fetch` | 1701 |
-| `5. DOM ENGINE — Tagged templates, Direct patching, Binding` | 2162 |
-| `6. DOM HELPERS — bind, text, attr, cls, style, show` | 3260 |
-| `7. LIST — Keyed reconciliation` | 3648 |
-| `8. COMPONENT — Mount, Hydrate, Destroy` | 4102 |
-| `9. RESOURCE — Async data primitive (THE killer feature)` | 4785 |
-| `10. WATCH — Explicit dependency watching` | 5328 |
-| `12. PORTAL — Render to different DOM location` | 5642 |
-| `13. TRANSITION — CSS animation helpers` | 5685 |
-| `14. ERROR BOUNDARY — Catch errors in component trees` | 5779 |
-| `15. CONVENIENCE — mount helpers, ref` | 5813 |
-| `16. REACTIVE OBJECT — Deep reactive proxy (как Vue reactive())` | 5872 |
-| `17. FORM — Form state management with validation` | 6234 |
-| `18. LAZY — Viewport-based lazy loading` | 7021 |
-| `19. NEXTICK — Post-render callback` | 7070 |
-| `20. I18N — Translation helper` | 7089 |
-| `21. CLOAK — Hide until hydrated` | 7186 |
-| `22. SPRING — Physics-based animation via WAAPI` | 7232 |
-| `23. ANIMATE — View Transitions + CSS fallback` | 7484 |
-| `24. CACHED RESOURCE — Dedup + SWR + Cache` | 7623 |
-| `25. WIREFORM — Auto-wired server-rendered forms` | 8732 |
-| `26. ACCESSIBILITY — trap, roving, announce` | 9222 |
-| `27. CSS — Constructable Stylesheets + @scope` | 9621 |
-| `28. CUSTOM ELEMENTS — Web Components adapter` | 9764 |
-| `29. ANCHOR — CSS Anchor Positioning helper` | 9945 |
-| `30. ROUTER — Navigation API router` | 10074 |
-| `31. COMMAND — Invoker Commands pattern` | 10662 |
-| `32. VIRTUAL SCROLL — content-visibility virtualization` | 10761 |
-| `33. OFFLINE RESOURCE — IDB cache + Background Sync` | 10932 |
-| `34. SERVER HTML — swap, morph, boost, tpl, adopt, jsonScript` | 11307 |
-| `35. VERSION & EXPORT` | 11815 |
+| `1. REACTIVE CORE — Signals, Computed, Effect, Batch` | 202 |
+| `2. SCOPE — Lifecycle, Auto-cleanup` | 1256 |
+| `3. SCOPED UTILITIES — auto-cleanup обёртки` | 1436 |
+| `4. GUARD LAYER — Race protection, Smart fetch` | 1708 |
+| `5. DOM ENGINE — Tagged templates, Direct patching, Binding` | 2169 |
+| `6. DOM HELPERS — bind, text, attr, cls, style, show` | 3267 |
+| `7. LIST — Keyed reconciliation` | 3655 |
+| `8. COMPONENT — Mount, Hydrate, Destroy` | 4109 |
+| `9. RESOURCE — Async data primitive (THE killer feature)` | 4792 |
+| `10. WATCH — Explicit dependency watching` | 5335 |
+| `12. PORTAL — Render to different DOM location` | 5649 |
+| `13. TRANSITION — CSS animation helpers` | 5692 |
+| `14. ERROR BOUNDARY — Catch errors in component trees` | 5786 |
+| `15. CONVENIENCE — mount helpers, ref` | 5820 |
+| `16. REACTIVE OBJECT — Deep reactive proxy (как Vue reactive())` | 5879 |
+| `17. FORM — Form state management with validation` | 6243 |
+| `18. LAZY — Viewport-based lazy loading` | 7030 |
+| `19. NEXTICK — Post-render callback` | 7079 |
+| `20. I18N — Translation helper` | 7098 |
+| `21. CLOAK — Hide until hydrated` | 7195 |
+| `22. SPRING — Physics-based animation via WAAPI` | 7241 |
+| `23. ANIMATE — View Transitions + CSS fallback` | 7493 |
+| `24. CACHED RESOURCE — Dedup + SWR + Cache` | 7632 |
+| `25. WIREFORM — Auto-wired server-rendered forms` | 8741 |
+| `26. ACCESSIBILITY — trap, roving, announce` | 9231 |
+| `27. CSS — Constructable Stylesheets + @scope` | 9630 |
+| `28. CUSTOM ELEMENTS — Web Components adapter` | 9773 |
+| `29. ANCHOR — CSS Anchor Positioning helper` | 9954 |
+| `30. ROUTER — Navigation API router` | 10083 |
+| `31. COMMAND — Invoker Commands pattern` | 10671 |
+| `32. VIRTUAL SCROLL — content-visibility virtualization` | 10770 |
+| `33. OFFLINE RESOURCE — IDB cache + Background Sync` | 10941 |
+| `34. SERVER HTML — swap, morph, boost, tpl, adopt, jsonScript` | 11316 |
+| `35. VERSION & EXPORT` | 11824 |
 
 ## What a good change looks like
 

@@ -1,6 +1,6 @@
 ## Benchmarks
 
-`bench.html` — a js-framework-benchmark-style table (1,000 rows, `list()` + `html```) plus the reactive core. Median of 5 runs, headless Chrome, ms:
+`demo/bench.html` — a js-framework-benchmark-style table (1,000 rows, `list()` + `html```) plus the reactive core. Median of 5 runs, headless Chrome, ms:
 
 | DOM (1,000 rows) | ms | Core | ms |
 |---|---|---|---|
@@ -14,4 +14,4 @@
 | create 10,000 | 146.6 (131.5 with `delegateEvents`) | `reactive()` for..of 100k rows | 20 |
 | clear | 12.5 | `reactive()` wrap 100k rows, heap | 17 MB |
 
-Run it yourself: serve the folder and open `bench.html` — the numbers are in `<pre>` and `window.__bench`. The same three jobs next to Alpine and Vue, in your browser: [aegisjs.com/bench/](https://aegisjs.com/bench/) (a 10 000-row table, a search filter, an optimistic PATCH).
+Run it yourself: serve the repository root and open `demo/bench.html` — the numbers are in `<pre>` and `window.__bench`. The same three jobs next to Alpine and Vue, in your browser: [aegisjs.com/bench/](https://aegisjs.com/bench/) (a 10 000-row table, a search filter, an optimistic PATCH).

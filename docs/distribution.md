@@ -8,7 +8,7 @@
 
 ### With a bundler: pay for what you import
 
-The source is one side-effect-free ES module (`"sideEffects": false`), so esbuild, Rollup and Vite tree-shake it by named import. Heavy parts (cache, forms, offline, router, transitions, the request layer) attach to the light ones through a late-binding registry, so `signal` or `component` alone never drag them in. Pass `define: { 'globalThis.AEGIS_PROD': 'true' }` to your bundler for a production build: every warning text and dev-only detector is folded away. Measured with `node build.mjs --subsets` (minified, gzip):
+The source is one side-effect-free ES module (`"sideEffects": false`), so esbuild, Rollup and Vite tree-shake it by named import. Heavy parts (cache, forms, offline, router, transitions, the request layer) attach to the light ones through a late-binding registry, so `signal` or `mount` alone never drag them in. Pass `define: { 'globalThis.AEGIS_PROD': 'true' }` to your bundler for a production build: every warning text and dev-only detector is folded away. Measured with `node build.mjs --subsets` (minified, gzip):
 
 | You import | dev | production |
 |---|---|---|
@@ -36,9 +36,10 @@ node build.mjs --exports signal,effect,html,mount,list --out aegis.custom.js    
 node build.mjs --from app.js --list                                                # print what was kept
 ```
 
-A 15-export admin bundle (signals, `mount`, `html`, lists, bindings, events) comes out at 26 KB gzip in production, 36 KB with the dev warnings. Unknown names fail the build instead of failing in the browser. Otherwise take `aegis.min.js` (warnings included, they only fire on localhost) or `aegis.core.min.js`; the full file is the same code, nothing is duplicated between the two. `globalThis.AEGIS_PROD = true` before the import silences warnings at runtime without a build.
+A 14-export admin bundle (signals, `mount`, `html`, lists, bindings, events) comes out at 22 KB gzip in production, 31 KB with the dev warnings. Unknown names fail the build instead of failing in the browser. Otherwise take `aegis.min.js` (warnings included, they only fire on localhost) or `aegis.core.min.js`; the full file is the same code, nothing is duplicated between the two. `globalThis.AEGIS_PROD = true` before the import silences warnings at runtime without a build.
 
 ```html
 <script type="importmap">{ "imports": { "aegis": "https://aegisjs.com/aegis.min.js" } }</script>
+<!-- без версии — только для экспериментов; на проде пинят версию и хеш, см. README -->
 ```
 `npm run build` regenerates the minified files (esbuild, dev dependency only — users never build).

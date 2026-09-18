@@ -8,14 +8,14 @@
  *   /** @type {import('./aegis.js')} *​/
  *   import { signal, computed, effect } from './aegis.js';
  *
- * @version 0.7.1
+ * @version 0.7.2
  * @license MIT
  *
  * API tiers — where to start:
  *   Core (10 names, enough for most pages): signal, computed, effect, batch, html, island, mount, resource, wireForm, swap
  *   Extended: everything else below — helpers for specific jobs (router, forms, cache, motion, a11y). Same file, same guarantees,
  *             tree-shaken away when you do not import it.
- *   Removed before 1.0 (0.8): clsMap → cls(el, { … }), store → reactive(obj, { shallow: true }), cachedResource → resource(url, { cache: true }),
+ *   Removed in 0.7.1: clsMap → cls(el, { … }), store → reactive(obj, { shallow: true }), cachedResource → resource(url, { cache: true }),
  *             offlineResource → resource(url, { offline: true }), component → mount. Nothing is marked @deprecated any more.
  */
 
@@ -193,7 +193,7 @@ export function linked<S, T>(opts: { source: () => S; compute: (source: S, prev:
 export function from<T, E extends EventTarget = EventTarget>(target: E, event: string, map?: (target: E) => T): ReadonlySignal<T>;
 export function from<T>(producer: (set: (v: T) => void) => (() => void) | void, initial?: T, opts?: { /** the producer starts with the first subscriber and stops with the last */ lazy?: boolean }): ReadonlySignal<T>;
 export function from<T>(subscribable: { subscribe(fn: (v: T) => void): (() => void) | { unsubscribe(): void }; value?: T; peek?(): T }): ReadonlySignal<T>;
-/** Undo/redo for a signal, reactive() or store() */
+/** Undo/redo for a signal or a reactive() object */
 export function history<T>(source: Signal<T> | object, opts?: { limit?: number; debounce?: number }): {
     undo(): void; redo(): void; canUndo: ReadonlySignal<boolean>; canRedo: ReadonlySignal<boolean>;
     pause(): void; resume(): void; commit(): void; clear(): void;
@@ -218,7 +218,7 @@ export interface ReactiveExtras<T> {
 }
 /**
  * Deeply reactive object: fields → signals, getters → computeds, methods → batched actions;
- * arrays and plain objects are reactive deeply, Date/Map/File/DOM stay as they are. { shallow: true } = store()
+ * arrays and plain objects are reactive deeply, Date/Map/File/DOM stay as they are. { shallow: true } wraps only the top level
  */
 export function reactive<T extends object>(obj: T, opts?: { shallow?: boolean }): T & ReactiveExtras<T>;
 export function isReactive(v: unknown): boolean;
@@ -872,7 +872,7 @@ export type InvalidatePattern = string | CacheKeyPart[] | ((key: string, entry?:
 /** Reset freshness and refetch live entries; the Promise waits for the refetches. cancel: false — wait for the in-flight request and refetch after it */
 export function invalidate(pattern: InvalidatePattern, opts?: { cancel?: boolean; refetch?: 'active' | 'all' | 'none' }): Promise<void>;
 
-/** Put data into the cachedResource() cache by hand (a mutation response, a server payload). age — the age of the data in ms */
+/** Put data into the resource({ cache: true }) cache by hand (a mutation response, a server payload). age — the age of the data in ms */
 /** Put data into the cache: age — age in ms, staleTime — how long it counts as fresh (default 0: SWR revalidation on mount) */
 export function seed(key: string | CacheKeyPart[], data: unknown, opts?: { age?: number; staleTime?: number }): unknown;
 /**
@@ -1224,7 +1224,7 @@ export interface ComponentContext<E extends Element = HTMLElement> {
     onDispose(fn: () => void): () => void;
 }
 
-/** The result of component(): if setup returned a template (Node) it is inserted into el and { el, destroy } is returned */
+/** The result of mount(): if setup returned a template (Node) it is inserted into el and { el, destroy } is returned */
 export type ComponentResult<R> = R extends Node ? { el: Element; destroy(): void } : R;
 
 /**
@@ -1300,7 +1300,7 @@ export function destroy(el: Element): void;
 export function destroyAll(root?: Document | Element): void;
 
 /**
- * Error boundary: wraps component() in try/catch.
+ * Error boundary: wraps mount() in try/catch.
  * @param fallback — receives (error, el) on failure
  */
 export function errorBoundary<R = void>(

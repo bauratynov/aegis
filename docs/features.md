@@ -10,9 +10,8 @@
 - **`watch()`** — `onCleanup`, `{ once }`, `pause()` / `resume()`; `computed((prev) => …, { initial })`
 - **Batch** — group updates, single flush
 - **Reactive objects** — deep Proxy-based reactivity (like Vue `reactive()`), arrays included: `push`/`splice`/`sort`, index writes, `length`, key add/delete
-- **Store** — definition-based reactive container (properties → signals, getters → computeds, methods → actions, auto-batched)
-- **Interop** — `from()` turns an EventTarget, a producer or any `{ subscribe }` (Preact, RxJS, Svelte store) into a signal; `history()` gives undo/redo for a signal, `reactive()` or `store()`
-- **`reactive()` 2.0** — getters become computeds, methods become batched actions, `$patch` / `$subscribe` / `$snapshot` / `$reset`; only plain objects and arrays are wrapped (Date/Map/File stay as they are); `store()` = `reactive(obj, { shallow: true })`
+- **Interop** — `from()` turns an EventTarget, a producer or any `{ subscribe }` (Preact, RxJS, Svelte store) into a signal; `history()` gives undo/redo for a signal or a `reactive()` object
+- **`reactive()` 2.0** — getters become computeds, methods become batched actions, `$patch` / `$subscribe` / `$snapshot` / `$reset`; only plain objects and arrays are wrapped (Date/Map/File stay as they are); a shallow container is `reactive(obj, { shallow: true })`
 - **`watch()`** — explicit dependency watching with debounce
 - **Semantics** — A `computed()` is subscribed to its sources only while something observes it and needs no scope; what an effect creates in its body dies before the effect re-runs (Solid / Svelte 5 semantics); the setup `ctx` helpers survive an `await`. An exception inside `computed()` is a cached value, not a torn graph: subscriptions survive and the graph recovers as soon as a dependency changes; effect errors go to `scope.onError` → `onError(fn)` → `reportError`, never to the code that wrote the signal.
 
@@ -77,8 +76,7 @@
 - **`resource(url, { offline: true })`** — IndexedDB cache, one mutation queue per app flushed on reconnect with retry/backoff and Background Sync, `send()` for network writes
 
 ### Components
-- **`mount()`** — a component with rich context (20+ utilities pre-bound to scope)
-- **`mount()`** — shorthand with CSS selector
+- **`mount()`** — a component with rich context (20+ utilities pre-bound to scope); with a CSS selector as the first argument it is the shorthand form
 - **`register()` + `hydrate()`** — server-rendered HTML hydration with lazy strategies (visible, idle, interaction, media)
 - **`errorBoundary()`** — catch errors, show fallback
 - **Custom Elements** — `element()` for the component form, `defineElement()` for the definition object with signals↔attrs↔props reflection, Shadow DOM, `formAssociated`

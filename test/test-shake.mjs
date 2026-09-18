@@ -27,15 +27,15 @@ const has = (b, ...names) => names.filter(n => b.decls.has(n));
     ok('signals only: нет кэша / форм / IDB / DOM-движка', has(b, '_cacheEntry', '_MESSAGES', '_idb', '_parseTemplate', 'request', 'announce', '_runTransition').length === 0, has(b, '_cacheEntry', '_MESSAGES', '_idb', '_parseTemplate', 'request', 'announce', '_runTransition').join(','));
     ok('signals only: ≤ 12 KB gzip (фаза A: Кан-порядок, heap-планировщик, контракты в dev)', b.gz <= 12, b.gz.toFixed(1) + ' KB');
 }
-// 2. DOM-подмножество админки (15 экспортов): кэш, IDB, формы, роутер не входят
+// 2. DOM-подмножество админки (14 экспортов): кэш, IDB, формы, роутер не входят
 if (full) {
     const b = await bundle('signal, effect, computed, mount, html, text, attr, cls, show, list, bind, on, debounced, batch');
     const bad = has(b, '_cacheEntry', '_fetchEntry', '_idb', '_offlineStore', '_MESSAGES', '_makeValidator', 'wireForm', 'router', '_ghostAdd', '_persistWrite', 'seedFrom', 'prefetch', '_netBudget');
-    ok('admin 15 exports: нет кэша / IDB / форм / роутера', bad.length === 0, bad.join(','));
-    ok('admin 15 exports: без when() нет и announce / a11y-строк', !b.decls.has('_MSG_A11Y') && !b.decls.has('announce') && !b.decls.has('_fmsg'));
-    ok('admin 15 exports: request-слой не тянется через ctx.fetch / defaults.fetcher', has(b, 'request', 'HttpError', 'guardedFetch', 'withRetry').length === 0, has(b, 'request', 'HttpError', 'guardedFetch', 'withRetry').join(','));
-    ok('admin 15 exports: транзишены и reducedMotion не тянутся без transition()', has(b, '_runTransition', 'reducedMotion', 'media').length === 0);
-    ok('admin 15 exports: ≤ 37 KB gzip (dev; C1: sink-и, TT, зоны доверия)', b.gz <= 37, b.gz.toFixed(1) + ' KB');
+    ok('admin 14 exports: нет кэша / IDB / форм / роутера', bad.length === 0, bad.join(','));
+    ok('admin 14 exports: без when() нет и announce / a11y-строк', !b.decls.has('_MSG_A11Y') && !b.decls.has('announce') && !b.decls.has('_fmsg'));
+    ok('admin 14 exports: request-слой не тянется через ctx.fetch / defaults.fetcher', has(b, 'request', 'HttpError', 'guardedFetch', 'withRetry').length === 0, has(b, 'request', 'HttpError', 'guardedFetch', 'withRetry').join(','));
+    ok('admin 14 exports: транзишены и reducedMotion не тянутся без transition()', has(b, '_runTransition', 'reducedMotion', 'media').length === 0);
+    ok('admin 14 exports: ≤ 33 KB gzip (dev; C1: sink-и, TT, зоны доверия)', b.gz <= 33, b.gz.toFixed(1) + ' KB');
     const w = await bundle('signal, mount, when');
     ok('+ when: a11y-строки и announce подключаются, таблица форм — нет', w.decls.has('_MSG_A11Y') && w.decls.has('announce') && !w.decls.has('_fmsg'));
     // привязанная регистрация (@__PURE__ _reg): попадает в бандл только вместе со своей функцией
@@ -43,14 +43,14 @@ if (full) {
     ok('+ transition: раннер зарегистрирован для show/list', t.decls.has('_runTransition') && /_reg\("runTransition"|_reg\('runTransition'/.test(t.js));
     const a = await bundle('signal, mount, api');
     ok('+ api: request и guardedFetch зарегистрированы для ctx.fetch', a.decls.has('guardedFetch') && /_reg\(\s*["']guardedFetch["']/.test(a.js));
-    ok('component без api: регистрация guardedFetch выкинута', !/["']guardedFetch["']\s*,\s*guardedFetch/.test(b.js));
+    ok('mount без api: регистрация guardedFetch выкинута', !/["']guardedFetch["']\s*,\s*guardedFetch/.test(b.js));
 }
 // 2b. прод-сборка: define globalThis.AEGIS_PROD=true вырезает dev-тексты и dev-ветки
 if (full) {
     const p = await bundle('signal, effect, computed, mount, html, text, attr, cls, show, list, bind, on, debounced, batch', true);
     ok('prod admin: ни одного what/why/fix', !/\b(?:what|why|fix):\s*["'`]/.test(p.minJs), String((p.minJs.match(/\bwhat:/g) || []).length));
     ok('prod admin: dev-инспекторы выкинуты (_lev, _nearest, _snippet, _zombieCheck, _inspectScope)', has(p, '_lev', '_nearest', '_snippet', '_zombieCheck', '_inspectScope').length === 0, has(p, '_lev', '_nearest', '_snippet', '_zombieCheck', '_inspectScope').join(','));
-    ok('prod admin: ≤ 27 KB gzip (B1–B2 + C1 безопасность)', p.gz <= 27, p.gz.toFixed(1) + ' KB');
+    ok('prod admin: ≤ 23 KB gzip (B1–B2 + C1 безопасность)', p.gz <= 23, p.gz.toFixed(1) + ' KB');
     const ps = await bundle('signal, computed, effect, batch, createScope', true);
     ok('prod signals only: ≤ 7.5 KB gzip (долг фазы K: бюджеты секций)', ps.gz <= 7.5, ps.gz.toFixed(1) + ' KB');
     const pi = await bundle('island, mount, html, list, show, when, signal, computed, effect, on, bind, hydrate', true);
@@ -79,6 +79,17 @@ if (full) {
     ok('+ resource: таблица сообщений форм всё ещё не нужна', !c.decls.has('_MESSAGES'));
     const f = await bundle('form, required, minLen');
     ok('form: таблица сообщений подключается через _fmsg', f.decls.has('_MESSAGES') && f.decls.has('_fmsg') && f.decls.has('_msg'));
+}
+// 3b. публикуемые файлы: их не собирает бандлер пользователя — их скачивают как есть
+{
+    const { readFileSync } = await import('node:fs');
+    const gz = (f) => gzipSync(readFileSync(f), { level: 9 }).length / 1024;
+    const min = gz('aegis.min.js'), core = gz('aegis.core.min.js');
+    ok('aegis.min.js: ≤ 112 KB gzip (файл с пиннутого URL, dev-предупреждения внутри)', min <= 112, min.toFixed(1) + ' KB');
+    ok('aegis.core.min.js: ≤ 12 KB gzip', core <= 12, core.toFixed(1) + ' KB');
+    // версия из исходника должна быть в собранном файле: иначе сборку забыли пересобрать
+    const version = (readFileSync(src, 'utf8').match(/export const VERSION = '([^']+)'/) || [])[1];
+    ok('aegis.min.js собран из текущего aegis.js (VERSION совпадает)', !!version && readFileSync('aegis.min.js', 'utf8').includes(version), version || '—');
 }
 // 4. в исходнике нет верхнеуровневых side-effect-инструкций, которые бандлер обязан сохранить (кроме известных)
 if (full) {

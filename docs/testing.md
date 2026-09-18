@@ -1,6 +1,6 @@
 ## Testing
 
-`aegis/test` is a dependency-free helper set for any browser runner (the repo's `test/test.html`, Vitest browser mode, Playwright, Web Test Runner):
+`aegis/test` is a dependency-free helper set for any browser runner (the repo's `test/test.html`, Vitest browser mode, Playwright, Web Test Runner). The specifier comes from your import map (`build.mjs` writes it into `dist/importmap.json` alongside `aegis` and `aegis/core`); under a bundler it is `@aegisjs/engine/test`, or `aegis/test` when the package is installed as `npm i aegis@npm:@aegisjs/engine`:
 
 ```js
 import { render, fire, waitFor, mockFetch, cleanup } from 'aegis/test';

@@ -2,7 +2,7 @@
 
 Aegis is a zero-build reactive UI engine: one ES module (`aegis.js`), no dependencies, no compiler.
 Server renders HTML; Aegis hydrates islands (`[data-aegis]`) and adds fine-grained reactivity with signals.
-Read `aegis.d.ts` for exact types, `ERRORS.md` for warning codes, `test.html` for working examples.
+Read `aegis.d.ts` for exact types, `ERRORS.md` for warning codes, `test/test.html` for working examples.
 
 ## Rules (the mistakes assistants make most)
 
@@ -67,12 +67,12 @@ Server side:
 
 ## API by task
 
-- State: `signal`, `computed`, `effect`, `batch`, `untrack`, `reactive`, `store`, `linked`, `persisted`, `selector`, `until`, `watch`, `from`, `history`
+- State: `signal`, `computed`, `effect`, `batch`, `untrack`, `reactive`, `linked`, `persisted`, `selector`, `until`, `watch`, `from`, `history`
 - Context: `createContext`, `provide`, `inject`
 - Data: `resource` (`{ cache }`, `{ offline }`, `{ params, loader }`), `mutation`, `streamResource`, `sse`, `prefetch`, `infiniteResource`, `settled`, `seed`
 - HTTP: `configure({ csrf: 'django' })`, `request`, `api.get|post|put|patch|delete`, `HttpError`, `withRetry`
 - DOM: `html`, `when`, `list`, `show`, `text`, `attr`, `cls`, `style`, `cssVars`, `bind`, `attach`, `ref`, `clone`, `flushSync`
-- Islands: `island`, `element`, `register`, `hydrate` (`data-aegis-load="visible(300px)|idle(1500)|interaction(click)"`), `component`, `mount`, `destroy`, `defineElement`, `scaffold`
+- Islands: `island`, `element`, `register`, `hydrate` (`data-aegis-load="visible(300px)|idle(1500)|interaction(click)"`), `mount`, `destroy`, `defineElement`, `scaffold`
 - Server HTML: `swap` (morph), `boost`, `tpl`, `adopt`, `jsonScript`
 - Router: `router({ '/users/:id': { loader, handler, guard } }, { transition: true })`, `r.search('page', { parse: Number })`
 - Forms: `wireForm(formEl, { schema, rules })`, `form(defaults, { rules, schema })`, rules `required minLen maxLen pattern email min max matches maxSize mime maxFiles`
@@ -80,7 +80,7 @@ Server side:
 - Layout: `size`, `inView`, `viewport`
 - A11y: `trap`, `modal`, `roving`, `announce`
 - Testing: `reset()`, `root()`, `settled()`, `onWarn()`, `__AEGIS_DEV__ = 'strict'`, `defaults.fetcher`, `flushSync()`, `flush()`
-- Debugging: `stats()`, `dev.profile()`, `dev.of(el)`, `dev.inspect()`, `dev.graph()`, `trace(sig)`, `effect(fn, { trace: true })`; `recipes/` and `playground.html` hold runnable examples
+- Debugging: `stats()`, `dev.profile()`, `dev.of(el)`, `dev.inspect()`, `dev.graph()`, `trace(sig)`, `effect(fn, { trace: true })`; `recipes/` and `demo/admin.html` hold runnable examples
 
 ## Dev codes
 

@@ -1,6 +1,6 @@
 {
   "name": "@aegisjs/engine",
-  "version": "0.7.1",
+  "version": "0.7.2",
   "description": "Zero-build reactive UI engine for server-rendered pages: your server renders the HTML, Aegis makes parts of it alive. Signals, islands, html templates, an HTTP-aware cache, forms and a router in one ES module with no dependencies.",
   "type": "module",
   "main": "aegis.js",
@@ -11,11 +11,12 @@
     "aegis.min.js.map",
     "aegis.core.js",
     "aegis.core.min.js",
+    "aegis.core.d.ts",
     "aegis.d.ts",
     "aegis-devtools.js",
+    "aegis-devtools.d.ts",
     "aegis-test.js",
-    "aegis-test.d.ts",
-    "build.mjs"
+    "aegis-test.d.ts"
   ],
   "license": "MIT",
   "publishConfig": {
@@ -57,7 +58,7 @@
     "htmx-alternative"
   ],
   "engines": {
-    "node": ">=14"
+    "node": ">=18"
   },
   "sideEffects": false,
   "scripts": {
@@ -85,10 +86,11 @@
       "default": "./aegis.min.js"
     },
     "./core": {
-      "types": "./aegis.d.ts",
+      "types": "./aegis.core.d.ts",
       "default": "./aegis.core.js"
     },
     "./devtools": {
+      "types": "./aegis-devtools.d.ts",
       "default": "./aegis-devtools.js"
     },
     "./test": {
@@ -96,7 +98,7 @@
       "default": "./aegis-test.js"
     },
     "./core/min": {
-      "types": "./aegis.d.ts",
+      "types": "./aegis.core.d.ts",
       "default": "./aegis.core.min.js"
     },
     "./package.json": "./package.json"

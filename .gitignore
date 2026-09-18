@@ -17,3 +17,4 @@ _task.xml
 
 # raw logo sources live outside the engine; the site ships its own SVG mark
 logo/
+*.tgz

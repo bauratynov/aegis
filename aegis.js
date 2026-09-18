@@ -5,7 +5,7 @@
  * attribute sinks are typed at compile time. What the architecture cannot prevent, the dev build reports
  * with a code, a why and a fix (ERRORS.md); 'strict' mode turns those warnings into exceptions.
  *
- * @version 0.7.1
+ * @version 0.7.2
  * @license MIT
  */
 
@@ -6110,6 +6110,7 @@ const _trackArr = (t) => { const m = _metas.get(t); if (m) m.version.value; };
 function _buildArrayInstr() {
 const _ARR_INSTR = Object.create(null);
 for (const k of ['map', 'filter', 'forEach', 'find', 'findIndex', 'findLast', 'findLastIndex', 'some', 'every', 'flatMap']) {
+    if (!_ARR_PROTO[k]) continue;   // findLast/findLastIndex — ES2023: на старом рантайме метода просто нет
     _ARR_INSTR[k] = function (cb, thisArg) {
         const t = _rawOf(this); _trackArr(t);
         const r = _ARR_PROTO[k].call(t, (v, i) => cb.call(thisArg, _wrapReactive(v), i, this));
@@ -6130,6 +6131,7 @@ for (const k of ['slice', 'concat', 'flat', 'toSorted', 'toReversed', 'toSpliced
     _ARR_INSTR[k] = function (...args) { const t = _rawOf(this); _trackArr(t); return _wrapReactive(_ARR_PROTO[k].apply(t, args.map(_unwrapReactive))); };
 }
 for (const k of ['join', 'at', 'keys']) {
+    if (!_ARR_PROTO[k]) continue;   // at — ES2022
     _ARR_INSTR[k] = function (...args) { const t = _rawOf(this); _trackArr(t); const r = _ARR_PROTO[k].apply(t, args); return k === 'at' ? _wrapReactive(r) : r; };
 }
 _ARR_INSTR.values = _ARR_INSTR[Symbol.iterator] = function* () {
@@ -11822,7 +11824,7 @@ export function adopt(rootEl, aopts = {}) {
 // 35. VERSION & EXPORT
 // ============================================================================
 
-export const VERSION = '0.7.1';
+export const VERSION = '0.7.2';
 
 // Пространство имён (default export / Aegis.expose()) строится лениво: объект со всеми экспортами
 // удерживал бы весь модуль при tree-shaking подмножеств (import { signal } from 'aegis/core')
