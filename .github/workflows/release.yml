@@ -1,0 +1,58 @@
+name: Release
+
+# Публикация в npm по тегу: git push origin vX.Y.Z — и всё.
+# Ничего не вводится руками: trusted publishing (OIDC) выдаёт npm одноразовые права на этот прогон,
+# поэтому нет ни токена в секретах, ни одноразового кода, который успевает протухнуть, пока идут тесты.
+# Разовая настройка: npmjs.com → пакет @aegisjs/engine → Settings → Trusted publisher →
+# GitHub Actions, репозиторий bauratynov/aegis, workflow release.yml.
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:   # тот же прогон вручную, если тег уже стоит
+
+permissions:
+  contents: write      # создать GitHub Release по тегу
+  id-token: write      # OIDC-токен для npm; без него trusted publishing не работает
+
+jobs:
+  publish:
+    name: Build, verify and publish to npm
+    runs-on: ubuntu-latest
+    environment: npm
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          registry-url: https://registry.npmjs.org
+
+      # trusted publishing и provenance требуют npm 11.5.1+; на раннере обычно старше
+      - run: npm i -g npm@latest
+      - run: npm ci
+
+      # Полный прогон на том же дереве, которое поедет в реестр
+      - run: npm run build
+      - run: git diff --exit-code   # сборка в репозитории обязана совпадать с пересобранной
+      - run: npm test
+        env:
+          GITHUB_REF_TYPE: ${{ github.ref_type }}
+          GITHUB_REF_NAME: ${{ github.ref_name }}
+      - run: npm run test:browsers
+        env:
+          CHROME: /usr/bin/google-chrome
+          FIREFOX: /usr/bin/firefox
+          REQUIRE_BROWSERS: '1'
+
+      # prepublishOnly собрал бы и прогнал всё второй раз — выше это уже сделано
+      - run: npm publish --provenance --ignore-scripts
+
+      - name: Раздел CHANGELOG для этой версии
+        run: node test/release-notes.mjs > "${{ runner.temp }}/notes.md"
+
+      - name: GitHub Release из раздела CHANGELOG
+        uses: softprops/action-gh-release@v2
+        with:
+          body_path: ${{ runner.temp }}/notes.md
+          draft: false

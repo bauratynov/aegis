@@ -62,7 +62,7 @@
   },
   "sideEffects": false,
   "scripts": {
-    "test": "node --test test/test-core.mjs && node test/check-exports.mjs && tsc -p test/tsconfig.json && node test/test-prefetch-sim.mjs && node test/test-shake.mjs && node test/test-sched-sim.mjs",
+    "test": "node --test test/test-core.mjs && node test/check-exports.mjs && node test/check-release.mjs && tsc -p test/tsconfig.json && node test/test-prefetch-sim.mjs && node test/test-shake.mjs && node test/test-sched-sim.mjs",
     "test:prefetch": "node test/test-prefetch-sim.mjs",
     "test:shake": "node test/test-shake.mjs",
     "test:sched": "node test/test-sched-sim.mjs",
@@ -72,7 +72,7 @@
     "prepublishOnly": "npm run build && npm test"
   },
   "devDependencies": {
-    "esbuild": "^0.28.2",
+    "esbuild": "0.28.2",
     "typescript": "^7.0.2"
   },
   "module": "aegis.js",

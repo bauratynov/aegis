@@ -2,7 +2,8 @@
 // Serves the repository root on a free port, collects results:
 //   Chrome  — --dump-dom, counts ✓/✗ in the rendered page
 //   Firefox — test.html?report=1 POSTs { passed, failed, fails } to /__report
-// Browser paths: CHROME / FIREFOX env vars, otherwise the usual locations per OS. A missing browser is skipped, not failed.
+// Browser paths: CHROME / FIREFOX env vars, otherwise the usual locations per OS.
+// A missing browser is skipped, not failed — unless REQUIRE_BROWSERS=1 (CI), where a skip is a failure.
 import { createServer } from 'node:http';
 import { readFileSync, existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { spawn } from 'node:child_process';
@@ -79,8 +80,10 @@ if (firefox) {
 
 server.close();
 let bad = 0;
+// В CI пропуск браузера неотличим от успеха: REQUIRE_BROWSERS=1 делает его падением.
+const required = process.env.REQUIRE_BROWSERS === '1';
 for (const [name, r] of Object.entries(results)) {
-    if (r.skipped) { console.log(`${name}: skipped — ${r.skipped}`); continue; }
+    if (r.skipped) { console.log(`${name}: skipped — ${r.skipped}`); if (required) bad++; continue; }
     const envOnly = r.fails.filter(f => KNOWN_ENV_ONLY.has(f));
     const real = r.fails.filter(f => !envOnly.includes(f));
     console.log(`${name}: ${r.passed} passed, ${r.failed} failed${envOnly.length ? ` (${envOnly.length} env-only)` : ''}`);

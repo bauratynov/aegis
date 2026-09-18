@@ -6,10 +6,48 @@ on:
     tags: ['v*']
   pull_request:
 
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   node:
-    name: Node — core tests, export set, types, simulations, size budgets
+    name: Node ${{ matrix.node }} — core tests, export set, types, simulations, size budgets
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: [20, 22, 24]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+      - run: npm ci
+      - run: npm test
+
+  built-files:
+    name: Built files — the committed bundles match aegis.js
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      # esbuild is pinned, so the build is byte-reproducible: a diff here means the bundles were not rebuilt.
+      # build.mjs also writes the README pins, the sha384 and the CONTRIBUTING section map — they are checked too.
+      - run: npm run build
+      - run: git diff --exit-code -- aegis.min.js aegis.min.js.map aegis.core.js aegis.core.min.js aegis.core.d.ts README.md CONTRIBUTING.md
+
+  windows:
+    name: Windows — the toolchain itself (runners, paths)
+    runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -22,7 +60,6 @@ jobs:
   browsers:
     name: Browsers — test.html in headless Chrome and Firefox
     runs-on: ubuntu-latest
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -34,16 +71,18 @@ jobs:
         env:
           CHROME: /usr/bin/google-chrome
           FIREFOX: /usr/bin/firefox
+          REQUIRE_BROWSERS: '1'   # a missing browser is a failure here, not a silent skip
 
   webkit:
     name: WebKit — test.html in Playwright WebKit (Safari engine)
     runs-on: ubuntu-latest
-    continue-on-error: true
+    continue-on-error: true   # advisory: WebKit on a Linux runner still differs from Safari
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+          cache: npm
       - run: npm i --no-save playwright
       - run: npx playwright install --with-deps webkit
       - run: npm run test:webkit

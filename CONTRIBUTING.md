@@ -87,6 +87,18 @@ npm run build               # aegis.min.js, aegis.core.js and aegis.core.min.js
 
 Commit messages follow `type(scope): summary` (`feat`, `fix`, `docs`, `perf`, `test`, `chore`).
 
+## Releases
+
+The version lives in one place: `export const VERSION` at the end of `aegis.js`. Everything else is derived and checked — `node test/check-release.mjs` (part of `npm test`) holds `package.json`, the `@version` headers, the built `aegis.min.js`, the CHANGELOG section and the README pins to it, and compares the git tag when there is one.
+
+1. Bump `VERSION` in `aegis.js`, then `npm version <x.y.z> --no-git-tag-version` for `package.json` and the lockfile.
+2. Turn `## [Unreleased]` into `## [x.y.z] — YYYY-MM-DD` and open a fresh `## [Unreleased]`.
+3. `npm run build` — it rebuilds the bundles and rewrites the README pins, the `sha384` and the section map above.
+4. `npm test && npm run test:browsers`, commit, `git tag -a vx.y.z`.
+5. `git push && git push origin vx.y.z` — the `release` workflow builds, verifies and publishes to npm with provenance, and opens the GitHub Release from the CHANGELOG section. Nothing is published from a laptop.
+
+Development needs Node 20+ (the test runner); the engine itself supports Node 18+ as `engines` says.
+
 ## Code style
 
 Plain modern JavaScript, no transpilation. Four-space indent, single quotes, semicolons, one statement per line unless a one-liner is clearer. Comments say why, not what. Keep functions small enough to read in one screen.
